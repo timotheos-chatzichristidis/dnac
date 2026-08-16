@@ -83,6 +83,34 @@ XM (Java) has not been run.
 newlines are handled losslessly but excluded from bits/base). Compression is
 lossless — every result here was verified by SHA-256 round-trip.*
 
+## Compression levels
+
+Most of the codec's time goes into models that earn very little. Measured by
+ablation on the 10 MB chr21 slice, inverted-repeat training and the
+substitution-tolerant context models cost ~21% of the run *each* while together
+they are worth 0.29% of compressed size. Three levels expose that trade:
+
+| level | models | time | bits/base | vs max |
+|:-----:|--------|-----:|----------:|--------|
+| 1 `fast` | 6 orders, 2 mixing experts, no IR, no tolerant models | 14.9 s | 1.7190 | **2.0× faster**, +0.37% size |
+| 2 `balanced` | all orders, 4 experts, no IR, no tolerant models | 21.2 s | 1.7175 | 1.4× faster, +0.29% |
+| 3 `max` (default) | everything | 29.4 s | 1.7126 | — |
+
+```sh
+dnac c in.fa out.dnac 22 1     # k=22, level 1
+dnac d out.dnac back.fa        # no level needed: it is in the header
+```
+
+The level is stored in the header, not passed to the decoder, because it decides
+*which models exist* — it is part of the format, not a hint. A primed state
+carries its level too, and decoding a stream with a state primed at a different
+level is refused: the reference fingerprint cannot catch that mismatch, since
+the reference is the same file and only the model set differs.
+
+Two results worth noting, both the same lesson the rest of this project keeps
+teaching: **six order models compress better than eight**, and **two mixing
+experts beat four**, at these sizes. More models is not automatically better.
+
 ## Reference-based results (`cr` / `dr`) — the big lever
 
 Two genomes of a species differ by ~0.1%, so a genome stored *against a
@@ -339,10 +367,11 @@ make bench                        # bits/base on whatever is in ./data
 # manual use
 ./dnac.exe gen sample.fa 2000000        # make a structured sample
 ./dnac.exe c  sample.fa  out.dnac 22    # compress (k = max model order, default 22)
-./dnac.exe d  out.dnac   back.fa        # decompress
+./dnac.exe c  sample.fa  out.dnac 22 1  # ...at level 1 (fast); 3 = max, the default
+./dnac.exe d  out.dnac   back.fa        # decompress (the level travels in the header)
 
 # reference-based (the same reference is required to decompress)
-./dnac.exe cr target.fa out.dnac reference.fa 22
+./dnac.exe cr target.fa out.dnac reference.fa 22      # add a level: ... 22 1
 ./dnac.exe dr out.dnac  back.fa   reference.fa
 ./dnac.exe prime reference.fa reference.state 22  # pay the priming pass once
 ./dnac.exe cr target.fa out.dnac reference.state  # ...then reuse it
@@ -409,7 +438,9 @@ This is a working codec, not a maintained product. It is lossless on arbitrary
 input and the results above are reproducible from this repository, but there is
 no stable file-format guarantee across versions: the header magic is bumped
 whenever the bitstream changes, and archives are only guaranteed to decode with
-the build that wrote them. Reference mode additionally requires the exact same
+the build that wrote them. Compression levels (v0.2.0) bumped it from
+`DNCA`/`DNCR` to `DNCB`/`DNCS`; v0.1.x archives are refused with an explicit
+message rather than misread. Reference mode additionally requires the exact same
 reference, which it verifies by fingerprint and refuses when wrong.
 
 Compression is symmetric: decompression costs roughly the same as compression,

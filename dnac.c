@@ -219,6 +219,14 @@ static uint32_t g_hashmask;
 #endif
 static const int MASTER_ORDERS[] = MASTER_ORDER_LIST;
 
+/* The reduced set used by level 1. Six orders measured better than eight
+   (2,113,672 vs 2,113,946 bytes) as well as faster -- more models is not
+   automatically better, the same lesson as GeCo3 -l 16 and fqzcomp -s9. */
+#ifndef FAST_ORDER_LIST
+#define FAST_ORDER_LIST { 1, 2, 4, 8, 14, 22 }
+#endif
+static const int FAST_ORDERS[] = FAST_ORDER_LIST;
+
 /* Substitution-tolerant context models (the GeCo idea we were missing).
    A normal order model conditions on the last k bases AS THEY ARE. Inside a
    diverged repeat, one SNP poisons the next k contexts: they have never been
@@ -259,6 +267,22 @@ static uint16_t *g_tab[MAXIN];              /* order-model probability tables   
 #ifndef NMIX
 #define NMIX 4                                  /* experts in the first mixing layer */
 #endif
+
+/* ---------------------------------------------------------------- levels ----
+   Compression levels trade model count (time) against prediction (ratio).
+   Measured on chr21_slice.fa, 9,836,065 bases:
+
+     3  max (default)  everything                  32.1 s   1.7126 bits/base
+     2  balanced       no IR training, no tolerant 20.9 s   1.7175   (1.5x, +0.29%)
+     1  fast           + 6 orders, 2 mix experts   14.7 s   1.7190   (2.2x, +0.37%)
+
+   The level is written into the header because the decoder must build exactly
+   the same set of models; it is not a hint. */
+#define LEVEL_MIN     1
+#define LEVEL_MAX     3
+#define LEVEL_DEFAULT 3
+static int g_level = LEVEL_DEFAULT;
+static int g_nmix  = NMIX;     /* experts actually used this run (<= NMIX) */
 #ifndef MIX_LR2
 #define MIX_LR2 0.0005                           /* second-layer learning rate        */
 #endif
@@ -599,14 +623,23 @@ static int mix_setup(int maxorder, size_t sizing_n, size_t seq_alloc, int hb, in
        hashed model is the same as it was with one uint16 per (context,node). */
     g_hashbits = (hb > 0) ? hb : size_bits(sizing_n, HASHBITS_MAX) - 2 + HASH_EXTRA;
     g_hashmask = (uint32_t)(((size_t)1 << g_hashbits) - 1);
+    /* The level decides which models exist at all. Encoder and decoder run this
+       identically because the level travels in the header. */
+    const int *orders  = (g_level <= 1) ? FAST_ORDERS : MASTER_ORDERS;
+    size_t     norders = (g_level <= 1) ? sizeof(FAST_ORDERS)  / sizeof(FAST_ORDERS[0])
+                                        : sizeof(MASTER_ORDERS) / sizeof(MASTER_ORDERS[0]);
+    g_nmix       = (g_level <= 1) ? 2 : NMIX;
+    int use_ir   = (g_level >= 3);
+    int use_stcm = (g_level >= 3);
+
     g_nmodels = 0;
-    for (size_t m = 0; m < sizeof(MASTER_ORDERS) / sizeof(MASTER_ORDERS[0]); m++) {
-        int o = MASTER_ORDERS[m];
+    for (size_t m = 0; m < norders; m++) {
+        int o = orders[m];
         if (o > maxorder) continue;
         int i = g_nmodels;
         g_order[i]   = o;
         g_tol[i]     = 0;
-        g_ir[i]      = (IR_MODE == 2) || (IR_MODE == 1 && o > DIRECT_MAXORDER);
+        g_ir[i]      = use_ir && ((IR_MODE == 2) || (IR_MODE == 1 && o > DIRECT_MAXORDER));
         g_ctxmask[i] = (o >= 32) ? ~0ull : ((1ull << (2 * o)) - 1);
         if (o <= DIRECT_MAXORDER) {
             g_direct[i] = 1;
@@ -624,7 +657,8 @@ static int mix_setup(int maxorder, size_t sizing_n, size_t seq_alloc, int hb, in
     /* substitution-tolerant models, same tables but fed the repaired history */
     g_nstcm = 0;
     g_thist = 0; g_tfail = 0; g_tpred = 0;
-    for (int t = 0; t < NSTCM && t < (int)(sizeof(TOL_ORDERS)/sizeof(TOL_ORDERS[0])); t++) {
+    for (int t = 0; t < (use_stcm ? NSTCM : 0)
+                 && t < (int)(sizeof(TOL_ORDERS)/sizeof(TOL_ORDERS[0])); t++) {
         int o = TOL_ORDERS[t];
         if (o > maxorder) continue;
         int i = g_nmodels;
@@ -641,13 +675,17 @@ static int mix_setup(int maxorder, size_t sizing_n, size_t seq_alloc, int hb, in
     }
     g_nin = g_nmodels + NMATCH + 1;  /* + forward matches + reverse-complement match */
     if (g_nin > MAXIN) { fprintf(stderr, "too many mixer inputs\n"); return -1; }
+    /* every expert slot is initialised, including ones this level will not use,
+       so a saved state is byte-deterministic for a given level */
     for (int k = 0; k < NMIX; k++)
         for (int n = 0; n < NNODES; n++)
             for (int c = 0; c < MIXCTX; c++)
                 for (int i = 0; i < g_nin; i++) g_w[k][n][c][i] = W_INIT;
     for (int n = 0; n < NNODES; n++)
         for (int c = 0; c < MIXCTX; c++) {
-            for (int k = 0; k < NMIX; k++) g_v[n][c][k] = 1.0 / NMIX;
+            /* unused experts are pinned at 0 so the saved state stays identical
+               for a given level regardless of what NMIX was compiled as */
+            for (int k = 0; k < NMIX; k++) g_v[n][c][k] = (k < g_nmix) ? 1.0 / g_nmix : 0.0;
             g_v[n][c][NMIX] = 0.0;
         }
 
@@ -779,7 +817,7 @@ static uint32_t mix_predict(int node, const int *mc, const uint64_t *ctxv, uint1
         st[i] = stretchd(ctr_p(*extra[e]));
     }
     double X = g_v[node][mc[0]][NMIX];              /* layer-2 bias              */
-    for (int k = 0; k < NMIX; k++) {
+    for (int k = 0; k < g_nmix; k++) {
         double x = 0.0;
         const double *w = g_w[k][node][mc[k]];
         for (int i = 0; i < g_nin; i++) x += w[i] * st[i];
@@ -799,7 +837,7 @@ static uint32_t mix_predict(int node, const int *mc, const uint64_t *ctxv, uint1
 static void mix_update(int node, const int *mc, const double *st, uint16_t *const *slot,
                        int bit, double pp, const MixState *ms) {
     double errf = (double)bit - pp;
-    for (int k = 0; k < NMIX; k++) {
+    for (int k = 0; k < g_nmix; k++) {
         double errk = (double)bit - ms->p[k];
         double *w = g_w[k][node][mc[k]];
         for (int i = 0; i < g_nin; i++) w[i] += MIX_LR * errk * st[i];
@@ -1013,7 +1051,7 @@ static uint64_t get64(FILE *f) {
    Endianness/float layout are the host's -- a state file is a cache, not an
    interchange format; the compressed stream is the portable artefact. */
 
-#define STATE_MAGIC "DNACST01"
+#define STATE_MAGIC "DNACST02"
 
 static int wr(const void *p, size_t sz, size_t n, FILE *f) { return fwrite(p, sz, n, f) == n; }
 static int rd(void *p, size_t sz, size_t n, FILE *f)       { return fread(p, sz, n, f)  == n; }
@@ -1024,6 +1062,7 @@ static int state_save(const char *path, int k, uint64_t refn, uint64_t reffp) {
     int ok = 1;
     ok &= wr(STATE_MAGIC, 1, 8, f);
     put64(f, (uint64_t)k);
+    put64(f, (uint64_t)g_level);   /* the state IS the models: level must match */
     put64(f, (uint64_t)g_hashbits);
     put64(f, (uint64_t)g_mhb);
     put64(f, (uint64_t)g_nmodels);
@@ -1074,6 +1113,11 @@ static int state_load(const char *path, size_t extra, int *k_out,
         fprintf(stderr, "not a dnac state file: %s\n", path); fclose(f); return 1;
     }
     int k          = (int)get64(f);
+    int lvl        = (int)get64(f);
+    if (lvl < LEVEL_MIN || lvl > LEVEL_MAX) {
+        fprintf(stderr, "bad compression level in state file\n"); fclose(f); return 1;
+    }
+    g_level = lvl;                 /* the state was primed with these models */
     int hashbits   = (int)get64(f);
     int mhb        = (int)get64(f);
     int nmodels    = (int)get64(f);
@@ -1164,9 +1208,12 @@ static int do_compress(const char *inpath, const char *outpath, int k, const cha
 
     FILE *out = fopen(outpath, "wb");
     if (!out) { perror("open output"); free(buf); free(ref); mix_free(); return 1; }
-    /* header: magic ('A' plain / 'R' reference), k, original length [, ref info] */
-    fputc('D', out); fputc('N', out); fputc('C', out); fputc(refpath ? 'R' : 'A', out);
+    /* header: magic ('B' plain / 'S' reference), k, level, original length
+       [, ref info]. 'A'/'R' were the pre-level formats and are refused: the
+       decoder cannot rebuild the model set without knowing the level. */
+    fputc('D', out); fputc('N', out); fputc('C', out); fputc(refpath ? 'S' : 'B', out);
     fputc((int)k, out);
+    fputc(g_level, out);
     put64(out, (uint64_t)n);
     if (refpath) { put64(out, (uint64_t)refn); put64(out, reffp); }
 
@@ -1222,10 +1269,15 @@ static int do_decompress(const char *inpath, const char *outpath, const char *re
     FILE *in = fopen(inpath, "rb");
     if (!in) { perror("open input"); return 1; }
     int m0 = fgetc(in), m1 = fgetc(in), m2 = fgetc(in), m3 = fgetc(in);
-    if (m0 != 'D' || m1 != 'N' || m2 != 'C' || (m3 != 'A' && m3 != 'R')) {
+    if (m0 == 'D' && m1 == 'N' && m2 == 'C' && (m3 == 'A' || m3 == 'R')) {
+        fprintf(stderr, "this file was written by dnac v0.1.x, before compression"
+                        " levels existed;\n its format cannot be read by this build\n");
+        fclose(in); return 1;
+    }
+    if (m0 != 'D' || m1 != 'N' || m2 != 'C' || (m3 != 'B' && m3 != 'S')) {
         fprintf(stderr, "not a dnac file\n"); fclose(in); return 1;
     }
-    int need_ref = (m3 == 'R');
+    int need_ref = (m3 == 'S');
     if (need_ref && !refpath) {
         fprintf(stderr, "this file was compressed against a reference: use  dnac dr <in> <out> <ref.fa>\n");
         fclose(in); return 1;
@@ -1235,6 +1287,11 @@ static int do_decompress(const char *inpath, const char *outpath, const char *re
         fclose(in); return 1;
     }
     int k = fgetc(in);
+    int lvl = fgetc(in);
+    if (lvl < LEVEL_MIN || lvl > LEVEL_MAX) {
+        fprintf(stderr, "bad compression level in header: %d\n", lvl); fclose(in); return 1;
+    }
+    g_level = lvl;
     uint64_t len = get64(in);
     uint64_t refn_hdr = 0, refhash_hdr = 0;
     if (need_ref) { refn_hdr = get64(in); refhash_hdr = get64(in); }
@@ -1250,6 +1307,15 @@ static int do_decompress(const char *inpath, const char *outpath, const char *re
         refn = (size_t)rn;
         if ((uint64_t)refn != refn_hdr || reffp != refhash_hdr) {
             fprintf(stderr, "wrong reference: this file was compressed against a different one\n");
+            fclose(in); mix_free(); return 1;
+        }
+        /* state_load has just replaced g_level with the level the state was
+           primed at. If that disagrees with the stream, the models are the
+           wrong ones and the reference fingerprint cannot notice -- the
+           reference is the same file, only the model set differs. */
+        if (g_level != lvl) {
+            fprintf(stderr, "state was primed at level %d but this file was written "
+                            "at level %d\n", g_level, lvl);
             fclose(in); mix_free(); return 1;
         }
     } else {
@@ -1413,15 +1479,26 @@ static int do_mutate(const char *inpath, const char *outpath, double permille, u
 
 /* --------------------------------- main ------------------------------------- */
 
+static int set_level(int lvl) {
+    if (lvl < LEVEL_MIN || lvl > LEVEL_MAX) {
+        fprintf(stderr, "level must be %d..%d (1 fast, 3 max)\n", LEVEL_MIN, LEVEL_MAX);
+        return 1;
+    }
+    g_level = lvl;
+    return 0;
+}
+
 int main(int argc, char **argv) {
     if (argc >= 4 && strcmp(argv[1], "c") == 0) {
         int k = (argc >= 5) ? atoi(argv[4]) : 22;
         if (k < 1 || k > 28) { fprintf(stderr, "k (max order) must be 1..28\n"); return 1; }
+        if (argc >= 6 && set_level(atoi(argv[5]))) return 1;
         return do_compress(argv[2], argv[3], k, NULL);
     }
     if (argc >= 5 && strcmp(argv[1], "cr") == 0) {
         int k = (argc >= 6) ? atoi(argv[5]) : 22;
         if (k < 1 || k > 28) { fprintf(stderr, "k (max order) must be 1..28\n"); return 1; }
+        if (argc >= 7 && set_level(atoi(argv[6]))) return 1;
         return do_compress(argv[2], argv[3], k, argv[4]);
     }
     if (argc >= 4 && strcmp(argv[1], "d") == 0) {
@@ -1433,6 +1510,7 @@ int main(int argc, char **argv) {
     if (argc >= 4 && strcmp(argv[1], "prime") == 0) {
         int k = (argc >= 5) ? atoi(argv[4]) : 22;
         if (k < 1 || k > 28) { fprintf(stderr, "k (max order) must be 1..28\n"); return 1; }
+        if (argc >= 6 && set_level(atoi(argv[5]))) return 1;
         return do_prime(argv[2], argv[3], k);
     }
     if (argc >= 4 && strcmp(argv[1], "gen") == 0) {
@@ -1447,12 +1525,13 @@ int main(int argc, char **argv) {
     }
     fprintf(stderr,
         "dnac - lossless DNA compressor (context mixing + match models)\n"
-        "  dnac c  <in> <out> [k]        compress (k = max model order, default 22)\n"
+        "  dnac c  <in> <out> [k] [lvl]  compress (k = max model order, default 22)\n"
         "  dnac d  <in> <out>            decompress\n"
-        "  dnac cr <in> <out> <ref> [k]  compress against a reference genome\n"
+        "  dnac cr <in> <out> <ref> [k] [lvl]  compress against a reference genome\n"
         "  dnac dr <in> <out> <ref>      decompress (same reference required)\n"
         "     <ref> may be a FASTA file or a primed state built with:\n"
-        "  dnac prime <ref.fa> <state> [k]   pay the priming pass once\n"
+        "  dnac prime <ref.fa> <state> [k] [lvl]  pay the priming pass once\n"
+        "     lvl = 1 fast (~2.2x, +0.4%% size) | 2 balanced | 3 max (default)\n"
         "  dnac gen <out> <bases> [seed] generate a structured sample\n"
         "  dnac mut <in> <out> [per-mille] [seed]   simulate a resequenced genome\n");
     return 1;

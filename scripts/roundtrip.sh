@@ -61,6 +61,25 @@ for f in $FILES; do
   done
 done
 
+# --------------------------------------------- every compression level
+# Levels change which models exist, so each one is a distinct codec and needs
+# its own proof. The level travels in the header; the decoder is given no hint.
+for f in $FILES; do
+  for lvl in 1 2 3; do
+    "$EXE" c "$f" rt.dnac 22 "$lvl" >/dev/null
+    "$EXE" d rt.dnac rt.out         >/dev/null
+    report "$f level=$lvl" "$(hash_of "$f")" "$(hash_of rt.out)"
+    rm -f rt.dnac rt.out
+  done
+done
+
+# an out-of-range level must be refused, not silently clamped
+n=$((n+1))
+if "$EXE" c diverged.fa bad.dnac 22 9 >/dev/null 2>&1; then
+  fail=$((fail+1)); echo "FAIL: level 9 was accepted"
+fi
+rm -f bad.dnac
+
 # ------------------------------------------------------------ reference mode
 # unrelated / short / messy references must all work and never corrupt.
 awk 'BEGIN{printf ">r\n";for(i=0;i<100;i++)printf "ACGTTGCAAGGCCTTA";printf "\n"}' > ref_small.fa
@@ -74,6 +93,14 @@ for f in $FILES; do
     report "ref $f / $ref" "$(hash_of "$f")" "$(hash_of rt.out)"
     rm -f rt.dnac rt.out
   done
+done
+
+# ------------------------------------------- reference mode at every level
+for lvl in 1 2 3; do
+  "$EXE" cr diverged.fa rt.dnac ref_dna.fa 16 "$lvl" >/dev/null
+  "$EXE" dr rt.dnac rt.out ref_dna.fa                >/dev/null
+  report "ref level=$lvl" "$(hash_of diverged.fa)" "$(hash_of rt.out)"
+  rm -f rt.dnac rt.out
 done
 
 # ------------------------------------------------- primed state interchange
@@ -103,6 +130,15 @@ if "$EXE" dr wrong.dnac wrong.out ref_messy.fa >/dev/null 2>&1; then
   fail=$((fail+1)); echo "FAIL: wrong reference was accepted"
 fi
 rm -f wrong.dnac wrong.out
+
+# a state primed at one level must not decode a stream written at another
+"$EXE" prime ref_dna.fa lvl1.state 16 1 >/dev/null
+"$EXE" cr diverged.fa mix.dnac ref_dna.fa 16 3 >/dev/null
+n=$((n+1))
+if "$EXE" dr mix.dnac mix.out lvl1.state >/dev/null 2>&1; then
+  fail=$((fail+1)); echo "FAIL: a level-1 state decoded a level-3 stream"
+fi
+rm -f lvl1.state mix.dnac mix.out
 
 # ------------------------------------------------------------------- verdict
 if [ "$fail" -ne 0 ]; then echo "$fail of $n FAILED"; exit 1; fi

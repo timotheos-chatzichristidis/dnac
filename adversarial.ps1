@@ -45,6 +45,21 @@ foreach ($f in $files) {
         Remove-Item $c, $r -Force
     }
 }
+# --- compression levels: each level builds a different model set, so each one ---
+# --- is a distinct codec and needs its own proof. The decoder gets no hint. -----
+foreach ($f in $files) {
+    foreach ($lvl in @(1, 2, 3)) {
+        $c = "$f.l$lvl.dnac"; $r = "$f.l$lvl.rt"
+        & $Exe c $f $c 22 $lvl | Out-Null
+        & $Exe d $c $r         | Out-Null
+        $h1 = (Get-FileHash $f -Algorithm SHA256).Hash
+        $h2 = (Get-FileHash $r -Algorithm SHA256).Hash
+        $n++
+        if ($h1 -ne $h2) { $fail++; Write-Host ("FAIL {0} level={1}" -f (Split-Path $f -Leaf), $lvl) -ForegroundColor Red }
+        Remove-Item $c, $r -Force
+    }
+}
+
 # --- reference mode: same files, compressed against a reference -----------------
 # Covers: unrelated reference, reference shorter/longer than the target, a target
 # that IS the reference, and refusing to decompress with the wrong reference.

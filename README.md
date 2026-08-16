@@ -111,6 +111,13 @@ Two results worth noting, both the same lesson the rest of this project keeps
 teaching: **six order models compress better than eight**, and **two mixing
 experts beat four**, at these sizes. More models is not automatically better.
 
+**The ordering is a trade, not a guarantee.** Level 3 is the smallest on the
+real genomes measured above, but on highly repetitive or synthetic sequence the
+extra models can cost more than they earn: on a 1 Mbase sample from `dnac gen`,
+level 2 comes out **2% smaller than level 3**. The same effect shows up in
+GeCo3 (`-l 16` worse than `-l 9` on *E. coli*) and in fqzcomp (`-s9` worse than
+`-s7` on reads). Measure on your own data before assuming the maximum is best.
+
 ## Reference-based results (`cr` / `dr`) — the big lever
 
 Two genomes of a species differ by ~0.1%, so a genome stored *against a

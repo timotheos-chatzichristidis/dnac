@@ -461,6 +461,32 @@ static int back_agree(uint32_t a, uint32_t b, int cap) {
    repeat is then already warm when it later shows up the normal way round.
    This is the flag GeCo's model templates call "ir"; we had it only on the
    match model. Update-only, so encoder and decoder stay in lockstep. */
+/* The mirrored update lands at an address unrelated to the forward context's:
+   hashing destroys the strand symmetry, so two logically mirrored contexts sit
+   in two unrelated places in a table far larger than any cache. Measured on
+   chr21_slice.fa, that second access IS the entire cost of inverted-repeat
+   training (8.3 s of 8.3 s); the reverse-complement arithmetic itself is free.
+   So issue the fetch here, before match_after/stcm_after run, and let it
+   overlap them. Only non-tolerant models are prefetched -- the tolerant ones
+   read g_thist, which stcm_after has not written yet. Hint only: no state is
+   touched and the bitstream is unchanged. */
+static void ir_prefetch(uint64_t newhist) {
+    for (int i = 0; i < g_nmodels; i++) {
+        if (!g_ir[i] || g_tol[i]) continue;
+        int o = g_order[i];
+        if (g_npos < (uint32_t)o + 1) continue;
+        uint64_t rctx = rc_context(newhist, o);
+        if (g_direct[i]) {
+            __builtin_prefetch(&g_tab[i][rctx * NNODES], 1);
+        } else {
+            uint64_t key = rctx + 0x9E3779B97F4A7C15ull;
+            key *= 0x9E3779B97F4A7C15ull; key ^= key >> 32;
+            key *= 0xD6E8FEB86659FD93ull; key ^= key >> 29;
+            __builtin_prefetch(&g_tab[i][(size_t)(key & g_hashmask & ~(uint64_t)1) * BUCKETW], 1);
+        }
+    }
+}
+
 static void ir_train(uint64_t newhist, uint64_t tolhist) {
     for (int i = 0; i < g_nmodels; i++) {
         if (!g_ir[i]) continue;
@@ -870,6 +896,7 @@ static void prime_with_reference(const uint8_t *ref, size_t n) {
             ctxv[i] = (g_tol[i] ? g_thist : hist) & g_ctxmask[i];
         train_base(ctxv, hist, s);
         hist = (hist << 2) | (uint64_t)s;
+        ir_prefetch(hist);            /* overlaps match_after/stcm_after below */
         match_after(s, hist);
             stcm_after(s, hist);
             ir_train(hist, g_thist);
@@ -1165,6 +1192,7 @@ static int do_compress(const char *inpath, const char *outpath, int k, const cha
             fc[0]++;
             code_base_enc(&e, ctxv, hist, s);
             hist = (hist << 2) | (uint64_t)s;
+            ir_prefetch(hist);        /* overlaps match_after/stcm_after below */
             match_after(s, hist);
             stcm_after(s, hist);
             ir_train(hist, g_thist);
@@ -1268,6 +1296,7 @@ static int do_decompress(const char *inpath, const char *outpath, const char *re
             int s = code_base_dec(&d, ctxv, hist);
             fputc(SYM_TO_BASE[s], out);
             hist = (hist << 2) | (uint64_t)s;
+            ir_prefetch(hist);        /* overlaps match_after/stcm_after below */
             match_after(s, hist);
             stcm_after(s, hist);
             ir_train(hist, g_thist);

@@ -2,7 +2,7 @@
 # Windows PowerShell users can keep using ./build.ps1 instead.
 
 CC      ?= cc
-CFLAGS  ?= -O2 -Wall -Wextra
+CFLAGS  ?= -O3 -Wall -Wextra
 LDLIBS   = -lm
 PREFIX  ?= /usr/local
 

@@ -10,7 +10,9 @@ EXE=${1:-./dnac}
 # Windows toolchains produce dnac.exe; accept either name.
 if [ ! -x "$EXE" ] && [ -x "$EXE.exe" ]; then EXE="$EXE.exe"; fi
 [ -x "$EXE" ] || { echo "no such executable: $EXE" >&2; exit 1; }
-case $EXE in /*|./*|../*) ;; *) EXE=./$EXE ;; esac
+# Absolute paths are left alone. The ?:/ and ?:\ cases are Windows drive
+# letters -- without them "C:/x/dnac.exe" would be turned into "./C:/x/dnac.exe".
+case $EXE in /*|./*|../*|?:/*|?:\\*) ;; *) EXE=./$EXE ;; esac
 EXE=$(cd "$(dirname "$EXE")" && pwd)/$(basename "$EXE")
 
 if command -v sha256sum >/dev/null 2>&1; then SHA="sha256sum"

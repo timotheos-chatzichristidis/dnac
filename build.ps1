@@ -9,11 +9,11 @@ function Test-Cmd($name) { return [bool](Get-Command $name -ErrorAction Silently
 
 if (Test-Cmd gcc) {
     Write-Host "Compiling with gcc..." -ForegroundColor Cyan
-    & gcc -O2 -Wall -o $out $src -lm
+    & gcc -O3 -Wall -o $out $src -lm
 }
 elseif (Test-Cmd clang) {
     Write-Host "Compiling with clang..." -ForegroundColor Cyan
-    & clang -O2 -Wall -o $out $src -lm
+    & clang -O3 -Wall -o $out $src -lm
 }
 elseif (Test-Cmd cl) {
     Write-Host "Compiling with MSVC cl..." -ForegroundColor Cyan

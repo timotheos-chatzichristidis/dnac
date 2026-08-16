@@ -212,7 +212,12 @@ static uint32_t g_hashmask;
 #define APM2_NCTX (NNODES * 4096)   /* node x last 6 bases                        */
 #define APM_MAXCTX (APM1_NCTX > APM2_NCTX ? APM1_NCTX : APM2_NCTX)
 
-static const int MASTER_ORDERS[] = { 1, 2, 3, 4, 6, 8, 11, 14, 18, 22 };
+/* Sweepable without editing: -DMASTER_ORDER_LIST="{2,4,8,12,16,22}" trades
+   models (time) against prediction (ratio). Every order > k is skipped anyway. */
+#ifndef MASTER_ORDER_LIST
+#define MASTER_ORDER_LIST { 1, 2, 3, 4, 6, 8, 11, 14, 18, 22 }
+#endif
+static const int MASTER_ORDERS[] = MASTER_ORDER_LIST;
 
 /* Substitution-tolerant context models (the GeCo idea we were missing).
    A normal order model conditions on the last k bases AS THEY ARE. Inside a
@@ -251,7 +256,9 @@ static int       g_direct[MAXIN];
 static uint64_t  g_ctxmask[MAXIN];          /* (1<<(2*order))-1, picks last `order` bases */
 static size_t    g_size[MAXIN];
 static uint16_t *g_tab[MAXIN];              /* order-model probability tables      */
+#ifndef NMIX
 #define NMIX 4                                  /* experts in the first mixing layer */
+#endif
 #ifndef MIX_LR2
 #define MIX_LR2 0.0005                           /* second-layer learning rate        */
 #endif
@@ -334,6 +341,27 @@ static void ctr_upd(uint16_t *sp, int bit) {
    one counter" into "the loser is detected and reset", and keeping all three
    nodes of a base together costs one cache miss instead of two. */
 #define BUCKETW 4
+/* Ask memory for the buckets this base is about to need, so the fetch overlaps
+   with the flag coder and the match models instead of stalling in front of the
+   mixer. The order models are the only truly random accesses in the codec: at
+   HASHBITS_MAX their tables are far larger than any cache, so nearly every
+   lookup is a miss. All three tree nodes of a context live in the SAME bucket
+   (mix_slot returns &b[1 + node]), so ONE prefetch per model covers the whole
+   base. This is a hint only -- it computes nothing the codec uses, changes no
+   model state, and therefore leaves the bitstream bit-identical. */
+static void mix_prefetch(const uint64_t *ctxv) {
+    for (int i = 0; i < g_nmodels; i++) {
+        if (g_direct[i]) {
+            __builtin_prefetch(&g_tab[i][ctxv[i] * NNODES], 1);
+        } else {
+            uint64_t key = ctxv[i] + 0x9E3779B97F4A7C15ull;
+            key *= 0x9E3779B97F4A7C15ull; key ^= key >> 32;
+            key *= 0xD6E8FEB86659FD93ull; key ^= key >> 29;
+            __builtin_prefetch(&g_tab[i][(size_t)(key & g_hashmask & ~(uint64_t)1) * BUCKETW], 1);
+        }
+    }
+}
+
 static uint16_t *mix_slot(int i, uint64_t ctx, int node) {
     if (g_direct[i]) return &g_tab[i][ctx * NNODES + (uint64_t)node];
     uint64_t key = ctx + 0x9E3779B97F4A7C15ull;
@@ -1129,11 +1157,12 @@ static int do_compress(const char *inpath, const char *outpath, int k, const cha
         uint32_t f0 = (uint32_t)fc[0] + 1, f1 = (uint32_t)fc[1] + 1, ft = f0 + f1;
 
         if (s >= 0) {                          /* a base: flag=0, then mixed prediction */
-            renc_encode(&e, 0, f0, ft);
-            fc[0]++;
             uint64_t ctxv[MAXIN];
             for (int i = 0; i < g_nmodels; i++)
-            ctxv[i] = (g_tol[i] ? g_thist : hist) & g_ctxmask[i];
+                ctxv[i] = (g_tol[i] ? g_thist : hist) & g_ctxmask[i];
+            mix_prefetch(ctxv);       /* fetch overlaps the flag coder below */
+            renc_encode(&e, 0, f0, ft);
+            fc[0]++;
             code_base_enc(&e, ctxv, hist, s);
             hist = (hist << 2) | (uint64_t)s;
             match_after(s, hist);
@@ -1219,6 +1248,14 @@ static int do_decompress(const char *inpath, const char *outpath, const char *re
     int run = 0;
 
     for (uint64_t p = 0; p < len; p++) {
+        /* ctxv depends only on history, so it is known before the flag is
+           decoded -- compute and prefetch here, giving the flag decode as
+           latency cover. A hint only: no model state is touched. */
+        uint64_t ctxv[MAXIN];
+        for (int i = 0; i < g_nmodels; i++)
+            ctxv[i] = (g_tol[i] ? g_thist : hist) & g_ctxmask[i];
+        mix_prefetch(ctxv);
+
         int rc = run < RUNCAP ? run : RUNCAP;
         uint16_t *fc = &flag_cnt[rc * 2];
         uint32_t f0 = (uint32_t)fc[0] + 1, f1 = (uint32_t)fc[1] + 1, ft = f0 + f1;
@@ -1228,9 +1265,6 @@ static int do_decompress(const char *inpath, const char *outpath, const char *re
         else        { rdec_update(&d, f0, f1); fc[1]++; }
 
         if (isbase) {
-            uint64_t ctxv[MAXIN];
-            for (int i = 0; i < g_nmodels; i++)
-            ctxv[i] = (g_tol[i] ? g_thist : hist) & g_ctxmask[i];
             int s = code_base_dec(&d, ctxv, hist);
             fputc(SYM_TO_BASE[s], out);
             hist = (hist << 2) | (uint64_t)s;

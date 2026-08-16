@@ -5,6 +5,8 @@ set -eu
 export LC_ALL=C
 cd "$(dirname "$0")/.."
 EXE=${1:-./dnac}; K=${2:-22}
+# Windows toolchains produce dnac.exe; accept either name.
+if [ ! -x "$EXE" ] && [ -x "$EXE.exe" ]; then EXE="$EXE.exe"; fi
 [ -x "$EXE" ] || { echo "no such executable: $EXE" >&2; exit 1; }
 [ -d data ] || { echo "no ./data — run: sh scripts/get-data.sh --human" >&2; exit 1; }
 

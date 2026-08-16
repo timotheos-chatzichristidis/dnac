@@ -1,0 +1,424 @@
+# dnac — a lossless DNA compressor
+
+A single-file lossless DNA compressor in C: a context-mixing codec over a binary
+decomposition of `{A,C,G,T}`, with substitution-tolerant forward and
+reverse-complement match models, a two-layer logistic mixer, chained SSE/APM
+stages, a range coder, and an optional reference mode. On the sequences measured
+here it compresses real genomes below **GeCo3**, the current open-source state of
+the art, in both reference-free and reference-based modes.
+
+No dependencies beyond libc. Builds clean with `-Wall -Wextra` on gcc and clang.
+Every design decision was a falsifiable experiment on real genomes — kept when
+the measurement rewarded it, reverted when it did not. What the measurement
+*rejected* is written down as well, in
+[docs/negative-results.md](docs/negative-results.md).
+
+## Results (real genomes, bits per ACGT base — lower is better)
+
+| method                         | human chr21 | E. coli | notes |
+|--------------------------------|:-----------:|:-------:|-------|
+| naive 2-bit packing            | 2.000       | 2.000   | no modelling |
+| zip / Deflate                  | 2.305       | 2.416   | barely models DNA |
+| **dnac** (k=22)                | **1.546**   | **1.883** | this project, on the FASTA files |
+
+## Head-to-head vs GeCo3 — same machine, same input files
+
+Published bits/base numbers are not comparable across papers (different
+assemblies, different handling of `N` and line breaks, different denominators),
+so "we match the state of the art" is worth nothing until it is measured
+directly. GeCo3 was built from source and run here, on the plain ACGT sequence
+files that the literature benchmarks on (`./mkseq.ps1`, `./benchmark.ps1`).
+
+**Reference-free** — compressed size of the actual file, one machine:
+
+| dataset | tool | bits/base | compress | RAM |
+|---------|------|:---------:|---------:|----:|
+| human chr21 (40,088,619 bases) | **dnac k=22** | **1.4979** | 194 s | ~0.8 GB |
+| | GeCo3 `-l 14` | 1.5092 | 200 s | |
+| | GeCo3 `-l 9` | 1.5177 | 74 s | |
+| | GeCo3 `-l 16` | *did not finish* | — | 8.4 GB, thrashed |
+| chr21 slice (9,836,065 bases) | **dnac k=22** | **1.7114** | **47 s** | ~0.4 GB |
+| | GeCo3 `-l 16` | 1.7163 | 274 s | 8.4 GB |
+| | GeCo3 `-l 14` | 1.7195 | 61 s | |
+| E. coli (4,641,652 bases) | **dnac k=22** | **1.8833** | 19 s | ~0.6 GB |
+| | GeCo3 `-l 9` | 1.8903 | 10.5 s | |
+| | GeCo3 `-l 16` | 1.8913 | 177 s | 8.4 GB |
+
+GeCo3's maximum level needs 8.4 GB, which did not fit alongside anything else on
+this 16 GB machine for the full chromosome — it spent 7 minutes at 19% CPU
+swapping before being stopped. The 10 MB chr21 slice exists in the table so that
+`-l 16` gets measured on human sequence at a size where it does fit.
+
+**Reference-based**, with the GeCo3 authors' own reference templates from their
+`benchmark/run_ref.sh` (`-rm 20:500:1:35:0.95/3:100:0.95 -rm 13:200:... -lr 0.03
+-hs 64`, and the hybrid variant that adds target models):
+
+| pair | dnac | GeCo3 ref models | GeCo3 hybrid |
+|------|-----:|-----------------:|-------------:|
+| W3110 vs MG1655 (near-identical strains) | **1,085 B** | 1,404 B | 1,319 B |
+| O157:H7 vs MG1655 (diverged strains) | **361,396 B** | 431,652 B | 365,401 B |
+
+### What the head-to-head actually says
+
+- **dnac is ahead reference-free on every sequence and every GeCo3 level tested**,
+  including their heaviest (`-l 16`) where it can be run at all — and it gets
+  there in 47 s where `-l 16` needs 274 s and 8.4 GB.
+- **Reference-based it is now ahead on both pairs**: 1% better than their best
+  configuration on the diverged one, and 18% better on the near-identical one
+  (1,085 bytes against 1,319 for a whole 4.6 Mbp genome).
+- Note that GeCo3's heaviest level is *worse* than its own level 9 on E. coli
+  (1.8913 vs 1.8903, 20× the time): more models is not automatically better —
+  the same lesson our own rejected experiments taught.
+
+So the claim that holds: *"ahead of GeCo3 on these sequences in both modes"* — measured here, on identical files, not quoted
+from a paper. It is one machine and three sequences; that is the honest scope.
+
+Two more things that belong next to any such claim: GeCo3 **decompresses several
+times faster** (asymmetric design; ours is symmetric), which matters in real use;
+and these are stored file sizes, while GeCo3 additionally self-reports a payload
+figure ~4 KB smaller than its file — noise on chr21, 0.007 bpb on E. coli.
+XM (Java) has not been run.
+
+*chr21 = Ensembl GRCh38, 40,088,619 ACGT bases (the 6.6M `N` gap bytes and
+newlines are handled losslessly but excluded from bits/base). Compression is
+lossless — every result here was verified by SHA-256 round-trip.*
+
+## Reference-based results (`cr` / `dr`) — the big lever
+
+Two genomes of a species differ by ~0.1%, so a genome stored *against a
+reference* costs a fraction of one stored alone. Same models, same code — the
+reference is simply fed through them first (see below).
+
+| target | reference | alone | with reference | smaller by |
+|--------|-----------|:-----:|:--------------:|:----------:|
+| E. coli W3110 (real strain) | E. coli MG1655 | 1.881 | **0.0033** | **562×** — 1,941 bytes for a 4.6 Mbp genome |
+| chr21 of a simulated individual (0.1% SNPs + indels) | chr21 | 1.508 | **0.0238** | **63×** — 7.55 MB → 119 KB |
+| E. coli, simulated individual | E. coli MG1655 | 1.885 | **0.0219** | 86× |
+| E. coli O157:H7 (real, diverged strain) | E. coli MG1655 | 1.812 | **0.519** | 3.5× |
+| E. coli MG1655 | *human chr21* (unrelated!) | 1.884 | 1.887 | −0.2% (degrades gracefully) |
+
+The gain tracks how related the two sequences are, exactly as it should: nearly
+identical strains cost almost nothing, a diverged strain of the same species
+costs a third, an unrelated reference costs nothing extra and breaks nothing.
+
+### Pay for the reference once (`prime`)
+
+Priming is a full modelling pass over the reference — and it is paid *twice per
+file*, by the compressor and again by the decompressor. For the actual use case
+(many genomes against one reference) that pass is identical every time, so it can
+be done once and saved:
+
+```powershell
+./dnac.exe prime reference.fa reference.state 22   # once
+./dnac.exe cr target.fa out.dnac reference.state   # every time after
+./dnac.exe dr out.dnac  back.fa  reference.state
+```
+
+| reference | priming pass | load a saved state | compress a 40 Mbase target |
+|-----------|:------------:|:------------------:|:--------------------------:|
+| E. coli (4.6 Mbp) | 10.0 s | **0.3 s** | — |
+| human chr21 (40 Mbp) | 98 s | ~5 s | 188 s → **83 s** end-to-end |
+
+A state file and the FASTA it came from are **interchangeable and produce
+bit-identical output** (the adversarial suite checks exactly this): you can
+compress with one and decompress with the other. Table sizes are therefore
+derived from the reference alone, never from the target. The state is a cache in
+host byte/float layout — big (523 MB for E. coli, 941 MB for chr21, since it *is*
+the models' memory) and not an interchange format; the compressed stream is the
+portable artefact.
+
+The whole point in one line: **compression = prediction.** We never store the
+sequence; we store only the *surprise*. Anything predictable costs almost nothing.
+
+## How it works (the architecture, plain → technical)
+
+Think of a committee playing "guess the next base," and a scribe who writes down
+only where the committee was wrong.
+
+```
+        each byte of the file
+                │
+         ┌──────▼───────┐   "is this a base or junk (newline/header/N)?"
+         │  flag model  │   contexted on run-length → periodic newlines ~free
+         └──────┬───────┘
+          base  │  non-base ──► order-0 literal model (separate, never pollutes DNA)
+                ▼
+   each base = 2 binary decisions over a tree {A,C,G,T}
+                │
+   ┌────────────▼───────────────┐   PREDICTORS (each gives P(next bit)):
+   │  order models 1,2,3,..,k    │   • context models of many memory lengths
+   │  match model, 13-base anchor│   • LZ-style "seen this stretch before?"
+   │  match model, 16-base anchor│   • the same, but only on a surer anchor
+   │  reverse-complement match   │   • "seen its reverse-complement before?"
+   └────────────┬───────────────┘
+        ┌────────▼────────┐   MIXER (logistic): blends predictors in the logit
+        │   logistic mix  │   domain, weights learned online per match state —
+        └────────┬────────┘   trusts whoever's been right lately
+        ┌────────▼────────┐   SSE / APM ×2: recalibrates the probability by
+        │  SSE / APM ×2   │   context (a model of the prediction's reliability)
+        └────────┬────────┘
+           ┌──────▼──────┐
+           │ range coder │   spends bits ∝ −log2(probability of the truth)
+           └─────────────┘
+```
+
+The components, bottom up:
+
+- **Range coder** — 32-bit carryless (Subbotin style). Turns a probability into
+  bits: likely → fraction of a bit, surprising → many bits. Bits are coded by
+  *splitting* the range with a multiply rather than dividing it by a total
+  frequency, and probabilities carry 14 bits. That combination matters far more
+  than it looks: dividing throws away up to `total/range` of the interval per
+  symbol, so simply asking for finer probabilities made things *worse* until the
+  division went away. With a 12-bit probability the cost floor is 0.00035 bit per
+  coded bit even when the model is certain — about 400 bytes per 4.6 Mbp genome,
+  which is a third of what a genome costs when compressed against its own
+  reference. Fixing the coder took that case from 1,365 to 1,085 bytes.
+- **Binary tree over {A,C,G,T}** — each base is two bit-decisions
+  (`{A,C}` vs `{G,T}`, then which one). This lets the powerful machinery below
+  work on simple binary predictions.
+- **Flag model** — before every byte, a binary "is this a base?" predictor.
+  Its context is the *run-length* of consecutive bases since the last non-base,
+  so fixed-width FASTA newlines become almost free. Non-bases go to a separate
+  order-0 byte model and never touch the DNA history.
+- **Order-model ensemble** — orders `{1,2,3,4,6,8,11,14,18,22}` up to `k`, all
+  running at once. Low orders learn fast; high orders are specific. Orders ≤8 use
+  direct tables, higher ones use hashed tables sized from the input length.
+- **Bit counters with an adaptive rate** — each stored probability also keeps a
+  4-bit observation count and moves by `1/(3n+2)` of the error: a brand-new
+  context jumps straight to what it just saw, a well-established one barely
+  budges. A fixed shift makes cold high-order contexts learn far too slowly.
+- **Two forward match models** — each remembers where a recent k-mer last
+  occurred and predicts the base that followed it. One uses a **short 13-base
+  anchor** (sensitive: it re-finds diverged repeats — human Alus are only ~85%
+  identical, so long exact anchors rarely hit) and one a **16-base anchor**
+  (precise: when it fires it is rarely coincidence). Both are
+  **substitution-tolerant**: a single mismatch (a SNP inside a repeat) doesn't
+  break the match — confidence dips and recovers.
+- **Reverse-complement match model** — the same, but for inverted repeats: it
+  looks up the reverse-complement of the current context and predicts walking
+  *backward* and complemented (`complement = 3 − base`). Biggest single win on
+  human DNA (it's full of inverted repeats; backed by Chargaff's 2nd rule).
+- **Substitution-tolerant context models** — two extra order models (16 and 20)
+  that read a *repaired* history: when such a model's own top guess turns out
+  wrong, it pushes the guess it made rather than the base that actually
+  occurred, so one SNP inside a diverged repeat doesn't poison the next 20
+  contexts. It resyncs to the true history after 8 failures. Unlike the match
+  models, which follow one anchored position, these aggregate statistics over
+  *every* past occurrence of the repaired context.
+- **Inverted-repeat training** — DNA is double-stranded, so the stretch just read
+  also exists physically as its reverse complement. After every base, each
+  context model gets a second, free training example taken from that other
+  strand: the last `order` bases form the context there, and the base that just
+  fell out of the window is what follows them, complemented. Same tables, no
+  extra prediction — a context first met as an inverted repeat is already warm
+  when it later appears the normal way round. This was the largest single gain
+  of the final round (−0.24%) and one of the few that helped bacterial DNA too.
+  It is the same "mirroring" intuition as the reverse-complement match model,
+  applied to the context models instead: GeCo calls the flag `ir`.
+- **Two-layer mixer** — four logistic mixers ("experts") run over the same
+  inputs, each keyed on a different context (which matches are running / the
+  last three bases / match confidence / a global one) and each trained on its
+  own error, so each specialises. A small learned second layer then decides how
+  much to trust each expert, per node and per match state. This is what
+  separates GeCo3 from GeCo2, and what PAQ has always done; on its own it was
+  worth 0.13%, and it also made the tolerant models above start paying off —
+  they were worth nothing under the single-layer mixer.
+- **Reference mode** (`cr`/`dr`) — the reference genome is not diffed against;
+  it is **run through the same models first** (counters, mixer weights, SSE
+  curves and match anchors all learn it), and only then is the target coded.
+  Encoder and decoder do this identically, so nothing extra is stored. Because
+  it reuses the ordinary machinery, substitution tolerance, inverted repeats and
+  order models all work *across* the file boundary — and an unrelated reference
+  simply gets ignored by the mixer instead of corrupting anything. The header
+  keeps a fingerprint of the reference, so decoding with the wrong one is
+  refused rather than silently wrong.
+- **SSE / APM** — two chained stages that recalibrate the mixed probability
+  through learned, context-dependent curves: stage 1 keyed on which match models
+  are live, stage 2 on the last 6 bases. Each is blended 50/50 with its own
+  input — the mixer is already well calibrated, so a raw APM output adds noise.
+
+`k` (the CLI argument, default 22) is the **maximum model order**.
+
+## The journey (every change was measured on chr21)
+
+```
+2.305  zip / Deflate
+1.931  context-mixing ensemble of order models
+1.677  + forward match model (repeats)
+1.645  + substitution tolerance (diverged repeats / SNPs)
+1.602  + reverse-complement match (inverted repeats)
+1.597  + SSE / APM second stage
+1.558  + adaptive-rate counters, per-match-state mixer weights,
+          13-base anchor + 2nd match model, 10-order ensemble,
+          2-stage SSE, input-sized hash tables
+1.554  + checksummed, 2-way set-associative hash buckets (also 13% faster)
+1.551  + two-layer mixing (4 context-keyed experts + a learned second layer),
+          substitution-tolerant context models, retuned counter rate
+1.547  + inverted-repeat training: every context model also learns from the
+          reverse-complement strand (the single biggest win of that round)
+1.546  + a multiplying binary coder at 14-bit probability resolution, which
+          matters most where the model is nearly always right (see below)
+─────
+~1.57–1.60  academic SOTA (GeCo3 / XM)
+
+    0.0238  the same chromosome coded against a reference (see the table above)
+            — and 0.0033 for a real E. coli strain against another
+```
+
+The 1.597 → 1.558 round was measured one change at a time on a 10 MB chr21 slice
+(fast loop), then confirmed end-to-end on the full chromosome. By far the biggest
+single item was **shortening the match anchor from 16 to 13 bases** (−0.8% alone):
+the match model's job on human DNA is finding *diverged* repeats, and a 16-base
+exact anchor is simply too rare inside an 85%-identical Alu. Everything else in
+that line was worth 0.05–0.4% each.
+
+Earlier, a separate cleanup mattered too: replacing the original 5th "escape"
+symbol with a clean 4-symbol base model + the run-length flag removed a hidden
+`log2(5) = 2.32` bits/base ceiling that was making naive high-`k` *worse* than
+2-bit packing.
+
+### Ideas the measurement *rejected* (kept honest)
+
+- **Aggressive match re-anchoring on every miss** — plausible, but made chr21
+  *worse*: real genomes are repetitive, so the post-SNP context often hash-hits,
+  and re-anchoring there abandoned good diverged matches.
+- **An "orientation" derived context** (dinucleotide inversion bit `AC=0/CA=1`)
+  — a fair-fight entropy test (`feature_test.c`) showed it's a lossy *coarsening*
+  of the bases: per context-bit it predicts strictly worse, and adds no
+  information the order models lack.
+- **A tandem/HOR periodicity model** — redundant with the match model (which
+  already anchors at the period), and chr21's satellite arrays live in the
+  centromeric `N` gaps anyway. Zero gain, +12% time → reverted.
+- **Several match candidates per hash bucket** (with backward verification to
+  pick the better one) — 0.004% for double the anchor memory. The anchor tables
+  already have enough headroom that collisions are not what limits us.
+- **lpaq-style bit-history states + a shared StateMap** instead of per-context
+  probabilities — *worse* by 0.3% on human and 0.7% on bacterial DNA. A 4-bit
+  count per side caps confidence near p=0.94, but a good order-16 DNA context is
+  nearly deterministic and wants p>0.99. That design wins on text, where
+  non-stationarity matters more than sharpness; DNA is the other case.
+- **More table memory** — +1 and +2 doublings of every hash table changed chr21
+  by 0.006%. We are not table-limited at these sizes.
+- **Adding the order-1 base to the mixer's weight-set context** — +0.06% on
+  chr21 but −0.04% on E. coli; splitting the weights 4 ways more just slowed
+  learning. Kept the match-state context only.
+- **Tuning `MIX_LR`** — swept 0.001 / 0.002 / 0.004 / 0.008: flat to worse.
+  The mixer learning rate was already at its optimum; no free lunch there.
+
+These are not failures; a falsifiable experiment that says "no" is the method
+working. *Measured beats plausible.*
+
+## Lossless on anything
+
+Every byte round-trips. Non-`ACGT` bytes (headers, newlines, `N`, lowercase
+soft-masking) go through the flag + literal path and never disturb the base
+history. Encoder and decoder run **identical floating-point code in the same
+order**, so the integer probability fed to the coder is bit-identical on both
+sides. Verified by SHA-256 on real genomes *and* adversarial inputs (empty file,
+all 256 byte values, messy CRLF/lowercase/N FASTA, pure newlines, random binary,
+exact/diverged/inverted repeats), across many values of `k`.
+
+## Build & run
+
+**Linux / macOS / WSL:**
+
+```sh
+make                              # cc -O2 -Wall -Wextra -o dnac dnac.c -lm
+make test                         # 112 SHA-256 round-trips (plain, reference, state)
+sh scripts/get-data.sh --human    # fetch the exact genomes benchmarked below
+make bench                        # bits/base on whatever is in ./data
+```
+
+**Windows / PowerShell:**
+
+```powershell
+./build.ps1            # compiles dnac.exe (gcc / clang / cl); needs -lm (handled)
+./test.ps1             # full demo: generate, compress, verify round-trip, vs zip
+
+# manual use
+./dnac.exe gen sample.fa 2000000        # make a structured sample
+./dnac.exe c  sample.fa  out.dnac 22    # compress (k = max model order, default 22)
+./dnac.exe d  out.dnac   back.fa        # decompress
+
+# reference-based (the same reference is required to decompress)
+./dnac.exe cr target.fa out.dnac reference.fa 22
+./dnac.exe dr out.dnac  back.fa   reference.fa
+./dnac.exe prime reference.fa reference.state 22  # pay the priming pass once
+./dnac.exe cr target.fa out.dnac reference.state  # ...then reuse it
+./dnac.exe mut genome.fa individual.fa 1.0 42     # simulate a resequenced genome
+
+# measurement
+./bench.ps1 -Exe .\dnac.exe -File .\chr21.fa -K 22   # round-trip + bits/base
+./bench.ps1 ... -Fast                                # compress only (param sweeps)
+./adversarial.ps1 -Exe .\dnac.exe                    # 60 losslessness round-trips
+```
+
+No compiler yet? `build.ps1` prints install options; **w64devkit** is the
+quickest (one zip, has gcc). Higher `k` = deeper models = better but more memory
+and time (chr21 at k=22 is ~5 s/Mbase round-trip, ~800 MB peak; hash tables are
+sized from the input, so small files stay small).
+
+Try a **real** genome: download a `.fa` from NCBI/Ensembl and
+`./dnac.exe c real.fa real.dnac 20`.
+
+## Files
+
+- `dnac.c` — everything: range coder, binary coder, flag/literal models,
+  order-model ensemble, two forward + one reverse-complement match model,
+  logistic mixer, 2-stage SSE/APM, compress/decompress, sample generator.
+- `feature_test.c` — standalone entropy experiment (the "orientation lens" test).
+- `build.ps1`, `test.ps1` — Windows build & demo.
+- `bench.ps1` — round-trip + bits/base for one build on one file (`-Fast` to
+  compress only, for parameter sweeps).
+- `adversarial.ps1` — 112 SHA-256-verified round-trips: 10 nasty inputs × 6
+  values of `k`, plus reference mode (unrelated/short/messy references, primed
+  state files, FASTA↔state interchange, and refusing the wrong reference).
+- `Makefile`, `scripts/*.sh` — the same build, losslessness and benchmark paths
+  for Linux/macOS/WSL, plus `scripts/get-data.sh` which fetches the exact
+  sequences the tables above were measured on, by accession.
+- `docs/negative-results.md` — what was measured and rejected, including the
+  test showing the reference-mode advantage does **not** transfer outside DNA.
+- `.github/workflows/ci.yml` — every push builds on gcc and clang, Linux and
+  macOS, and must pass all 112 round-trips.
+- `README.md` — this file.
+
+## Where the remaining (small, hard) gains are
+
+We're at the practical ceiling of this complexity class. The remaining levers are
+incremental: multiple match candidates per hash bucket, checksummed hash slots so
+high-order contexts stop blending on collision, a third anchor length, and
+automated hyperparameter search (the parameter space is now big enough that
+hand-tuning is the bottleneck — the frontier tools use a genetic algorithm for
+exactly this). Going *substantially* below ~1.55 bits/base reference-free needs
+heavier machinery (neural mixing, 2-pass) — a different complexity class. A
+genuinely different game is **reference-based** compression (store a genome as
+differences from a known reference), which reaches ~0.01–0.1 bits/base but solves
+a different problem and needs the reference.
+
+## The one principle
+
+Judge every idea by a single question: *after this, is the next base easier to
+predict?* If yes, it may help — measure it. If it only relabels what we already
+know, it's cosmetic. That question, plus a SHA-256 round-trip, governed every
+line here.
+
+## Status and scope
+
+This is a working codec, not a maintained product. It is lossless on arbitrary
+input and the results above are reproducible from this repository, but there is
+no stable file-format guarantee across versions: the header magic is bumped
+whenever the bitstream changes, and archives are only guaranteed to decode with
+the build that wrote them. Reference mode additionally requires the exact same
+reference, which it verifies by fingerprint and refuses when wrong.
+
+Compression is symmetric: decompression costs roughly the same as compression,
+which is a real disadvantage against tools designed to decode fast.
+
+## Licence
+
+GPL-3.0-or-later — see [LICENSE](LICENSE). Copyright is held by the author, so
+commercial licensing on different terms is available on request.
+
+If you use this in academic work, citation metadata is in
+[CITATION.cff](CITATION.cff).

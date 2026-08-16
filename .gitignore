@@ -1,0 +1,45 @@
+# --- build output ---
+dnac
+*.exe
+feature_test
+*.o
+*.obj
+*.pdb
+*.ilk
+
+# --- genome data (downloaded via scripts/get-data.sh, never committed) ---
+*.fa
+*.fna
+*.fasta
+*.seq
+*.fa.gz
+*.fna.gz
+*.acgt
+
+# --- codec output / test artifacts ---
+*.dnac
+*.state
+*.zip
+*.zst
+*.xz
+/roundtrip.*
+/sample.*
+results/
+
+# --- third-party code fetched for benchmarking (own licences) ---
+bench-external/
+sources/
+
+# --- local working notes / agent configuration ---
+.claude/
+CLAUDE.md
+AGENTS_SETUP.md
+blog-dnac-journey.md
+dnac_dnc9_backup.c
+
+# --- byte-level side branch (separate experiment, not part of this codec) ---
+text-offshoot/
+
+# --- OS ---
+Thumbs.db
+.DS_Store

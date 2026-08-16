@@ -1,0 +1,30 @@
+cff-version: 1.2.0
+title: "dnac: a lossless DNA compressor"
+message: "If you use this software in academic work, please cite it as below."
+type: software
+authors:
+  - family-names: Chatzichristidis
+    given-names: Timotheos
+    alias: timotheos-chatzichristidis
+repository-code: "https://github.com/timotheos-chatzichristidis/dnac"
+url: "https://github.com/timotheos-chatzichristidis/dnac"
+license: GPL-3.0-or-later
+version: 0.1.0
+date-released: "2026-08-16"
+abstract: >-
+  A single-file lossless DNA compressor in C. It codes each base as two binary
+  decisions and predicts them with an ensemble of finite-context models,
+  substitution-tolerant forward and reverse-complement match models, a two-layer
+  logistic mixer and two chained SSE/APM stages, driven by a range coder. An
+  optional reference mode primes the whole model on a related sequence before
+  coding the target, and that primed state can be serialised and reused.
+  On the sequences benchmarked it compresses below GeCo3 in both reference-free
+  and reference-based modes. All results are verified by SHA-256 round-trip.
+keywords:
+  - DNA compression
+  - lossless compression
+  - context mixing
+  - arithmetic coding
+  - referential compression
+  - bioinformatics
+  - genomics

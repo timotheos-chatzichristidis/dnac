@@ -1,0 +1,37 @@
+name: build & losslessness
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  roundtrip:
+    name: ${{ matrix.os }} / ${{ matrix.cc }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: ubuntu-latest, cc: gcc }
+          - { os: ubuntu-latest, cc: clang }
+          - { os: macos-latest,  cc: clang }
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build
+        run: make CC=${{ matrix.cc }} CFLAGS="-O2 -Wall -Wextra"
+
+      # The only claim that must never regress: every byte comes back.
+      # 112 SHA-256 round-trips across plain, reference and primed-state modes.
+      - name: Losslessness round-trips
+        run: sh scripts/roundtrip.sh ./dnac
+
+      - name: Sanity — compress/decompress a generated genome
+        run: |
+          ./dnac gen sample.fa 500000 42
+          ./dnac c sample.fa sample.dnac 22
+          ./dnac d sample.dnac back.fa
+          cmp sample.fa back.fa
+          ls -l sample.fa sample.dnac

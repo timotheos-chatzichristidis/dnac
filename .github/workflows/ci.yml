@@ -18,7 +18,7 @@ jobs:
           - { os: ubuntu-latest, cc: clang }
           - { os: macos-latest,  cc: clang }
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Build
         run: make CC=${{ matrix.cc }} CFLAGS="-O2 -Wall -Wextra"

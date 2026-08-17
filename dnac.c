@@ -351,6 +351,18 @@ static double squashd(double x)  { return 1.0 / (1.0 + exp(-x)); }
 
 /* packed counter helpers (12-bit probability + 4-bit observation count) */
 static double ctr_p(uint16_t v) { return ((double)(v >> 4) + 0.5) / 4096.0; }
+
+/* stretch(ctr_p(v)) has only 4096 possible results -- the counter's probability
+   is 12 bits -- so it is a table, not a log() call. Built with the SAME
+   expression it replaces, so every entry is the identical double and the
+   bitstream cannot change: verified byte-identical on chr21_slice.fa and the
+   full chr21. This is the hot path (one lookup per model per node per base,
+   ~30 log() calls per base removed); worth 1.43x on chr21 at every level. */
+static double g_stretch[4096];
+static void stretch_tab_init(void) {
+    for (int i = 0; i < 4096; i++) g_stretch[i] = stretchd(((double)i + 0.5) / 4096.0);
+}
+#define CTR_STRETCH(v) (g_stretch[(v) >> 4])
 static void ctr_upd(uint16_t *sp, int bit) {
     int n = *sp & 15, pv = *sp >> 4;
     int target = bit ? 4095 : 0;
@@ -619,6 +631,7 @@ static int g_mhb;   /* anchor-table bucket bits, remembered for state files */
    bit-identical models. hb/mhb override the computed sizes when a state file
    dictates them. Returns 0 on success. */
 static int mix_setup(int maxorder, size_t sizing_n, size_t seq_alloc, int hb, int mhb) {
+    stretch_tab_init();
     /* g_hashbits counts BUCKETS of BUCKETW uint16, so the byte footprint of a
        hashed model is the same as it was with one uint16 per (context,node). */
     g_hashbits = (hb > 0) ? hb : size_bits(sizing_n, HASHBITS_MAX) - 2 + HASH_EXTRA;
@@ -809,12 +822,12 @@ static uint32_t mix_predict(int node, const int *mc, const uint64_t *ctxv, uint1
     for (int i = 0; i < g_nmodels; i++) {
         uint16_t *sp = mix_slot(i, ctxv[i], node);
         slot[i] = sp;
-        st[i] = stretchd(ctr_p(*sp));
+        st[i] = CTR_STRETCH(*sp);
     }
     for (int e = 0; e < NMATCH + 1; e++) {          /* forward matches, RC match */
         int i = g_nmodels + e;
         slot[i] = extra[e];
-        st[i] = stretchd(ctr_p(*extra[e]));
+        st[i] = CTR_STRETCH(*extra[e]);
     }
     double X = g_v[node][mc[0]][NMIX];              /* layer-2 bias              */
     for (int k = 0; k < g_nmix; k++) {

@@ -255,7 +255,59 @@ levels change the day before:
   `ref_load`. Fixed: dispatch now matches the `DNACST` prefix, so a wrong-version
   state reaches `state_load` and is refused by name. The v0.1.x *stream* was
   already handled properly — this was the asymmetric half of that same change.
-  Now covered by a test in both suites (148 / 143 round-trips).
+  Now covered by a test in both suites.
+
+## 11. Speed round 2026-08-18 — and a third silent-format bug
+
+Started from "we are behind on time: 194 s vs GeCo3's 74 s". Both halves of that
+premise were wrong, and fixing them was worth more than any optimisation.
+
+**The comparison was not like-for-like.** It pitted our *maximum* level against
+GeCo3's *fast* one, and the levels had never been measured on the headline
+dataset at all. Measured properly, in one session, one build:
+
+    dnac -l1  46.6 s  1.5065      GeCo3 -l9   75.1 s  1.5177
+    dnac -l2  60.0 s  1.5039      GeCo3 -l14 174.1 s  1.5092
+    dnac -l3  88.7 s  1.4979
+
+On all three datasets there is a dnac setting that is at once faster and smaller
+than every GeCo3 setting tested. We were never behind.
+
+**stretch() of a counter was a table all along (1.43x, free).** `mix_predict`
+called `stretchd(ctr_p(*sp))` per model per node per base -- but `ctr_p` reads a
+12-bit probability, so that composition has 4096 possible inputs. We were calling
+`log()` 1.2 billion times per chromosome to get one of 4096 answers. A 32 KB
+table, built with the same expression, is provably bit-identical: verified by
+`cmp` on the full chr21. chr21 L3 129.0 s -> 88.7 s at every level, no ratio cost.
+*The question that found it: how many distinct inputs does this hot-path function
+actually receive?*
+
+**Measure size effects at full size.** The prefetch work was tuned on the 10 MB
+slice and looked like 1.18x; on the full chromosome it was 1.5x. The stretch
+table looked like 1.49x on the slice and is 1.43x at full size. The slice
+UNDERSTATES memory optimisations and OVERSTATES compute ones, because its tables
+fit in cache. Speed claims need the full chromosome.
+
+**Table-size sweep: hypothesis refuted, useful anyway.** Predicted that 512 MB
+tables were TLB-bound and shrinking them would buy speed. It does not -- 2.4x
+less memory buys only 1.11x -- but it is an excellent *memory* lever:
+HASHBITS_MAX 26->25 costs +0.051% size for -31% RAM (1239 -> 855 MB). Also
+revealed that the README's "~0.8 GB" was wrong: peak is 1.24 GB.
+
+**The third silent-format bug, found by that sweep.** `g_hashbits` was recomputed
+by the decoder from the length and the COMPILE-TIME caps, so `-DHASHBITS_MAX`
+was part of the format with nothing saying so. Measured: a file written by the
+default build and read by a `-DHASHBITS_MAX=22` build decoded to **wrong bytes
+with exit 0**. Fixed in v0.3.0 by writing the geometry into the header
+(`DNCB`/`DNCS` -> `DNCC`/`DNCT`). The state format had always stored its geometry
+-- only the stream had not.
+
+**The pattern across all three of this week's bugs** (state file read as FASTA,
+stale byte figures, this): every one was invisible to a round-trip test, because
+a round-trip uses ONE binary with ONE configuration on data it just produced.
+What varies *between builds*, or between the file and its documentation, needs a
+different kind of check. Hence the new CI step that compresses with one geometry
+and decodes with another.
 
 Known and accepted: `cr`/`prime` silently ignore a user-supplied `k`/`lvl` when
 the reference is a state file (the state's own values win). Consistent and

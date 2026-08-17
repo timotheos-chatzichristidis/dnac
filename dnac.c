@@ -272,9 +272,9 @@ static uint16_t *g_tab[MAXIN];              /* order-model probability tables   
    Compression levels trade model count (time) against prediction (ratio).
    Measured on chr21_slice.fa, 9,836,065 bases:
 
-     3  max (default)  everything                  32.1 s   1.7126 bits/base
-     2  balanced       no IR training, no tolerant 20.9 s   1.7175   (1.5x, +0.29%)
-     1  fast           + 6 orders, 2 mix experts   14.7 s   1.7190   (2.2x, +0.37%)
+     3  max (default)  everything                  20.0 s   1.7126 bits/base
+     2  balanced       no IR training, no tolerant 13.8 s   1.7175   (1.4x, +0.29%)
+     1  fast           + 6 orders, 2 mix experts    9.7 s   1.7190   (2.1x, +0.37%)
 
    The level is written into the header because the decoder must build exactly
    the same set of models; it is not a hint. */
@@ -1240,12 +1240,20 @@ static int do_compress(const char *inpath, const char *outpath, int k, const cha
 
     FILE *out = fopen(outpath, "wb");
     if (!out) { perror("open output"); free(buf); free(ref); mix_free(); return 1; }
-    /* header: magic ('B' plain / 'S' reference), k, level, original length
-       [, ref info]. 'A'/'R' were the pre-level formats and are refused: the
-       decoder cannot rebuild the model set without knowing the level. */
-    fputc('D', out); fputc('N', out); fputc('C', out); fputc(refpath ? 'S' : 'B', out);
+    /* header: magic ('C' plain / 'T' reference), k, level, table geometry,
+       original length [, ref info]. Older magics are refused, never guessed at:
+       'A'/'R' predate the level byte, 'B'/'S' predate the stored geometry, and
+       in both cases the decoder cannot rebuild the models the encoder used. */
+    fputc('D', out); fputc('N', out); fputc('C', out); fputc(refpath ? 'T' : 'C', out);
     fputc((int)k, out);
     fputc(g_level, out);
+    /* The table geometry travels with the file. It used to be recomputed by the
+       decoder from the length and the COMPILE-TIME caps, which made
+       -DHASHBITS_MAX part of the format without anything saying so: a build with
+       a different cap decoded to wrong bytes and reported success. State files
+       always stored their geometry; the stream did not. Now both do. */
+    fputc(g_hashbits, out);
+    fputc(g_mhb, out);
     put64(out, (uint64_t)n);
     if (refpath) { put64(out, (uint64_t)refn); put64(out, reffp); }
 
@@ -1306,10 +1314,17 @@ static int do_decompress(const char *inpath, const char *outpath, const char *re
                         " levels existed;\n its format cannot be read by this build\n");
         fclose(in); return 1;
     }
-    if (m0 != 'D' || m1 != 'N' || m2 != 'C' || (m3 != 'B' && m3 != 'S')) {
+    if (m0 == 'D' && m1 == 'N' && m2 == 'C' && (m3 == 'B' || m3 == 'S')) {
+        fprintf(stderr, "this file was written by dnac v0.2.x, which did not record"
+                        " its table geometry;\n only a build with the same"
+                        " HASHBITS_MAX/MHBITS_MAX could read it safely, and nothing"
+                        " in the file says which\n");
+        fclose(in); return 1;
+    }
+    if (m0 != 'D' || m1 != 'N' || m2 != 'C' || (m3 != 'C' && m3 != 'T')) {
         fprintf(stderr, "not a dnac file\n"); fclose(in); return 1;
     }
-    int need_ref = (m3 == 'S');
+    int need_ref = (m3 == 'T');
     if (need_ref && !refpath) {
         fprintf(stderr, "this file was compressed against a reference: use  dnac dr <in> <out> <ref.fa>\n");
         fclose(in); return 1;
@@ -1324,6 +1339,16 @@ static int do_decompress(const char *inpath, const char *outpath, const char *re
         fprintf(stderr, "bad compression level in header: %d\n", lvl); fclose(in); return 1;
     }
     g_level = lvl;
+    /* The geometry the encoder actually used, not one recomputed from this
+       build's caps. Bounds only keep a corrupt header from asking for an absurd
+       allocation; a wrong-but-plausible value cannot occur, because the value
+       is the encoder's own. */
+    int hb_hdr  = fgetc(in);
+    int mhb_hdr = fgetc(in);
+    if (hb_hdr < 4 || hb_hdr > 32 || mhb_hdr < 4 || mhb_hdr > 32) {
+        fprintf(stderr, "bad table geometry in header: %d/%d\n", hb_hdr, mhb_hdr);
+        fclose(in); return 1;
+    }
     uint64_t len = get64(in);
     uint64_t refn_hdr = 0, refhash_hdr = 0;
     if (need_ref) { refn_hdr = get64(in); refhash_hdr = get64(in); }
@@ -1350,6 +1375,14 @@ static int do_decompress(const char *inpath, const char *outpath, const char *re
                             "at level %d\n", g_level, lvl);
             fclose(in); mix_free(); return 1;
         }
+        /* Same argument for the geometry: state_load sized the tables from the
+           state's own record, so a state built by a differently-configured build
+           would silently give the models a different shape. */
+        if (g_hashbits != hb_hdr || g_mhb != mhb_hdr) {
+            fprintf(stderr, "state has table geometry %d/%d but this file was written "
+                            "with %d/%d\n", g_hashbits, g_mhb, hb_hdr, mhb_hdr);
+            fclose(in); mix_free(); return 1;
+        }
     } else {
         if (need_ref) {
             ref = ref_load(refpath, &refn);
@@ -1359,7 +1392,8 @@ static int do_decompress(const char *inpath, const char *outpath, const char *re
                 free(ref); fclose(in); return 1;
             }
         }
-        if (mix_setup(k, need_ref ? refn : (size_t)len, (size_t)len + refn, -1, -1)) {
+        if (mix_setup(k, need_ref ? refn : (size_t)len, (size_t)len + refn,
+                      hb_hdr, mhb_hdr)) {
             free(ref); fclose(in); mix_free(); return 1;
         }
     }

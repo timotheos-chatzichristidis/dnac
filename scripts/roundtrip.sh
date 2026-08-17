@@ -149,6 +149,15 @@ if "$EXE" cr diverged.fa old.dnac old.state 16 >/dev/null 2>&1; then
 fi
 rm -f old.state old.dnac
 
+# a v0.2.x stream carried no table geometry, so no build can know how to size
+# its models. It must be refused by magic, not decoded into wrong bytes.
+{ printf 'DNCB'; head -c 64 /dev/urandom; } > v02.dnac
+n=$((n+1))
+if "$EXE" d v02.dnac v02.out >/dev/null 2>&1; then
+  fail=$((fail+1)); echo "FAIL: a v0.2.x stream was accepted"
+fi
+rm -f v02.dnac v02.out
+
 # ------------------------------------------------------------------- verdict
 if [ "$fail" -ne 0 ]; then echo "$fail of $n FAILED"; exit 1; fi
 echo "$n/$n adversarial round-trips lossless"

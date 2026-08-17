@@ -24,7 +24,7 @@ jobs:
         run: make CC=${{ matrix.cc }} CFLAGS="-O2 -Wall -Wextra"
 
       # The only claim that must never regress: every byte comes back.
-      # 148 SHA-256 round-trips across plain, reference, level and state modes.
+      # 149 SHA-256 round-trips across plain, reference, level and state modes.
       - name: Losslessness round-trips
         run: sh scripts/roundtrip.sh ./dnac
 
@@ -35,3 +35,17 @@ jobs:
           ./dnac d sample.dnac back.fa
           cmp sample.fa back.fa
           ls -l sample.fa sample.dnac
+
+      # The table geometry travels in the header, so a file must survive being
+      # read by a build configured with different caps. This needs two binaries,
+      # which the round-trip suite (given one exe) cannot arrange -- so it lives
+      # here. Before v0.3.0 this silently produced wrong bytes and exit 0.
+      - name: Portability — differently-sized tables must still decode
+        run: |
+          ${{ matrix.cc }} -O2 -Wall -Wextra -DHASHBITS_MAX=22 -DMHBITS_MAX=22 -o dnac_small dnac.c -lm
+          ./dnac      c sample.fa big.dnac   22
+          ./dnac_small c sample.fa small.dnac 22
+          ./dnac_small d big.dnac   from_big.fa
+          ./dnac       d small.dnac from_small.fa
+          cmp sample.fa from_big.fa
+          cmp sample.fa from_small.fa

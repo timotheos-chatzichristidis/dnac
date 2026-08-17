@@ -29,20 +29,31 @@ so "we match the state of the art" is worth nothing until it is measured
 directly. GeCo3 was built from source and run here, on the plain ACGT sequence
 files that the literature benchmarks on (`./mkseq.ps1`, `./benchmark.ps1`).
 
-**Reference-free** — compressed size of the actual file, one machine:
+**Reference-free** — compressed size of the actual file. Every row below was
+re-measured in a single session on one machine, with one build, so the times are
+comparable to each other; mixing timings from different sessions is how the
+numbers here went stale once already.
 
 | dataset | tool | bits/base | compress | RAM |
 |---------|------|:---------:|---------:|----:|
-| human chr21 (40,088,619 bases) | **dnac k=22** | **1.4979** | 194 s | ~0.8 GB |
-| | GeCo3 `-l 14` | 1.5092 | 200 s | |
-| | GeCo3 `-l 9` | 1.5177 | 74 s | |
+| human chr21 (40,088,619 bases) | **dnac `-l 3`** (default) | **1.4979** | 88.7 s | 1.24 GB |
+| | **dnac `-l 2`** | **1.5039** | 60.0 s | |
+| | **dnac `-l 1`** | **1.5065** | **46.6 s** | |
+| | GeCo3 `-l 14` | 1.5092 | 174.1 s | |
+| | GeCo3 `-l 9` | 1.5177 | 75.1 s | |
 | | GeCo3 `-l 16` | *did not finish* | — | 8.4 GB, thrashed |
-| chr21 slice (9,836,065 bases) | **dnac k=22** | **1.7114** | **47 s** | ~0.4 GB |
-| | GeCo3 `-l 16` | 1.7163 | 274 s | 8.4 GB |
-| | GeCo3 `-l 14` | 1.7195 | 61 s | |
-| E. coli (4,641,652 bases) | **dnac k=22** | **1.8833** | 19 s | ~0.6 GB |
-| | GeCo3 `-l 9` | 1.8903 | 10.5 s | |
-| | GeCo3 `-l 16` | 1.8913 | 177 s | 8.4 GB |
+| chr21 slice (9,836,065 bases) | **dnac `-l 3`** | **1.7114** | 20.8 s | ~0.4 GB |
+| | **dnac `-l 1`** | 1.7178 | **9.7 s** | |
+| | GeCo3 `-l 16` | 1.7163 | 224.8 s | 8.4 GB |
+| | GeCo3 `-l 14` | 1.7195 | 42.6 s | |
+| E. coli (4,641,652 bases) | **dnac `-l 3`** | **1.8833** | **9.4 s** | ~0.6 GB |
+| | GeCo3 `-l 9` | 1.8903 | 11.4 s | |
+| | GeCo3 `-l 16` | 1.8913 | 130.6 s | 8.4 GB |
+
+**On all three datasets dnac has a setting that is at once faster and smaller
+than every GeCo3 setting tested.** On E. coli and the chr21 slice that setting is
+the default `-l 3`; on the full chromosome `-l 1` beats GeCo3 `-l 9` on both axes
+(46.6 s vs 75.1 s, 1.5065 vs 1.5177) while `-l 3` beats `-l 14` on both.
 
 GeCo3's maximum level needs 8.4 GB, which did not fit alongside anything else on
 this 16 GB machine for the full chromosome — it spent 7 minutes at 19% CPU
@@ -65,8 +76,12 @@ section. The same pairs measured on the original FASTA files cost a little more
 ### What the head-to-head actually says
 
 - **dnac is ahead reference-free on every sequence and every GeCo3 level tested**,
-  including their heaviest (`-l 16`) where it can be run at all — and it gets
-  there in 47 s where `-l 16` needs 274 s and 8.4 GB.
+  including their heaviest (`-l 16`) where it can be run at all — and on the
+  slice it gets there in 20.8 s where `-l 16` needs 224.8 s and 8.4 GB.
+- **It is ahead on speed too, not only ratio.** That was not true of the numbers
+  published before v0.3.0: they compared our *maximum* level against GeCo3's
+  *fast* one, and carried a chr21 time (194 s) measured before the `-O3`,
+  prefetch and stretch-table work. The honest comparison is the table above.
 - **Reference-based it is now ahead on both pairs**: 1% better than their best
   configuration on the diverged one, and 18% better on the near-identical one
   (1,086 bytes against 1,319 for a whole 4.6 Mbp genome).
@@ -96,9 +111,9 @@ they are worth 0.29% of compressed size. Three levels expose that trade:
 
 | level | models | time | bits/base | vs max |
 |:-----:|--------|-----:|----------:|--------|
-| 1 `fast` | 6 orders, 2 mixing experts, no IR, no tolerant models | 14.9 s | 1.7190 | **2.0× faster**, +0.37% size |
-| 2 `balanced` | all orders, 4 experts, no IR, no tolerant models | 21.2 s | 1.7175 | 1.4× faster, +0.29% |
-| 3 `max` (default) | everything | 29.4 s | 1.7126 | — |
+| 1 `fast` | 6 orders, 2 mixing experts, no IR, no tolerant models | 9.7 s | 1.7190 | **2.1× faster**, +0.37% size |
+| 2 `balanced` | all orders, 4 experts, no IR, no tolerant models | 13.8 s | 1.7175 | 1.4× faster, +0.29% |
+| 3 `max` (default) | everything | 20.0 s | 1.7126 | — |
 
 ```sh
 dnac c in.fa out.dnac 22 1     # k=22, level 1
@@ -365,7 +380,7 @@ exact/diverged/inverted repeats), across many values of `k`.
 
 ```sh
 make                              # cc -O2 -Wall -Wextra -o dnac dnac.c -lm
-make test                         # 148 SHA-256 round-trips (plain, reference, level, state)
+make test                         # 149 SHA-256 round-trips (plain, reference, level, state)
 sh scripts/get-data.sh --human    # fetch the exact genomes benchmarked below
 make bench                        # bits/base on whatever is in ./data
 ```
@@ -392,7 +407,7 @@ make bench                        # bits/base on whatever is in ./data
 # measurement
 ./bench.ps1 -Exe .\dnac.exe -File .\chr21.fa -K 22   # round-trip + bits/base
 ./bench.ps1 ... -Fast                                # compress only (param sweeps)
-./adversarial.ps1 -Exe .\dnac.exe                    # 143 losslessness round-trips
+./adversarial.ps1 -Exe .\dnac.exe                    # 144 losslessness round-trips
 ```
 
 No compiler yet? `build.ps1` prints install options; **w64devkit** is the
@@ -412,20 +427,21 @@ Try a **real** genome: download a `.fa` from NCBI/Ensembl and
 - `build.ps1`, `test.ps1` — Windows build & demo.
 - `bench.ps1` — round-trip + bits/base for one build on one file (`-Fast` to
   compress only, for parameter sweeps).
-- `adversarial.ps1` — 143 SHA-256-verified round-trips: 10 nasty inputs × 6
+- `adversarial.ps1` — 144 SHA-256-verified round-trips: 10 nasty inputs × 6
   values of `k`, × 3 compression levels, plus reference mode (unrelated/short/
   messy references, primed state files, FASTA↔state interchange) and the
   refusals: the wrong reference, and a state file from an older dnac.
   `scripts/roundtrip.sh` is the POSIX port CI runs and adds 5 more checks (an
   out-of-range level, the reference path at every level, and a state/stream
-  level mismatch) for 148.
+  level mismatch) for 149.
 - `Makefile`, `scripts/*.sh` — the same build, losslessness and benchmark paths
   for Linux/macOS/WSL, plus `scripts/get-data.sh` which fetches the exact
   sequences the tables above were measured on, by accession.
 - `docs/negative-results.md` — what was measured and rejected, including the
   test showing the reference-mode advantage does **not** transfer outside DNA.
 - `.github/workflows/ci.yml` — every push builds on gcc and clang, Linux and
-  macOS, and must pass all 148 round-trips.
+  macOS, and must pass all 149 round-trips, plus a cross-build portability check
+  that compresses with one table geometry and decodes with another.
 - `README.md` — this file.
 
 ## Where the remaining (small, hard) gains are
@@ -453,11 +469,18 @@ line here.
 This is a working codec, not a maintained product. It is lossless on arbitrary
 input and the results above are reproducible from this repository, but there is
 no stable file-format guarantee across versions: the header magic is bumped
-whenever the bitstream changes, and archives are only guaranteed to decode with
-the build that wrote them. Compression levels (v0.2.0) bumped it from
-`DNCA`/`DNCR` to `DNCB`/`DNCS`; v0.1.x archives are refused with an explicit
-message rather than misread. Reference mode additionally requires the exact same
+whenever the bitstream changes. Compression levels (v0.2.0) bumped it from
+`DNCA`/`DNCR` to `DNCB`/`DNCS`, and storing the table geometry (v0.3.0) bumped it
+again to `DNCC`/`DNCT`. Older archives are refused with an explicit message
+rather than misread. Reference mode additionally requires the exact same
 reference, which it verifies by fingerprint and refuses when wrong.
+
+Since v0.3.0 an archive is **no longer tied to the build that wrote it**. The
+hash-table geometry used to be recomputed by the decoder from the compile-time
+caps, which quietly made `-DHASHBITS_MAX` part of the format: a build with a
+different cap decoded the same file to different bytes and reported success.
+The geometry now travels in the header, so any build reads any archive — and CI
+proves it by compressing with one geometry and decoding with another.
 
 Compression is symmetric: decompression costs roughly the same as compression,
 which is a real disadvantage against tools designed to decode fast.

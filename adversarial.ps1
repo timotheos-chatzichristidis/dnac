@@ -126,6 +126,17 @@ $n++
 if ($LASTEXITCODE -eq 0) { $fail++; Write-Host "FAIL: a v0.1.x state file was accepted" -ForegroundColor Red }
 Remove-Item $old, $c -Force -ErrorAction SilentlyContinue
 
+# a v0.2.x stream carried no table geometry, so no build can know how to size its
+# models. It must be refused by magic, not decoded into wrong bytes.
+$v02 = Join-Path $dir "v02.dnac"
+$j2 = New-Object byte[] 64; $rnd.NextBytes($j2)
+[System.IO.File]::WriteAllBytes($v02,
+    [byte[]](([System.Text.Encoding]::ASCII.GetBytes("DNCB")) + $j2))
+& $Exe d $v02 (Join-Path $dir "v02.out") 2>$null | Out-Null
+$n++
+if ($LASTEXITCODE -eq 0) { $fail++; Write-Host "FAIL: a v0.2.x stream was accepted" -ForegroundColor Red }
+Remove-Item $v02, (Join-Path $dir "v02.out") -Force -ErrorAction SilentlyContinue
+
 if ($fail -ne 0) { Write-Host "$fail of $n FAILED" -ForegroundColor Red; exit 1 }
 Write-Host "$n/$n adversarial roundtrips lossless" -ForegroundColor Green
 exit 0   # the wrong-reference test leaves $LASTEXITCODE=1 on purpose

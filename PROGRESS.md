@@ -59,6 +59,11 @@ chromosome, so it was also measured on a 10 MB chr21 slice where it fits:
 (These dnac figures are after the 2026-08-16 second round below; the first
 measurement had dnac at 1.5062 / 1.7194 and GeCo3 -l16 ahead on the slice.)
 
+**The TIMES in this section are historical — see section 11.** They predate
+-O3, the prefetching and the stretch table, and they compare our maximum level
+against GeCo3's fast one. chr21 is 88.7 s at -l3 and 46.6 s at -l1, not 194 s.
+The bits/base above are still exact; only the seconds went stale.
+
 Verdict: **ahead of GeCo3 in BOTH modes on every sequence and level tested** —
 reference-free including its heaviest level where that can be run at all, and
 reference-based by 1% on the diverged pair and 18% on the near-identical one. Caveats that belong next to the claim: GeCo3 decompresses
@@ -308,6 +313,19 @@ a round-trip uses ONE binary with ONE configuration on data it just produced.
 What varies *between builds*, or between the file and its documentation, needs a
 different kind of check. Hence the new CI step that compresses with one geometry
 and decodes with another.
+
+### Next: the MHBITS_MAX sweep (not yet run)
+
+The anchor tables are ~536 MB of the 1.24 GB peak — two match models at
+2^26 x 4 bytes — and `MHBITS_MAX` was left untouched by the 2026-08-18 sweep,
+which only moved `HASHBITS_MAX`. They deliberately get +2 doublings of headroom
+on the argument that a collision there hands the model a WRONG match rather than
+blurred statistics, so the trade may well be real; it has simply never been
+measured. Method: same as the HASHBITS sweep (`-DMHBITS_MAX=`, full chr21.seq at
+-l3, record bytes / seconds / peak working set). Expect a memory win, not a speed
+one — that was the lesson from HASHBITS, where 2.4x less RAM bought only 1.11x.
+Safe to run and to adopt now: since v0.3.0 the geometry travels in the header, so
+changing the default no longer breaks anyone's archives.
 
 Known and accepted: `cr`/`prime` silently ignore a user-supplied `k`/`lvl` when
 the reference is a state file (the state's own values win). Consistent and

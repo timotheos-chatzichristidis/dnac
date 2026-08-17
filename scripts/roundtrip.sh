@@ -140,6 +140,15 @@ if "$EXE" dr mix.dnac mix.out lvl1.state >/dev/null 2>&1; then
 fi
 rm -f lvl1.state mix.dnac mix.out
 
+# a state file from an older dnac must be REFUSED, not scraped as if it were a
+# FASTA. Dispatch matches the "DNACST" prefix precisely so this cannot go quiet.
+{ printf 'DNACST01'; head -c 4096 /dev/urandom; } > old.state
+n=$((n+1))
+if "$EXE" cr diverged.fa old.dnac old.state 16 >/dev/null 2>&1; then
+  fail=$((fail+1)); echo "FAIL: a v0.1.x state file was accepted"
+fi
+rm -f old.state old.dnac
+
 # ------------------------------------------------------------------- verdict
 if [ "$fail" -ne 0 ]; then echo "$fail of $n FAILED"; exit 1; fi
 echo "$n/$n adversarial round-trips lossless"

@@ -24,7 +24,7 @@ jobs:
         run: make CC=${{ matrix.cc }} CFLAGS="-O2 -Wall -Wextra"
 
       # The only claim that must never regress: every byte comes back.
-      # 112 SHA-256 round-trips across plain, reference and primed-state modes.
+      # 148 SHA-256 round-trips across plain, reference, level and state modes.
       - name: Losslessness round-trips
         run: sh scripts/roundtrip.sh ./dnac
 

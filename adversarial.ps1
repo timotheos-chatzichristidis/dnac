@@ -114,6 +114,18 @@ $n++
 if ($LASTEXITCODE -eq 0) { $fail++; Write-Host "FAIL: wrong reference was accepted" -ForegroundColor Red }
 Remove-Item $c, $r -Force -ErrorAction SilentlyContinue
 
+# a state file from an OLDER dnac must be refused, not scraped as if it were a
+# FASTA. Dispatch matches the "DNACST" prefix precisely so this cannot go quiet.
+$old = Join-Path $dir "old.state"
+$junk = New-Object byte[] 4096; $rnd.NextBytes($junk)
+[System.IO.File]::WriteAllBytes($old,
+    [byte[]](([System.Text.Encoding]::ASCII.GetBytes("DNACST01")) + $junk))
+$c = Join-Path $dir "old.dnac"
+& $Exe cr $files[-1] $c $old 16 2>$null | Out-Null
+$n++
+if ($LASTEXITCODE -eq 0) { $fail++; Write-Host "FAIL: a v0.1.x state file was accepted" -ForegroundColor Red }
+Remove-Item $old, $c -Force -ErrorAction SilentlyContinue
+
 if ($fail -ne 0) { Write-Host "$fail of $n FAILED" -ForegroundColor Red; exit 1 }
 Write-Host "$n/$n adversarial roundtrips lossless" -ForegroundColor Green
 exit 0   # the wrong-reference test leaves $LASTEXITCODE=1 on purpose

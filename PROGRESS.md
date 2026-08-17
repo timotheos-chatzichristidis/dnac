@@ -43,9 +43,11 @@ files (`mkseq.ps1`), on this machine, via `benchmark.ps1`. Reference-free:
                                      GeCo3 -l16  1.8913      177 s
 
 Reference-based, using the GeCo3 authors' own templates from their
-`benchmark/run_ref.sh`: W3110 vs MG1655 — dnac 1,085 B, GeCo3 ref 1,404 B, GeCo3
-hybrid 1,319 B. O157:H7 vs MG1655 — dnac 361,396 B, GeCo3 ref 431,652 B, GeCo3
-hybrid 365,401 B.
+`benchmark/run_ref.sh`: W3110 vs MG1655 — dnac 1,086 B, GeCo3 ref 1,404 B, GeCo3
+hybrid 1,319 B. O157:H7 vs MG1655 — dnac 361,397 B, GeCo3 ref 431,652 B, GeCo3
+hybrid 365,401 B. (The dnac figures were 1,085 / 361,396 when first measured;
+compression levels later added a level byte to the header, so every stored file
+is exactly one byte larger. Re-verified 2026-08-17.)
 
 GeCo3 `-l 16` needs 8.4 GB and thrashed on this 16 GB machine for the full
 chromosome, so it was also measured on a 10 MB chr21 slice where it fits:
@@ -140,7 +142,7 @@ reference is refused rather than silently decoded.
 Measured (all SHA-256 lossless):
 
     562x   E. coli W3110 vs MG1655 (real strains)  1.881 -> 0.0033 bpb
-            = 1,941 bytes for a 4.6 Mbp genome
+            = 1,942 bytes for a 4.6 Mbp genome (FASTA; 1,086 on the .seq)
      63x   simulated chr21 individual vs chr21     1.508 -> 0.0238 bpb
             = 7.55 MB -> 119 KB, 40 M bases
      86x   simulated E. coli individual            1.885 -> 0.0219 bpb
@@ -231,3 +233,32 @@ only when chunks genuinely lie near the learned surface; random data has none.
 - Range coder requires total frequency < BOT (1<<16); keep model totals capped.
 - Benchmark on multiple datasets incl. adversarial (random, already-compressed):
   a change that helps structured data must not badly regress these.
+
+## 10. Audit 2026-08-17 — after the levels/perf round
+
+A full re-check of code and repo. Build clean at `-O3 -Wall -Wextra` (gcc 16.1),
+CI green, tree in sync. Every published ratio re-measured and confirmed: E. coli
+1.8833 bpb, the three levels 1.7190 / 1.7175 / 1.7126, base counts matching the
+`.seq` sizes exactly. What the audit *did* catch, all of it left over from the
+levels change the day before:
+
+- **Every stored-size figure was one byte stale.** The level byte in the header
+  made 1,085 → 1,086, 361,396 → 361,397, 1,941 → 1,942. The headline claim
+  survives (1,086 B against GeCo3's 1,319) but the numbers were wrong as printed.
+  *Lesson: a format change invalidates every absolute byte count in the docs, not
+  just the ratios — the ratios rounded identically and hid it.*
+- **Round-trip counts were stale and self-contradictory** — the README quoted
+  both 60 and 112 for the same script. The levels commit message itself said
+  "112 to 147"; the docs were never updated to match.
+- **A v0.1.x state file was silently scraped as a FASTA** instead of refused,
+  because `is_state_file` matched the full magic and an old state fell through to
+  `ref_load`. Fixed: dispatch now matches the `DNACST` prefix, so a wrong-version
+  state reaches `state_load` and is refused by name. The v0.1.x *stream* was
+  already handled properly — this was the asymmetric half of that same change.
+  Now covered by a test in both suites (148 / 143 round-trips).
+
+Known and accepted: `cr`/`prime` silently ignore a user-supplied `k`/`lvl` when
+the reference is a state file (the state's own values win). Consistent and
+lossless, just quiet. There is also no checksum over the payload, so a corrupted
+body decodes to garbage rather than an error — a deliberate format choice; the
+reference fingerprint covers the reference, and headers are validated.

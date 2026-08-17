@@ -1051,7 +1051,14 @@ static uint64_t get64(FILE *f) {
    Endianness/float layout are the host's -- a state file is a cache, not an
    interchange format; the compressed stream is the portable artefact. */
 
-#define STATE_MAGIC "DNACST02"
+/* The version travels in the last 2 bytes of the magic. Dispatch (is_state_file)
+   matches only the PREFIX, so a state file of any version is recognised as one
+   and refused by name -- if it matched the full magic instead, an old state
+   would fall through to ref_load() and be scraped for ACGT bytes as though it
+   were a FASTA, priming the models on garbage without a word of complaint. */
+#define STATE_MAGIC  "DNACST02"
+#define STATE_PREFIX "DNACST"
+#define STATE_PREFIX_LEN 6
 
 static int wr(const void *p, size_t sz, size_t n, FILE *f) { return fwrite(p, sz, n, f) == n; }
 static int rd(void *p, size_t sz, size_t n, FILE *f)       { return fread(p, sz, n, f)  == n; }
@@ -1093,14 +1100,16 @@ static int state_save(const char *path, int k, uint64_t refn, uint64_t reffp) {
     return 0;
 }
 
-/* Is this file a primed state rather than a FASTA reference? */
+/* Is this file a primed state rather than a FASTA reference? Deliberately the
+   PREFIX and not the full magic: see the note at STATE_MAGIC. A state of the
+   wrong version must reach state_load, which refuses it explicitly. */
 static int is_state_file(const char *path) {
     FILE *f = fopen(path, "rb");
     if (!f) return 0;
     char m[8] = {0};
     size_t got = fread(m, 1, 8, f);
     fclose(f);
-    return got == 8 && memcmp(m, STATE_MAGIC, 8) == 0;
+    return got == 8 && memcmp(m, STATE_PREFIX, STATE_PREFIX_LEN) == 0;
 }
 
 /* Load a primed state. `extra` = how many more bases the target may add.        */
@@ -1109,8 +1118,18 @@ static int state_load(const char *path, size_t extra, int *k_out,
     FILE *f = fopen(path, "rb");
     if (!f) { perror("open state"); return 1; }
     char m[8];
-    if (!rd(m, 1, 8, f) || memcmp(m, STATE_MAGIC, 8) != 0) {
+    if (!rd(m, 1, 8, f)) {
         fprintf(stderr, "not a dnac state file: %s\n", path); fclose(f); return 1;
+    }
+    if (memcmp(m, STATE_MAGIC, 8) != 0) {
+        if (memcmp(m, STATE_PREFIX, STATE_PREFIX_LEN) == 0)
+            fprintf(stderr, "state file %s was written by an incompatible dnac"
+                            " (version %.2s; this build needs %.2s);\n"
+                            " rebuild it with:  dnac prime <ref.fa> %s\n",
+                    path, m + STATE_PREFIX_LEN, STATE_MAGIC + STATE_PREFIX_LEN, path);
+        else
+            fprintf(stderr, "not a dnac state file: %s\n", path);
+        fclose(f); return 1;
     }
     int k          = (int)get64(f);
     int lvl        = (int)get64(f);

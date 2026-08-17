@@ -55,8 +55,12 @@ swapping before being stopped. The 10 MB chr21 slice exists in the table so that
 
 | pair | dnac | GeCo3 ref models | GeCo3 hybrid |
 |------|-----:|-----------------:|-------------:|
-| W3110 vs MG1655 (near-identical strains) | **1,085 B** | 1,404 B | 1,319 B |
-| O157:H7 vs MG1655 (diverged strains) | **361,396 B** | 431,652 B | 365,401 B |
+| W3110 vs MG1655 (near-identical strains) | **1,086 B** | 1,404 B | 1,319 B |
+| O157:H7 vs MG1655 (diverged strains) | **361,397 B** | 431,652 B | 365,401 B |
+
+(Stored file sizes on the plain-ACGT `.seq` files, as everywhere in this
+section. The same pairs measured on the original FASTA files cost a little more
+— 1,942 B for W3110 — because the headers and newlines are stored too.)
 
 ### What the head-to-head actually says
 
@@ -65,7 +69,7 @@ swapping before being stopped. The 10 MB chr21 slice exists in the table so that
   there in 47 s where `-l 16` needs 274 s and 8.4 GB.
 - **Reference-based it is now ahead on both pairs**: 1% better than their best
   configuration on the diverged one, and 18% better on the near-identical one
-  (1,085 bytes against 1,319 for a whole 4.6 Mbp genome).
+  (1,086 bytes against 1,319 for a whole 4.6 Mbp genome).
 - Note that GeCo3's heaviest level is *worse* than its own level 9 on E. coli
   (1.8913 vs 1.8903, 20× the time): more models is not automatically better —
   the same lesson our own rejected experiments taught.
@@ -126,7 +130,7 @@ reference is simply fed through them first (see below).
 
 | target | reference | alone | with reference | smaller by |
 |--------|-----------|:-----:|:--------------:|:----------:|
-| E. coli W3110 (real strain) | E. coli MG1655 | 1.881 | **0.0033** | **562×** — 1,941 bytes for a 4.6 Mbp genome |
+| E. coli W3110 (real strain) | E. coli MG1655 | 1.881 | **0.0033** | **562×** — 1,942 bytes for a 4.6 Mbp genome |
 | chr21 of a simulated individual (0.1% SNPs + indels) | chr21 | 1.508 | **0.0238** | **63×** — 7.55 MB → 119 KB |
 | E. coli, simulated individual | E. coli MG1655 | 1.885 | **0.0219** | 86× |
 | E. coli O157:H7 (real, diverged strain) | E. coli MG1655 | 1.812 | **0.519** | 3.5× |
@@ -208,7 +212,8 @@ The components, bottom up:
   division went away. With a 12-bit probability the cost floor is 0.00035 bit per
   coded bit even when the model is certain — about 400 bytes per 4.6 Mbp genome,
   which is a third of what a genome costs when compressed against its own
-  reference. Fixing the coder took that case from 1,365 to 1,085 bytes.
+  reference. Fixing the coder took that case from 1,365 to 1,085 bytes (1,086
+  today: compression levels added a byte to the header).
 - **Binary tree over {A,C,G,T}** — each base is two bit-decisions
   (`{A,C}` vs `{G,T}`, then which one). This lets the powerful machinery below
   work on simple binary predictions.
@@ -360,7 +365,7 @@ exact/diverged/inverted repeats), across many values of `k`.
 
 ```sh
 make                              # cc -O2 -Wall -Wextra -o dnac dnac.c -lm
-make test                         # 112 SHA-256 round-trips (plain, reference, state)
+make test                         # 148 SHA-256 round-trips (plain, reference, level, state)
 sh scripts/get-data.sh --human    # fetch the exact genomes benchmarked below
 make bench                        # bits/base on whatever is in ./data
 ```
@@ -387,7 +392,7 @@ make bench                        # bits/base on whatever is in ./data
 # measurement
 ./bench.ps1 -Exe .\dnac.exe -File .\chr21.fa -K 22   # round-trip + bits/base
 ./bench.ps1 ... -Fast                                # compress only (param sweeps)
-./adversarial.ps1 -Exe .\dnac.exe                    # 60 losslessness round-trips
+./adversarial.ps1 -Exe .\dnac.exe                    # 143 losslessness round-trips
 ```
 
 No compiler yet? `build.ps1` prints install options; **w64devkit** is the
@@ -407,16 +412,20 @@ Try a **real** genome: download a `.fa` from NCBI/Ensembl and
 - `build.ps1`, `test.ps1` — Windows build & demo.
 - `bench.ps1` — round-trip + bits/base for one build on one file (`-Fast` to
   compress only, for parameter sweeps).
-- `adversarial.ps1` — 112 SHA-256-verified round-trips: 10 nasty inputs × 6
-  values of `k`, plus reference mode (unrelated/short/messy references, primed
-  state files, FASTA↔state interchange, and refusing the wrong reference).
+- `adversarial.ps1` — 143 SHA-256-verified round-trips: 10 nasty inputs × 6
+  values of `k`, × 3 compression levels, plus reference mode (unrelated/short/
+  messy references, primed state files, FASTA↔state interchange) and the
+  refusals: the wrong reference, and a state file from an older dnac.
+  `scripts/roundtrip.sh` is the POSIX port CI runs and adds 5 more checks (an
+  out-of-range level, the reference path at every level, and a state/stream
+  level mismatch) for 148.
 - `Makefile`, `scripts/*.sh` — the same build, losslessness and benchmark paths
   for Linux/macOS/WSL, plus `scripts/get-data.sh` which fetches the exact
   sequences the tables above were measured on, by accession.
 - `docs/negative-results.md` — what was measured and rejected, including the
   test showing the reference-mode advantage does **not** transfer outside DNA.
 - `.github/workflows/ci.yml` — every push builds on gcc and clang, Linux and
-  macOS, and must pass all 112 round-trips.
+  macOS, and must pass all 148 round-trips.
 - `README.md` — this file.
 
 ## Where the remaining (small, hard) gains are

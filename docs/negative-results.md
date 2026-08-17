@@ -38,7 +38,7 @@ prototype, not part of this repository); `dnac` itself only models ACGT.
 | `msedge_elf.dll` (3.98 MB) | 48,404 (xz -9e) | 166,196 | **3.4× worse** |
 | `msedge.exe` (5.02 MB) | 3,326 (zstd --patch-from) | 8,857 | **2.7× worse** |
 | `onnxruntime.dll` (10.9 MB) | 3,661 (zstd -19) | 13,686 | **3.7× worse** |
-| *E. coli* W3110 vs MG1655 (control) | 244,124 (xz -9e) | **1,941** (`dnac cr`) | **126× better** |
+| *E. coli* W3110 vs MG1655 (control) | 244,124 (xz -9e) | **1,942** (`dnac cr`) | **126× better** |
 
 Three independent binary pairs, the same answer each time. Note the CM figure is
 an *optimistic* bound — a real implementation would be worse still.

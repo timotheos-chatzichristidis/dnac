@@ -22,6 +22,9 @@
 #         extern(needs GeCo3 built)       -- run before changing a head-to-head claim
 #
 # Usage:  ./verify-claims.ps1 [-Tier fast|slow|extern|all] [-SelfTest] [-Only <id>]
+#         ./verify-claims.ps1 -AnchorsOnly -Tier all     # seconds: after editing a doc,
+#           checks every claim's sentence is still there without re-measuring anything.
+#           Catches a hand-edited figure immediately; it does NOT prove the value.
 #
 # -SelfTest injects a fault into each detector and fails if the detector stays
 # green. A check nobody has watched go red is decoration; see the 2026-08-19 note
@@ -30,6 +33,7 @@
 param(
     [ValidateSet('fast','slow','extern','all')][string]$Tier = 'fast',
     [switch]$SelfTest,
+    [switch]$AnchorsOnly,
     [string]$Only
 )
 $ErrorActionPreference = 'Stop'
@@ -184,6 +188,11 @@ function Check-Anchor($c) {
 }
 
 function Run-Claim($c) {
+    if ($AnchorsOnly) {
+        $a = Check-Anchor $c
+        return [pscustomobject]@{ id=$c.id; tier=$c.tier; status=$(if ($a.ok) { 'OK' } else { 'ANCHOR' })
+                                  expected=$c.expect; measured='(not measured)'; note=$(if ($a.ok) { 'anchor present' } else { $a.why }) }
+    }
     # Measure first even when the anchor is missing: when a claim goes red you
     # want the number to write into the doc, not just the news that it is wrong.
     $sw = [Diagnostics.Stopwatch]::StartNew()
@@ -237,4 +246,9 @@ if ($bad) {
     Write-Host "Fix the doc (or the code) and re-run. Do not publish while this is red." -ForegroundColor Red
     exit 1
 }
-Write-Host "all $($results.Count) claim(s) reproduce." -ForegroundColor Green
+if ($AnchorsOnly) {
+    Write-Host "all $($results.Count) anchor(s) present. NOTHING WAS MEASURED - this proves only that
+the sentences are still in the docs, not that the numbers are still true." -ForegroundColor Yellow
+} else {
+    Write-Host "all $($results.Count) claim(s) reproduce." -ForegroundColor Green
+}

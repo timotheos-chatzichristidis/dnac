@@ -82,6 +82,72 @@ reverted because it did not pay:
 | A tandem/HOR periodicity model | redundant with the match model |
 | An order-1 model stacked on top of MTF (byte sibling) | markedly worse — MTF *is* an order-1 decorrelator; stacking double-counts |
 
+---
+
+## 2. Block boundaries cannot be placed cheaply — parallel decode costs 2.5% to enter
+
+*Measured 2026-08-19.*
+
+Context mixing decodes at the same speed it encodes, because the decoder must
+rebuild the identical probability for every bit before it can read it. The one
+way to cut decode *wall-clock* is to split the file into blocks and decode them
+on separate cores — which forces every block to be coded independently, since
+block j cannot see blocks 0..j-1 while they are still being decoded elsewhere.
+That constraint is reproducible with no threading at all: split the input,
+compress the pieces separately, sum the sizes.
+
+### What it costs (chr21.seq, 40 Mbp, charged as one header plus 8 B per block)
+
+| blocks | bytes | vs whole | bits/base |
+|---:|---:|---:|---:|
+| 1 | 7,506,264 | — | 1.4979 |
+| 2 | 7,695,168 | +2.52% | 1.5356 |
+| 4 | 7,740,159 | +3.12% | 1.5445 |
+| 8 | 7,836,208 | +4.40% | 1.5637 |
+
+The cost is not per-boundary-uniform: the **first** cut costs ~188 KB and every
+further cut only ~22 KB. Long-range repeats (Alu, LINE, satellite) are what the
+match models live on, and severing the first one denies a block the bulk of the
+genome's history; subdividing further denies progressively less that the block
+cannot re-learn from its own 5-20 Mbp.
+
+### Why placement does not rescue it
+
+Two ways to choose better boundaries were measured, and neither works.
+
+**Snap to assembly gaps.** A cut inside a run of `N` breaks no sequence
+continuity, so it should be free. But chr21's 30 gaps all sit in the first 22% of
+the file (the p-arm). For 8 equal blocks the boundaries at 37/50/62/75% have no
+gap within 10-30% of the file, so snapping produces blocks with a 5:1 size ratio
+— and a parallel decoder's wall-clock is set by its *largest* block, so the
+speedup it was bought for is given straight back.
+
+**Search locally for a cheap cut.** Boundary cost was measured at seven positions
+in a 10 Mbp interior window: 11,803 to 13,846 bytes, a 17% spread on ~2 KB. And
+the expensive midpoint cut is a plateau, not a spike — sweeping the full
+chromosome at 44/47/50/53/56% gives 188.4, 187.4, 189.2, 187.7, 157.4 KB. There
+is no narrow bad place to step around; the cost is intrinsic to how much history
+the cut denies.
+
+**Conclusion.** +2.52% is the entry ticket for *any* parallelism in
+reference-free mode, and that alone puts dnac behind GeCo3 `-l 14` (1.5356 vs
+1.5092) — the whole margin is 0.7%. Parallel decode is therefore only defensible
+as an **opt-in** (`-j 1` default, byte-identical to today), never as the default.
+
+Two findings from the same sweep are *positive* and worth keeping:
+- **RAM does not multiply.** Tables are sized from the input length, so 8 blocks
+  of 1/8 the size need 83 MB each against 595 MB for the whole file — 664 MB
+  across 8 threads, 1.12x, not 8x.
+- **Reference mode is far cheaper.** With every block starting from the same
+  primed state, a boundary costs a flat ~245 B (E. coli: 229 / 246 / 255 B at
+  N=2/4/8), because the reference still supplies the long-range matches that a
+  reference-free block loses. The obstacle there is the opposite one: table sizes
+  come from the reference, so each thread needs the full 600 MB (chr21: 1.25 GB).
+  Sharing one *frozen* primed model across threads is the untested idea that
+  would remove it.
+
+---
+
 The governing question throughout: *after this change, is the next base easier to
 predict?* If a transform only relabels what is already known, it is cosmetic — a
 transform never reduces information on its own.

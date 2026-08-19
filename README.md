@@ -509,6 +509,22 @@ different cap decoded the same file to different bytes and reported success.
 The geometry now travels in the header, so any build reads any archive — and CI
 proves it by compressing with one geometry and decoding with another.
 
+**Nor is it tied to the compiler's floating-point codegen**, which is the other
+way a context-mixing codec can quietly become non-portable: the models are
+predicted with doubles, and if two builds round differently the decoder rebuilds
+a different probability and the stream desynchronises. (GeCo3 ships with exactly
+this warning — that its files "might not decompress with a binary compressed in
+a different computer or with a different compiler version or options".) Measured
+here on 2026-08-19, same source, three floating-point configurations of gcc —
+default SSE2, `-mfpmath=387` (x87 80-bit intermediates) and
+`-march=native -ffp-contract=fast` (FMA): **byte-identical archives** on a
+4.6 Mbp genome in both plain and reference mode, and every cross-decode lossless
+(27 combinations at 400 kbases across three levels, 9 more in reference mode at
+full scale). The reason is that every probability is quantized to 14 bits before
+it reaches the range coder, so differences far below that vanish rather than
+accumulating. CI additionally cross-decodes gcc-built and clang-built archives
+in both directions.
+
 Compression is symmetric: decompression costs roughly the same as compression
 (E. coli: 10.4 s vs 10.7 s). That is inherent to context mixing — the decoder
 must rebuild the identical probability for every bit before it can read it, so

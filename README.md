@@ -190,8 +190,8 @@ A state file and the FASTA it came from are **interchangeable and produce
 bit-identical output** (the adversarial suite checks exactly this): you can
 compress with one and decompress with the other. Table sizes are therefore
 derived from the reference alone, never from the target. The state is a cache in
-host byte/float layout — big (523 MB for E. coli, 941 MB for chr21, since it *is*
-the models' memory) and not an interchange format; the compressed stream is the
+host byte/float layout — big (616 MB for E. coli, 1,255 MB for chr21, since it
+*is* the models' memory) and not an interchange format; the compressed stream is the
 portable artefact.
 
 The whole point in one line: **compression = prediction.** We never store the

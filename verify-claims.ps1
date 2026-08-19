@@ -68,6 +68,25 @@ function Size($inFile, $ref, $level) {
 
 function Bpb($bytes, $bases) { [math]::Round(8.0 * $bytes / $bases, 4) }
 
+# Priming pass -> size of the saved model memory, in MB (decimal, as the README
+# writes it). Deterministic, unlike a timing, which is why it belongs here.
+function State($ref) {
+    $st = Join-Path $work 'vc.state'
+    Remove-Item $st -Force -ErrorAction SilentlyContinue
+    & $dnac prime $ref $st 22 | Out-Null
+    if ($LASTEXITCODE -ne 0 -or -not (Test-Path $st)) { throw "prime failed: $ref" }
+    $mb = [math]::Round((Get-Item $st).Length / 1e6, 0)
+    Remove-Item $st -Force -ErrorAction SilentlyContinue
+    $mb
+}
+
+# NOT verified here, deliberately: every WALL-CLOCK figure in the README (46.6 s,
+# 88.7 s, 98 s priming, 188 s -> 83 s, the GeCo3 columns). They depend on the
+# machine and on what else is running -- a contended run reads 106 s where an
+# idle one reads 98 s, and a "fix" based on that would be a new wrong number.
+# Timings are re-measured by hand on an idle machine via ./bench.ps1 and are
+# stated as one machine's numbers. Sizes are deterministic; times are not.
+
 $S = { param($n) Join-Path $root "bench-external\seq\$n" }   # plain-ACGT .seq files
 $F = { param($n) Join-Path $root $n }                        # FASTA files in the repo root
 
@@ -110,6 +129,19 @@ $claims = @(
      anchor='| E. coli O157:H7 (real, diverged strain) | E. coli MG1655 | 1.812 | **0.519**'
      expect=0.519
      measure={ Bpb (Size (& $F 'o157.fa') (& $F 'ecoli.fa') 3) (Bases (& $F 'o157.fa')) } }
+
+  # State-file sizes were wrong in the README until 2026-08-19 (523 -> 616 MB,
+  # 941 -> 1,255 MB) and nothing here would have caught it, because no row
+  # covered them. Any number we publish needs a row; that is the whole point.
+  @{ id='ecoli-state-bytes'; tier='fast'; doc='README.md'; unit='MB'; tol=1
+     anchor='(616 MB for E. coli, 1,255 MB for chr21'
+     expect=616
+     measure={ State (& $F 'ecoli.fa') } }
+
+  @{ id='chr21-state-bytes'; tier='slow'; doc='README.md'; unit='MB'; tol=1
+     anchor='1,255 MB for chr21'
+     expect=1255
+     measure={ State (& $F 'chr21.fa') } }
 
   @{ id='chr21-fa-bpb'; tier='slow'; doc='README.md'; unit='bpb'; tol=0.0005
      anchor='| **dnac** (k=22)                | **1.546**'
@@ -179,7 +211,9 @@ if ($SelfTest) {
     Write-Host "self-test: ANCHOR, DRIFT and ERROR all detected (3/3)`n" -ForegroundColor Green
 }
 
-$sel = $claims | Where-Object { ($Tier -eq 'all' -or $_.tier -eq $Tier) -and (-not $Only -or $_.id -eq $Only) }
+# @() is load-bearing: a single hashtable's .Count is its KEY count, so an
+# unwrapped one-claim selection reported "verifying 8 claim(s)".
+$sel = @($claims | Where-Object { ($Tier -eq 'all' -or $_.tier -eq $Tier) -and (-not $Only -or $_.id -eq $Only) })
 if (-not $sel) { throw "no claims selected (tier=$Tier, only=$Only)" }
 Write-Host "verifying $($sel.Count) claim(s), tier=$Tier`n" -ForegroundColor Cyan
 

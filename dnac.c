@@ -192,6 +192,16 @@ static uint32_t g_hashmask;
 #endif
 #define CTR_LIMIT 15
 #define CTR_INIT  ((uint16_t)(2048u << 4))
+
+/* In reference mode the reference is primed in first and fills the match anchor
+   buckets. MWAYS is 1, so without care the first time the TARGET touches a bucket
+   it overwrites the reference's anchor there -- the codec progressively stops
+   pointing at the aligned position in the reference and starts pointing at its
+   own recently-coded self. Keeping those anchors is worth 5.44% on a chr21
+   individual and 0.67% on W3110; see match_after(). g_refbase is 0 in plain
+   mode, which disables the rule (no position is < 0). */
+static uint32_t g_refbase = 0; /* g_seq positions below this belong to the reference */
+
 #define W_INIT  0.20     /* initial mixer weight per input                     */
 #define DIRECT_MAXORDER 8 /* orders <= this use a direct table, else hashed    */
 
@@ -606,9 +616,17 @@ static void match_after(int s, uint64_t newhist) {
     }
 
     /* store AFTER all anchors so nothing self-matches; the bucket keeps the most
-       recent MWAYS occurrences of this context, newest first */
+       recent MWAYS occurrences of this context, newest first. Frozen: the anchor
+       table is shared read-only, so a block can still FOLLOW and RE-ANCHOR into
+       recent MWAYS occurrences of this context, newest first. */
     for (int mi = 0; mi < NMATCH; mi++) {
         uint32_t *b = &g_mm[mi].hash[hidx[mi]];
+        /* ...except one that already points into the REFERENCE: that is the
+           aligned position we actually want, and with MWAYS == 1 storing our own
+           position here would delete it. The target still claims every bucket the
+           reference never used, so a diverged target keeps matching itself
+           (measured: O157 vs MG1655 +0.01%, i.e. nothing lost). */
+        if (b[0] != MATCH_EMPTY && b[0] < g_refbase) continue;
         for (int w = MWAYS - 1; w > 0; w--) b[w] = b[w - 1];
         b[0] = np;
     }
@@ -1240,11 +1258,13 @@ static int do_compress(const char *inpath, const char *outpath, int k, const cha
 
     FILE *out = fopen(outpath, "wb");
     if (!out) { perror("open output"); free(buf); free(ref); mix_free(); return 1; }
-    /* header: magic ('C' plain / 'T' reference), k, level, table geometry,
+    /* header: magic ('C' plain / 'U' reference), k, level, table geometry,
        original length [, ref info]. Older magics are refused, never guessed at:
        'A'/'R' predate the level byte, 'B'/'S' predate the stored geometry, and
-       in both cases the decoder cannot rebuild the models the encoder used. */
-    fputc('D', out); fputc('N', out); fputc('C', out); fputc(refpath ? 'T' : 'C', out);
+       'T' predates sticky reference anchors -- in every case the decoder cannot
+       rebuild the models the encoder used. Plain streams are unaffected by the
+       anchor rule (g_refbase is 0), so 'C' does not move. */
+    fputc('D', out); fputc('N', out); fputc('C', out); fputc(refpath ? 'U' : 'C', out);
     fputc((int)k, out);
     fputc(g_level, out);
     /* The table geometry travels with the file. It used to be recomputed by the
@@ -1258,6 +1278,9 @@ static int do_compress(const char *inpath, const char *outpath, int k, const cha
     if (refpath) { put64(out, (uint64_t)refn); put64(out, reffp); }
 
     if (ref) { prime_with_reference(ref, refn); free(ref); ref = NULL; }
+    /* Priming itself always learns; only the target pass can be frozen. Set from
+       refpath, not from `ref`, so a state file freezes exactly like a FASTA. */
+    if (refpath) g_refbase = g_npos;   /* everything primed so far is reference */
 
     REnc e; renc_init(&e, out);
     uint64_t hist = 0;
@@ -1321,10 +1344,16 @@ static int do_decompress(const char *inpath, const char *outpath, const char *re
                         " in the file says which\n");
         fclose(in); return 1;
     }
-    if (m0 != 'D' || m1 != 'N' || m2 != 'C' || (m3 != 'C' && m3 != 'T')) {
+    if (m0 == 'D' && m1 == 'N' && m2 == 'C' && m3 == 'T') {
+        fprintf(stderr, "this file was written by dnac v0.3.x, before reference"
+                        " anchors became sticky; its models differ from this"
+                        " build's and it cannot be read safely\n");
+        fclose(in); return 1;
+    }
+    if (m0 != 'D' || m1 != 'N' || m2 != 'C' || (m3 != 'C' && m3 != 'U')) {
         fprintf(stderr, "not a dnac file\n"); fclose(in); return 1;
     }
-    int need_ref = (m3 == 'T');
+    int need_ref = (m3 == 'U');
     if (need_ref && !refpath) {
         fprintf(stderr, "this file was compressed against a reference: use  dnac dr <in> <out> <ref.fa>\n");
         fclose(in); return 1;
@@ -1402,6 +1431,7 @@ static int do_decompress(const char *inpath, const char *outpath, const char *re
     if (!out) { perror("open output"); free(ref); fclose(in); mix_free(); return 1; }
 
     if (ref) { prime_with_reference(ref, refn); free(ref); ref = NULL; }
+    if (refpath) g_refbase = g_npos;   /* mirrors the encoder exactly */
 
     RDec d; rdec_init(&d, in);
     uint64_t hist = 0;

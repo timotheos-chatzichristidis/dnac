@@ -101,18 +101,18 @@ $claims = @(
      measure={ Bpb (Size (& $S 'ecoli.seq') $null 3) (Bases (& $S 'ecoli.seq')) } }
 
   @{ id='w3110-seq-bytes'; tier='fast'; doc='README.md'; unit='B'; tol=0
-     anchor='| W3110 vs MG1655 (near-identical strains) | **1,088 B** |'
-     expect=1088
+     anchor='| W3110 vs MG1655 (near-identical strains) | **1,060 B** |'
+     expect=1060
      measure={ Size (& $S 'w3110.seq') (& $S 'ecoli.seq') 3 } }
 
   @{ id='o157-seq-bytes'; tier='fast'; doc='README.md'; unit='B'; tol=0
-     anchor='| O157:H7 vs MG1655 (diverged strains) | **361,399 B** |'
-     expect=361399
+     anchor='| O157:H7 vs MG1655 (diverged strains) | **361,417 B** |'
+     expect=361417
      measure={ Size (& $S 'o157.seq') (& $S 'ecoli.seq') 3 } }
 
   @{ id='w3110-fa-bytes'; tier='fast'; doc='README.md'; unit='B'; tol=0
-     anchor='1,944 bytes for a 4.6 Mbp genome'
-     expect=1944
+     anchor='1,931 bytes for a 4.6 Mbp genome'
+     expect=1931
      measure={ Size (& $F 'w3110.fa') (& $F 'ecoli.fa') 3 } }
 
   @{ id='ecoli-fa-alone-bpb'; tier='fast'; doc='README.md'; unit='bpb'; tol=0.001
@@ -120,9 +120,9 @@ $claims = @(
      expect=1.880
      measure={ Bpb (Size (& $F 'w3110.fa') $null 3) (Bases (& $F 'w3110.fa')) } }
 
-  @{ id='ecoli-ind-bpb'; tier='fast'; doc='README.md'; unit='bpb'; tol=0.0005
-     anchor='| E. coli, simulated individual | E. coli MG1655 | 1.885 | **0.0219**'
-     expect=0.0219
+  @{ id='ecoli-ind-bpb'; tier='fast'; doc='README.md'; unit='bpb'; tol=0.00006
+     anchor='| E. coli, simulated individual | E. coli MG1655 | 1.885 | **0.0217**'
+     expect=0.0217
      measure={ Bpb (Size (& $F 'ecoli_ind.fa') (& $F 'ecoli.fa') 3) (Bases (& $F 'ecoli_ind.fa')) } }
 
   @{ id='o157-fa-ref-bpb'; tier='fast'; doc='README.md'; unit='bpb'; tol=0.001
@@ -143,6 +143,16 @@ $claims = @(
      expect=1255
      measure={ State (& $F 'chr21.fa') } }
 
+  @{ id='chr21-ind-alone-bpb'; tier='slow'; doc='README.md'; unit='bpb'; tol=0.0006
+     anchor='(0.1% SNPs + indels) | chr21 | 1.504 |'
+     expect=1.504
+     measure={ Bpb (Size (& $F 'chr21_ind.fa') $null 3) (Bases (& $F 'chr21_ind.fa')) } }
+
+  @{ id='unrelated-ref-bpb'; tier='slow'; doc='README.md'; unit='bpb'; tol=0.0006
+     anchor='| E. coli MG1655 | *human chr21* (unrelated!) | 1.885 | 1.889 |'
+     expect=1.889
+     measure={ Bpb (Size (& $F 'ecoli.fa') (& $F 'chr21.fa') 3) (Bases (& $F 'ecoli.fa')) } }
+
   @{ id='chr21-fa-bpb'; tier='slow'; doc='README.md'; unit='bpb'; tol=0.0005
      anchor='| **dnac** (k=22)                | **1.546**'
      expect=1.546
@@ -158,9 +168,9 @@ $claims = @(
      expect=1.5065
      measure={ Bpb (Size (& $S 'chr21.seq') $null 1) (Bases (& $S 'chr21.seq')) } }
 
-  @{ id='chr21-ind-bpb'; tier='slow'; doc='README.md'; unit='bpb'; tol=0.0005
-     anchor='chr21 | 1.508 | **0.0238**'
-     expect=0.0238
+  @{ id='chr21-ind-bpb'; tier='slow'; doc='README.md'; unit='bpb'; tol=0.00006
+     anchor='chr21 | 1.504 | **0.0227**'
+     expect=0.0227
      measure={ Bpb (Size (& $F 'chr21_ind.fa') (& $F 'chr21.fa') 3) (Bases (& $F 'chr21_ind.fa')) } }
 )
 

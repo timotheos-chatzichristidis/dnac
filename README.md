@@ -66,12 +66,12 @@ swapping before being stopped. The 10 MB chr21 slice exists in the table so that
 
 | pair | dnac | GeCo3 ref models | GeCo3 hybrid |
 |------|-----:|-----------------:|-------------:|
-| W3110 vs MG1655 (near-identical strains) | **1,088 B** | 1,404 B | 1,319 B |
-| O157:H7 vs MG1655 (diverged strains) | **361,399 B** | 431,652 B | 365,401 B |
+| W3110 vs MG1655 (near-identical strains) | **1,060 B** | 1,404 B | 1,319 B |
+| O157:H7 vs MG1655 (diverged strains) | **361,417 B** | 431,652 B | 365,401 B |
 
 (Stored file sizes on the plain-ACGT `.seq` files, as everywhere in this
 section. The same pairs measured on the original FASTA files cost a little more
-— 1,944 B for W3110 — because the headers and newlines are stored too.)
+— 1,931 B for W3110 — because the headers and newlines are stored too.)
 
 ### What the head-to-head actually says
 
@@ -83,8 +83,8 @@ section. The same pairs measured on the original FASTA files cost a little more
   *fast* one, and carried a chr21 time (194 s) measured before the `-O3`,
   prefetch and stretch-table work. The honest comparison is the table above.
 - **Reference-based it is now ahead on both pairs**: 1% better than their best
-  configuration on the diverged one, and 18% better on the near-identical one
-  (1,088 bytes against 1,319 for a whole 4.6 Mbp genome).
+  configuration on the diverged one, and 20% better on the near-identical one
+  (1,060 bytes against 1,319 for a whole 4.6 Mbp genome).
 - Note that GeCo3's heaviest level is *worse* than its own level 9 on E. coli
   (1.8913 vs 1.8903, 20× the time): more models is not automatically better —
   the same lesson our own rejected experiments taught.
@@ -158,11 +158,11 @@ reference is simply fed through them first (see below).
 
 | target | reference | alone | with reference | smaller by |
 |--------|-----------|:-----:|:--------------:|:----------:|
-| E. coli W3110 (real strain) | E. coli MG1655 | 1.880 | **0.0033** | **562×** — 1,944 bytes for a 4.6 Mbp genome |
-| chr21 of a simulated individual (0.1% SNPs + indels) | chr21 | 1.508 | **0.0238** | **63×** — 7.55 MB → 119 KB |
-| E. coli, simulated individual | E. coli MG1655 | 1.885 | **0.0219** | 86× |
+| E. coli W3110 (real strain) | E. coli MG1655 | 1.880 | **0.0033** | **565×** — 1,931 bytes for a 4.6 Mbp genome |
+| chr21 of a simulated individual (0.1% SNPs + indels) | chr21 | 1.504 | **0.0227** | **66×** — 7.54 MB → 111 KB |
+| E. coli, simulated individual | E. coli MG1655 | 1.885 | **0.0217** | 87× |
 | E. coli O157:H7 (real, diverged strain) | E. coli MG1655 | 1.812 | **0.519** | 3.5× |
-| E. coli MG1655 | *human chr21* (unrelated!) | 1.884 | 1.887 | −0.2% (degrades gracefully) |
+| E. coli MG1655 | *human chr21* (unrelated!) | 1.885 | 1.889 | −0.2% (degrades gracefully) |
 
 The gain tracks how related the two sequences are, exactly as it should: nearly
 identical strains cost almost nothing, a diverged strain of the same species
@@ -301,6 +301,18 @@ The components, bottom up:
   simply gets ignored by the mixer instead of corrupting anything. The header
   keeps a fingerprint of the reference, so decoding with the wrong one is
   refused rather than silently wrong.
+- **Sticky reference anchors** (v0.4.0) — a bucket in the match-anchor table
+  holds exactly one position (`MWAYS` is 1). Without care, the first time the
+  *target* touches a bucket it **overwrites the reference's anchor there**, so
+  the codec progressively stops pointing at the aligned position in the reference
+  and starts pointing at its own recently-coded self. An anchor that points into
+  the reference is now never overwritten; the target still claims every bucket
+  the reference never used. Worth **5.4% on a chr21 individual** and 2.6%
+  on the W3110/MG1655 pair (plain-ACGT files, 1,088 B -> 1,060 B), and it costs a diverged target nothing (O157 vs MG1655: +0.01%), because
+  that target's own prophages and IS elements hash to buckets the reference never
+  filled. Same memory, one condition in the store loop. It was found while
+  measuring something else entirely — whether a primed model could be frozen so
+  that parallel-decode threads could share one read-only copy.
 - **SSE / APM** — two chained stages that recalibrate the mixed probability
   through learned, context-dependent curves: stage 1 keyed on which match models
   are live, stage 2 on the last 6 bases. Each is blended 50/50 with its own
@@ -483,8 +495,10 @@ This is a working codec, not a maintained product. It is lossless on arbitrary
 input and the results above are reproducible from this repository, but there is
 no stable file-format guarantee across versions: the header magic is bumped
 whenever the bitstream changes. Compression levels (v0.2.0) bumped it from
-`DNCA`/`DNCR` to `DNCB`/`DNCS`, and storing the table geometry (v0.3.0) bumped it
-again to `DNCC`/`DNCT`. Older archives are refused with an explicit message
+`DNCA`/`DNCR` to `DNCB`/`DNCS`, storing the table geometry (v0.3.0) bumped it
+again to `DNCC`/`DNCT`, and sticky reference anchors (v0.4.0) moved the reference
+magic to `DNCU` — plain streams are unaffected by that change, so `DNCC` stayed
+put. Older archives are refused with an explicit message
 rather than misread. Reference mode additionally requires the exact same
 reference, which it verifies by fingerprint and refuses when wrong.
 

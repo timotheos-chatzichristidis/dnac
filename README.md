@@ -66,12 +66,12 @@ swapping before being stopped. The 10 MB chr21 slice exists in the table so that
 
 | pair | dnac | GeCo3 ref models | GeCo3 hybrid |
 |------|-----:|-----------------:|-------------:|
-| W3110 vs MG1655 (near-identical strains) | **1,086 B** | 1,404 B | 1,319 B |
-| O157:H7 vs MG1655 (diverged strains) | **361,397 B** | 431,652 B | 365,401 B |
+| W3110 vs MG1655 (near-identical strains) | **1,088 B** | 1,404 B | 1,319 B |
+| O157:H7 vs MG1655 (diverged strains) | **361,399 B** | 431,652 B | 365,401 B |
 
 (Stored file sizes on the plain-ACGT `.seq` files, as everywhere in this
 section. The same pairs measured on the original FASTA files cost a little more
-— 1,942 B for W3110 — because the headers and newlines are stored too.)
+— 1,944 B for W3110 — because the headers and newlines are stored too.)
 
 ### What the head-to-head actually says
 
@@ -84,7 +84,7 @@ section. The same pairs measured on the original FASTA files cost a little more
   prefetch and stretch-table work. The honest comparison is the table above.
 - **Reference-based it is now ahead on both pairs**: 1% better than their best
   configuration on the diverged one, and 18% better on the near-identical one
-  (1,086 bytes against 1,319 for a whole 4.6 Mbp genome).
+  (1,088 bytes against 1,319 for a whole 4.6 Mbp genome).
 - Note that GeCo3's heaviest level is *worse* than its own level 9 on E. coli
   (1.8913 vs 1.8903, 20× the time): more models is not automatically better —
   the same lesson our own rejected experiments taught.
@@ -92,11 +92,24 @@ section. The same pairs measured on the original FASTA files cost a little more
 So the claim that holds: *"ahead of GeCo3 on these sequences in both modes"* — measured here, on identical files, not quoted
 from a paper. It is one machine and three sequences; that is the honest scope.
 
-Two more things that belong next to any such claim: GeCo3 **decompresses several
-times faster** (asymmetric design; ours is symmetric), which matters in real use;
-and these are stored file sizes, while GeCo3 additionally self-reports a payload
-figure ~4 KB smaller than its file — noise on chr21, 0.007 bpb on E. coli.
-XM (Java) has not been run.
+One thing that belongs next to any such claim: these are stored file sizes,
+while GeCo3 additionally self-reports a payload figure ~4 KB smaller than its
+file — noise on chr21, 0.007 bpb on E. coli. XM (Java) has not been run.
+
+**Decompression speed is unmeasured on the GeCo3 side, and this README used to
+claim otherwise.** Until 2026-08-19 it said GeCo3 decompresses several times
+faster because ours is symmetric and theirs is not. Neither half was checked.
+The GeDe3 build here fails on every input tested — `Bad input file - attempted
+read past end of file`, a 0-byte output, exit 1, reproducible from 100 KB to
+4.6 Mbp — so the "1.8 s" in `bench-external/results.md` was the time it took to
+fail, and `benchmark.ps1` reported `lossless=True` because it hashed a copy of
+the original against the original instead of against anything a decoder wrote.
+Both are fixed; the harness now runs a negative control at startup. Meanwhile
+GeCo3's own help text (`src/msg.c:268`) says: *"the decompression is symmetric,
+therefore the same resources, namely time and memory will be used as in the
+compression."* So the honest statement is that **both codecs are symmetric by
+design**, ours measurably so (10.4 s compress, 10.7 s decompress on E. coli),
+and no comparison between the two decoders exists here.
 
 *chr21 = Ensembl GRCh38, 40,088,619 ACGT bases (the 6.6M `N` gap bytes and
 newlines are handled losslessly but excluded from bits/base). Compression is
@@ -145,7 +158,7 @@ reference is simply fed through them first (see below).
 
 | target | reference | alone | with reference | smaller by |
 |--------|-----------|:-----:|:--------------:|:----------:|
-| E. coli W3110 (real strain) | E. coli MG1655 | 1.881 | **0.0033** | **562×** — 1,942 bytes for a 4.6 Mbp genome |
+| E. coli W3110 (real strain) | E. coli MG1655 | 1.880 | **0.0033** | **562×** — 1,944 bytes for a 4.6 Mbp genome |
 | chr21 of a simulated individual (0.1% SNPs + indels) | chr21 | 1.508 | **0.0238** | **63×** — 7.55 MB → 119 KB |
 | E. coli, simulated individual | E. coli MG1655 | 1.885 | **0.0219** | 86× |
 | E. coli O157:H7 (real, diverged strain) | E. coli MG1655 | 1.812 | **0.519** | 3.5× |
@@ -227,8 +240,8 @@ The components, bottom up:
   division went away. With a 12-bit probability the cost floor is 0.00035 bit per
   coded bit even when the model is certain — about 400 bytes per 4.6 Mbp genome,
   which is a third of what a genome costs when compressed against its own
-  reference. Fixing the coder took that case from 1,365 to 1,085 bytes (1,086
-  today: compression levels added a byte to the header).
+  reference. Fixing the coder took that case from 1,365 to 1,085 bytes (1,088
+  today: the level byte and the stored table geometry added three header bytes).
 - **Binary tree over {A,C,G,T}** — each base is two bit-decisions
   (`{A,C}` vs `{G,T}`, then which one). This lets the powerful machinery below
   work on simple binary predictions.
@@ -482,8 +495,12 @@ different cap decoded the same file to different bytes and reported success.
 The geometry now travels in the header, so any build reads any archive — and CI
 proves it by compressing with one geometry and decoding with another.
 
-Compression is symmetric: decompression costs roughly the same as compression,
-which is a real disadvantage against tools designed to decode fast.
+Compression is symmetric: decompression costs roughly the same as compression
+(E. coli: 10.4 s vs 10.7 s). That is inherent to context mixing — the decoder
+must rebuild the identical probability for every bit before it can read it, so
+it runs the whole model too. It is a real disadvantage against LZ-family tools,
+where the expensive part is the *search* and only the encoder pays it. It is not
+a disadvantage against GeCo3, whose own documentation states the same property.
 
 ## Licence
 

@@ -49,3 +49,52 @@ jobs:
           ./dnac       d small.dnac from_small.fa
           cmp sample.fa from_big.fa
           cmp sample.fa from_small.fa
+
+  cross-compiler:
+    name: gcc-compressed files must decode with clang (and back)
+    runs-on: ubuntu-latest
+    # The codec is deterministic because the encoder and decoder run identical
+    # FLOAT code in the same order -- inside one binary. Nothing has ever checked
+    # that two binaries from DIFFERENT COMPILERS agree, and if they do not, an
+    # archive is silently tied to the toolchain that wrote it. That is the exact
+    # shape of the v0.3.0 table-geometry bug (a parameter that selects behaviour
+    # and does not travel with the file), and GeCo3 ships with a warning that its
+    # own files may not decode across compilers. Measured 2026-08-19: gcc -O2 and
+    # gcc -O3 produce byte-identical archives; clang was never tested, because
+    # there is no clang on the measurement machine. This job is that test.
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Build both
+        run: |
+          gcc   -O2 -Wall -Wextra -o dnac_gcc   dnac.c -lm
+          clang -O2 -Wall -Wextra -o dnac_clang dnac.c -lm
+
+      - name: Same input must compress to identical bytes
+        run: |
+          ./dnac_gcc gen s.fa 400000 7
+          ./dnac_gcc   c s.fa g.dnac 22 3
+          ./dnac_clang c s.fa c.dnac 22 3
+          cmp g.dnac c.dnac || echo "NOTE: archives differ between compilers (see cross-decode below for whether that is fatal)"
+
+      - name: Cross-decode both directions, every level
+        run: |
+          for lvl in 1 2 3; do
+            ./dnac_gcc   c s.fa g$lvl.dnac 22 $lvl
+            ./dnac_clang c s.fa c$lvl.dnac 22 $lvl
+            ./dnac_clang d g$lvl.dnac from_gcc$lvl.fa
+            ./dnac_gcc   d c$lvl.dnac from_clang$lvl.fa
+            cmp s.fa from_gcc$lvl.fa
+            cmp s.fa from_clang$lvl.fa
+          done
+
+      - name: Cross-decode in reference mode (priming runs the whole model too)
+        run: |
+          ./dnac_gcc gen ref.fa 400000 11
+          ./dnac_gcc mut ref.fa tgt.fa 3 5
+          ./dnac_gcc   cr tgt.fa g.ref.dnac ref.fa 22 3
+          ./dnac_clang cr tgt.fa c.ref.dnac ref.fa 22 3
+          ./dnac_clang dr g.ref.dnac from_gcc.fa   ref.fa
+          ./dnac_gcc   dr c.ref.dnac from_clang.fa ref.fa
+          cmp tgt.fa from_gcc.fa
+          cmp tgt.fa from_clang.fa

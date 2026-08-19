@@ -75,7 +75,13 @@ jobs:
           ./dnac_gcc gen s.fa 400000 7
           ./dnac_gcc   c s.fa g.dnac 22 3
           ./dnac_clang c s.fa c.dnac 22 3
-          cmp g.dnac c.dnac || echo "NOTE: archives differ between compilers (see cross-decode below for whether that is fatal)"
+          # Hard assertion since 2026-08-20. It was written as `cmp || echo NOTE`
+          # while nobody knew whether gcc and clang agree -- but a step that
+          # cannot fail proves nothing, and the first green run showed it does
+          # hold: the cross-decodes below pass in BOTH directions at every level
+          # and in reference mode, which is only possible if the two builds
+          # evolve bit-identical models, which in turn forces identical output.
+          cmp g.dnac c.dnac
 
       - name: Cross-decode both directions, every level
         run: |

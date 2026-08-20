@@ -19,7 +19,10 @@
 # Tiers:  fast  (~2 min, E. coli scale)   -- run before every commit that touches
 #                                            dnac.c or the docs
 #         slow  (~15 min, full chr21)     -- run before tagging a release
-#         extern(needs GeCo3 built)       -- run before changing a head-to-head claim
+#         extern(needs GeCo3 built, ~10 min) -- the COMPETITOR's columns. Until
+#           2026-08-20 nothing re-ran these, which meant the only figures in the
+#           README nobody checked were the comparative claims -- the ones a reader
+#           is most entitled to distrust. Run before touching a head-to-head claim.
 #
 # Usage:  ./verify-claims.ps1 [-Tier fast|slow|extern|all] [-SelfTest] [-Only <id>]
 #         ./verify-claims.ps1 -AnchorsOnly -Tier all     # seconds: after editing a doc,
@@ -72,6 +75,54 @@ function Size($inFile, $ref, $level, $blocks) {
 }
 
 function Bpb($bytes, $bases) { [math]::Round(8.0 * $bytes / $bases, 4) }
+
+# Peak working set of one compress run, in MB. Not as deterministic as a byte
+# count -- the OS decides what to keep resident -- so these rows carry a percentage
+# tolerance rather than an exact one. They exist because a memory figure in the
+# README was wrong once (an E. coli measurement generalised to chromosome scale),
+# and because 4.75 GB is the difference between "runs on a laptop" and "does not".
+function PeakMB($inFile, $level, $blocks) {
+    $out = Join-Path $work 'vc.peak'
+    Remove-Item $out -Force -ErrorAction SilentlyContinue
+    $args = @('c', $inFile, $out, '22', "$level")
+    if ($blocks) { $args += @('-j', "$blocks") }
+    $p = Start-Process -FilePath $dnac -ArgumentList $args -PassThru -NoNewWindow `
+                       -RedirectStandardOutput (Join-Path $work 'peak.log')
+    $m = 0
+    while (-not $p.HasExited) {
+        try { $p.Refresh(); if ($p.WorkingSet64 -gt $m) { $m = $p.WorkingSet64 } } catch {}
+        Start-Sleep -Milliseconds 120
+    }
+    Remove-Item $out -Force -ErrorAction SilentlyContinue
+    [math]::Round($m / 1MB, 0)
+}
+
+# GeCo3, run exactly as benchmark.ps1 does: relative paths inside $work, because
+# GeCo3 treats ':' as its multi-file separator and would read "C:\..." as a file
+# named "C". Returns the stored size of the .co, or throws.
+function Geco($seq, $argline, $refseq) {
+    $geco = Join-Path $root 'bench-external\GeCo3-master\src\GeCo3.exe'
+    if (-not (Test-Path $geco)) { throw "GeCo3 is not built (bench-external/GeCo3-master/src)" }
+    $name  = Split-Path $seq -Leaf
+    $local = Join-Path $work $name
+    Copy-Item $seq $local -Force
+    if ($refseq) { Copy-Item $refseq (Join-Path $work 'ref.seq') -Force }
+    $co = "$local.co"
+    Remove-Item $co -Force -ErrorAction SilentlyContinue
+    Push-Location $work
+    try {
+        & $geco -F @($argline -split ' ' | Where-Object { $_ }) $name *> (Join-Path $work 'geco.log')
+        $ex = $LASTEXITCODE
+    } finally { Pop-Location }
+    if ($ex -ne 0 -or -not (Test-Path $co)) { throw "GeCo3 failed (exit $ex); see bench-external/work/geco.log" }
+    $n = (Get-Item $co).Length
+    Remove-Item $co, $local -Force -ErrorAction SilentlyContinue
+    $n
+}
+
+# the GeCo3 authors' own reference-mode templates, from their benchmark/run_ref.sh
+$PARAMR = '-rm 20:500:1:35:0.95/3:100:0.95 -rm 13:200:1:1:0.95/0:0:0 -rm 10:10:0:0:0.95/0:0:0 -lr 0.03 -hs 64'
+$PARAMH = "$PARAMR -tm 4:1:0:1:0.9/0:0:0 -tm 17:100:1:10:0.95/2:20:0.95"
 
 # Priming pass -> size of the saved model memory, in MB (decimal, as the README
 # writes it). Deterministic, unlike a timing, which is why it belongs here.
@@ -169,6 +220,121 @@ $claims = @(
      anchor='| E. coli MG1655 | *human chr21* (unrelated!) | 1.885 | 1.889 |'
      expect=1.889
      measure={ Bpb (Size (& $F 'ecoli.fa') (& $F 'chr21.fa') 3) (Bases (& $F 'ecoli.fa')) } }
+
+  @{ id='slice-l1-bpb'; tier='fast'; doc='README.md'; unit='bpb'; tol=6e-05
+     anchor='| 1 `fast` | 6 orders, 2 mixing experts, no IR, no tolerant models | 9.7 s | 1.7190 |'
+     expect=1.719
+     measure={ Bpb (Size (& $F 'chr21_slice.fa') $null 1) (Bases (& $F 'chr21_slice.fa')) } }
+
+  @{ id='slice-l2-bpb'; tier='fast'; doc='README.md'; unit='bpb'; tol=6e-05
+     anchor='| 2 `balanced` | all orders, 4 experts, no IR, no tolerant models | 13.8 s | 1.7175 |'
+     expect=1.7175
+     measure={ Bpb (Size (& $F 'chr21_slice.fa') $null 2) (Bases (& $F 'chr21_slice.fa')) } }
+
+  @{ id='slice-l3-bpb'; tier='fast'; doc='README.md'; unit='bpb'; tol=6e-05
+     anchor='| 3 `max` (default) | everything | 20.0 s | 1.7126 |'
+     expect=1.7126
+     measure={ Bpb (Size (& $F 'chr21_slice.fa') $null 3) (Bases (& $F 'chr21_slice.fa')) } }
+
+  @{ id='sliceseq-l3-bpb'; tier='fast'; doc='README.md'; unit='bpb'; tol=6e-05
+     anchor='| chr21 slice (9,836,065 bases) | **dnac `-l 3`** | **1.7114** |'
+     expect=1.7114
+     measure={ Bpb (Size (& $S 'chr21slice.seq') $null 3) (Bases (& $S 'chr21slice.seq')) } }
+
+  @{ id='sliceseq-l1-bpb'; tier='fast'; doc='README.md'; unit='bpb'; tol=6e-05
+     anchor='| | **dnac `-l 1`** | 1.7178 |'
+     expect=1.7178
+     measure={ Bpb (Size (& $S 'chr21slice.seq') $null 1) (Bases (& $S 'chr21slice.seq')) } }
+
+  @{ id='ecoli-j4-bytes'; tier='fast'; doc='README.md'; unit='B'; tol=0
+     anchor='| 4 | 1,108,086 | +1.41% |'
+     expect=1108086
+     measure={ Size (& $S 'ecoli.seq') $null 3 4 } }
+
+  @{ id='chr21-j1-bytes'; tier='slow'; doc='README.md'; unit='B'; tol=0
+     anchor='| 1 | 7,506,264 | 112.6 s | 83.5 s |'
+     expect=7506264
+     measure={ Size (& $S 'chr21.seq') $null 3 1 } }
+
+  @{ id='chr21-j8-bytes'; tier='slow'; doc='README.md'; unit='B'; tol=0
+     anchor='| 8 | 7,836,217 | **22.2 s** | **22.0 s** |'
+     expect=7836217
+     measure={ Size (& $S 'chr21.seq') $null 3 8 } }
+
+  @{ id='chr21-seq-l2-bpb'; tier='slow'; doc='README.md'; unit='bpb'; tol=6e-05
+     anchor='| | **dnac `-l 2`** | **1.5039** |'
+     expect=1.5039
+     measure={ Bpb (Size (& $S 'chr21.seq') $null 2) (Bases (& $S 'chr21.seq')) } }
+
+  @{ id='ram-ecoli-j1'; tier='fast'; doc='README.md'; unit='MB'; tol=65
+     anchor='| E. coli, 4.6 Mbp (580 kbase blocks) | 603 MB |'
+     expect=603
+     measure={ PeakMB (& $S 'ecoli.seq') 3 1 } }
+
+  @{ id='ram-ecoli-j8'; tier='fast'; doc='README.md'; unit='MB'; tol=65
+     anchor='| E. coli, 4.6 Mbp (580 kbase blocks) | 603 MB | 650 MB |'
+     expect=650
+     measure={ PeakMB (& $S 'ecoli.seq') 3 8 } }
+
+  @{ id='ram-chr21-j1'; tier='slow'; doc='README.md'; unit='MB'; tol=130
+     anchor='| human chr21, 40 Mbp (5 Mbase blocks) | 1,253 MB |'
+     expect=1253
+     measure={ PeakMB (& $S 'chr21.seq') 3 1 } }
+
+  @{ id='ram-chr21-j8'; tier='slow'; doc='README.md'; unit='MB'; tol=480
+     anchor='| human chr21, 40 Mbp (5 Mbase blocks) | 1,253 MB | 4,751 MB |'
+     expect=4751
+     measure={ PeakMB (& $S 'chr21.seq') 3 8 } }
+
+  @{ id='geco-ecoli-l9-bpb'; tier='extern'; doc='README.md'; unit='bpb'; tol=0.0002
+     anchor='| GeCo3 `-l 9` | 1.8903 |'
+     expect=1.8903
+     measure={ Bpb (Geco (& $S 'ecoli.seq') '-l 9') (Bases (& $S 'ecoli.seq')) } }
+
+  @{ id='geco-ecoli-l16-bpb'; tier='extern'; doc='README.md'; unit='bpb'; tol=0.0002
+     anchor='| GeCo3 `-l 16` | 1.8913 |'
+     expect=1.8913
+     measure={ Bpb (Geco (& $S 'ecoli.seq') '-l 16') (Bases (& $S 'ecoli.seq')) } }
+
+  @{ id='geco-w3110-ref-bytes'; tier='extern'; doc='README.md'; unit='B'; tol=0
+     anchor='| W3110 vs MG1655 (near-identical strains) | **1,060 B** | 1,404 B |'
+     expect=1404
+     measure={ Geco (& $S 'w3110.seq') "$PARAMR -r ref.seq" (& $S 'ecoli.seq') } }
+
+  @{ id='geco-w3110-hybrid-bytes'; tier='extern'; doc='README.md'; unit='B'; tol=0
+     anchor='| W3110 vs MG1655 (near-identical strains) | **1,060 B** | 1,404 B | 1,319 B |'
+     expect=1319
+     measure={ Geco (& $S 'w3110.seq') "$PARAMH -r ref.seq" (& $S 'ecoli.seq') } }
+
+  @{ id='geco-o157-ref-bytes'; tier='extern'; doc='README.md'; unit='B'; tol=0
+     anchor='| O157:H7 vs MG1655 (diverged strains) | **361,417 B** | 431,652 B |'
+     expect=431652
+     measure={ Geco (& $S 'o157.seq') "$PARAMR -r ref.seq" (& $S 'ecoli.seq') } }
+
+  @{ id='geco-o157-hybrid-bytes'; tier='extern'; doc='README.md'; unit='B'; tol=0
+     anchor='| O157:H7 vs MG1655 (diverged strains) | **361,417 B** | 431,652 B | 365,401 B |'
+     expect=365401
+     measure={ Geco (& $S 'o157.seq') "$PARAMH -r ref.seq" (& $S 'ecoli.seq') } }
+
+  @{ id='geco-slice-l14-bpb'; tier='extern'; doc='README.md'; unit='bpb'; tol=0.0002
+     anchor='| | GeCo3 `-l 14` | 1.7195 |'
+     expect=1.7195
+     measure={ Bpb (Geco (& $S 'chr21slice.seq') '-l 14') (Bases (& $S 'chr21slice.seq')) } }
+
+  @{ id='geco-slice-l16-bpb'; tier='extern'; doc='README.md'; unit='bpb'; tol=0.0002
+     anchor='| | GeCo3 `-l 16` | 1.7163 |'
+     expect=1.7163
+     measure={ Bpb (Geco (& $S 'chr21slice.seq') '-l 16') (Bases (& $S 'chr21slice.seq')) } }
+
+  @{ id='geco-chr21-l9-bpb'; tier='extern'; doc='README.md'; unit='bpb'; tol=0.0002
+     anchor='| | GeCo3 `-l 9` | 1.5177 |'
+     expect=1.5177
+     measure={ Bpb (Geco (& $S 'chr21.seq') '-l 9') (Bases (& $S 'chr21.seq')) } }
+
+  @{ id='geco-chr21-l14-bpb'; tier='extern'; doc='README.md'; unit='bpb'; tol=0.0002
+     anchor='| | GeCo3 `-l 14` | 1.5092 |'
+     expect=1.5092
+     measure={ Bpb (Geco (& $S 'chr21.seq') '-l 14') (Bases (& $S 'chr21.seq')) } }
 
   @{ id='chr21-fa-bpb'; tier='slow'; doc='README.md'; unit='bpb'; tol=0.0005
      anchor='| **dnac** (k=22)                | **1.546**'

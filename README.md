@@ -193,7 +193,7 @@ hit the cap it stops shrinking:
 
 | input | `-j 1` | `-j 8` | |
 |---|---:|---:|---|
-| E. coli, 4.6 Mbp (580 kbase blocks) | 595 MB | 664 MB | 1.12×, effectively flat |
+| E. coli, 4.6 Mbp (580 kbase blocks) | 603 MB | 650 MB | 1.08×, effectively flat |
 | human chr21, 40 Mbp (5 Mbase blocks) | 1,253 MB | 4,751 MB | **3.8×** |
 
 So on a chromosome `-j 8` costs about 4.75 GB. Extrapolating the cap rather than

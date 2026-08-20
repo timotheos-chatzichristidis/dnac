@@ -58,15 +58,38 @@
 #define TOP (1u << 24)
 #define BOT (1u << 16)
 
-typedef struct { uint32_t low, range; FILE *out; } REnc;
-typedef struct { uint32_t low, range, code; FILE *in; } RDec;
+/* The coder reads and writes MEMORY, not a FILE. A block-parallel codec needs
+   several coders alive at once, each producing its own stretch of the stream, so
+   none of them can own the output handle. The single-block path is unaffected:
+   the caller writes the header, the coder fills a buffer, the buffer is written.
+   Past the end of input the decoder must see 0xFF, exactly as `fgetc() & 0xFF`
+   yielded for EOF -- that is load-bearing, not cosmetic. */
+typedef struct { uint8_t *p; size_t len, cap; int err; } Buf;
 
-static void renc_init(REnc *e, FILE *out) { e->low = 0; e->range = 0xFFFFFFFFu; e->out = out; }
+static void buf_put(Buf *b, int c) {
+    if (b->len == b->cap) {
+        size_t cap = b->cap ? b->cap * 2 : 65536;
+        uint8_t *q = (uint8_t *)realloc(b->p, cap);
+        if (!q) { b->err = 1; return; }
+        b->p = q; b->cap = cap;
+    }
+    b->p[b->len++] = (uint8_t)c;
+}
+static void buf_free(Buf *b) { free(b->p); b->p = NULL; b->len = b->cap = 0; }
+
+typedef struct { uint32_t low, range; Buf *out; } REnc;
+typedef struct { uint32_t low, range, code; const uint8_t *in; size_t pos, len; } RDec;
+
+static uint32_t rdec_byte(RDec *d) {
+    return d->pos < d->len ? (uint32_t)d->in[d->pos++] : 0xFFu;   /* EOF read as 0xFF */
+}
+
+static void renc_init(REnc *e, Buf *out) { e->low = 0; e->range = 0xFFFFFFFFu; e->out = out; }
 
 static void renc_renorm(REnc *e) {
     while ((e->low ^ (e->low + e->range)) < TOP ||
            (e->range < BOT && ((e->range = (0u - e->low) & (BOT - 1)), 1))) {
-        fputc((int)(e->low >> 24), e->out);
+        buf_put(e->out, (int)(e->low >> 24));
         e->low <<= 8;
         e->range <<= 8;
     }
@@ -80,18 +103,18 @@ static void renc_encode(REnc *e, uint32_t cum, uint32_t freq, uint32_t tot) {
 }
 
 static void renc_flush(REnc *e) {
-    for (int i = 0; i < 4; i++) { fputc((int)(e->low >> 24), e->out); e->low <<= 8; }
+    for (int i = 0; i < 4; i++) { buf_put(e->out, (int)(e->low >> 24)); e->low <<= 8; }
 }
 
-static void rdec_init(RDec *d, FILE *in) {
-    d->low = 0; d->range = 0xFFFFFFFFu; d->code = 0; d->in = in;
-    for (int i = 0; i < 4; i++) d->code = (d->code << 8) | (uint32_t)(fgetc(d->in) & 0xFF);
+static void rdec_init(RDec *d, const uint8_t *in, size_t len) {
+    d->low = 0; d->range = 0xFFFFFFFFu; d->code = 0; d->in = in; d->pos = 0; d->len = len;
+    for (int i = 0; i < 4; i++) d->code = (d->code << 8) | rdec_byte(d);
 }
 
 static void rdec_renorm(RDec *d) {
     while ((d->low ^ (d->low + d->range)) < TOP ||
            (d->range < BOT && ((d->range = (0u - d->low) & (BOT - 1)), 1))) {
-        d->code = (d->code << 8) | (uint32_t)(fgetc(d->in) & 0xFF);
+        d->code = (d->code << 8) | rdec_byte(d);
         d->low <<= 8;
         d->range <<= 8;
     }
@@ -1278,11 +1301,13 @@ static int do_compress(const char *inpath, const char *outpath, int k, const cha
     if (refpath) { put64(out, (uint64_t)refn); put64(out, reffp); }
 
     if (ref) { prime_with_reference(ref, refn); free(ref); ref = NULL; }
-    /* Priming itself always learns; only the target pass can be frozen. Set from
-       refpath, not from `ref`, so a state file freezes exactly like a FASTA. */
-    if (refpath) g_refbase = g_npos;   /* everything primed so far is reference */
+    /* Everything primed so far is the reference; its anchors are the ones the
+       target must not overwrite. Set from refpath, not from `ref`, so a state
+       file marks the boundary exactly like a FASTA does. */
+    if (refpath) g_refbase = g_npos;
 
-    REnc e; renc_init(&e, out);
+    Buf cs = { NULL, 0, 0, 0 };
+    REnc e; renc_init(&e, &cs);
     uint64_t hist = 0;
     int run = 0;
 
@@ -1321,6 +1346,11 @@ static int do_compress(const char *inpath, const char *outpath, int k, const cha
         if (ft + 1 >= CAP) { fc[0] >>= 1; fc[1] >>= 1; }
     }
     renc_flush(&e);
+    if (cs.err) { fprintf(stderr, "out of memory while coding\n");
+                  buf_free(&cs); fclose(out); free(buf); mix_free(); return 1; }
+    if (cs.len && fwrite(cs.p, 1, cs.len, out) != cs.len) {
+        perror("write output"); buf_free(&cs); fclose(out); free(buf); mix_free(); return 1; }
+    buf_free(&cs);
     fclose(out);
     free(buf); mix_free();
     return 0;
@@ -1433,7 +1463,18 @@ static int do_decompress(const char *inpath, const char *outpath, const char *re
     if (ref) { prime_with_reference(ref, refn); free(ref); ref = NULL; }
     if (refpath) g_refbase = g_npos;   /* mirrors the encoder exactly */
 
-    RDec d; rdec_init(&d, in);
+    /* Pull the coded stream into memory: a block-parallel decoder hands each
+       thread its own slice, and even single-block decode no longer needs the
+       handle. */
+    long cs_start = ftell(in);
+    if (cs_start < 0 || fseek(in, 0, SEEK_END) != 0) { perror("seek input"); fclose(in); mix_free(); return 1; }
+    long cs_end = ftell(in);
+    size_t cs_len = (size_t)(cs_end - cs_start);
+    uint8_t *cs = (uint8_t *)malloc(cs_len ? cs_len : 1);
+    if (!cs) { fprintf(stderr, "out of memory\n"); fclose(in); mix_free(); return 1; }
+    if (fseek(in, cs_start, SEEK_SET) != 0 || (cs_len && fread(cs, 1, cs_len, in) != cs_len)) {
+        perror("read input"); free(cs); fclose(in); mix_free(); return 1; }
+    RDec d; rdec_init(&d, cs, cs_len);
     uint64_t hist = 0;
     int run = 0;
 
@@ -1477,6 +1518,7 @@ static int do_decompress(const char *inpath, const char *outpath, const char *re
         }
         if (ft + 1 >= CAP) { fc[0] >>= 1; fc[1] >>= 1; }
     }
+    free(cs);
     fclose(out); fclose(in);
     mix_free();
     return 0;

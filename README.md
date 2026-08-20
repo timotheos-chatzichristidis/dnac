@@ -186,9 +186,27 @@ and will stay opt-in**: at 8 blocks chr21 goes to 1.5637 bpb, behind GeCo3's
 1.5092, and the whole margin this project has is 0.7%. `-j 1` is the default and
 is byte-for-byte identical to a build with no block support at all.
 
-What it buys, and what it does not: RAM does **not** multiply, because the tables
-are sized from the block rather than the file (83 MB per block of 8, against
-595 MB for the whole file — 1.12× across 8 threads, not 8×). Reference mode is
+What it costs in memory depends on the size of the file, and the honest answer
+has two halves. Tables are sized from the block, so smaller blocks mean smaller
+tables — but that sizing is capped at 2^26, and once a block is large enough to
+hit the cap it stops shrinking:
+
+| input | `-j 1` | `-j 8` | |
+|---|---:|---:|---|
+| E. coli, 4.6 Mbp (580 kbase blocks) | 595 MB | 664 MB | 1.12×, effectively flat |
+| human chr21, 40 Mbp (5 Mbase blocks) | 1,253 MB | 4,751 MB | **3.8×** |
+
+So on a chromosome `-j 8` costs about 4.75 GB. Extrapolating the cap rather than
+measuring it: above roughly 500 Mbases of input every block of 8 exceeds the
+2^26 cap, each thread holds a full-size table, and memory approaches 8 × 1.25 GB.
+Cores stop being the binding constraint before that point; memory starts.
+
+(The first version of this paragraph claimed memory does not multiply at all.
+That was measured on E. coli and generalised, which is wrong: see
+docs/negative-results.md for why this project writes measurements down with
+their scope attached.)
+
+Reference mode is
 not supported yet: every block would need its own copy of the primed model, which
 is 1.25 GB for chr21 — ironically the mode where a block boundary is cheapest
 (~245 B) is the one where it is most expensive in memory.

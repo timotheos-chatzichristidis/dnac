@@ -165,7 +165,21 @@ cannot see blocks 0..j-1 while other cores are still producing them.
 | 4 | 1,108,086 | +1.41% |
 | 8 | 1,116,080 | +2.14% |
 
-On human chr21 the same split costs more — +2.52% at N=2 and +4.40% at N=8 —
+What it buys, measured on the full chr21 (40 Mbp) on an 8-core machine:
+
+| `-j` | bytes | encode | decode |
+|---:|---:|---:|---:|
+| 1 | 7,506,264 | 112.6 s | 83.5 s |
+| 2 | 7,695,177 | 50.8 s | 52.8 s |
+| 4 | 7,740,168 | 32.8 s | 33.1 s |
+| 8 | 7,836,217 | **22.2 s** | **22.0 s** |
+| 16 | 7,914,651 | 21.7 s | 23.1 s |
+
+5.1× on encode and 3.8× on decode at `-j 8`; `-j 16` buys nothing on 8 cores and
+costs another percent, so more blocks than cores is only ever a loss. Both sides
+speed up, because a block is independent in both directions.
+
+On human chr21 the split costs more than on E. coli — +2.52% at N=2 and +4.40% at N=8 —
 because long-range repeats (Alu, LINE, satellite) are where its compression comes
 from, and a block cannot reach the ones behind it. That is why this is **opt-in
 and will stay opt-in**: at 8 blocks chr21 goes to 1.5637 bpb, behind GeCo3's

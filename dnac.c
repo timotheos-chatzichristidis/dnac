@@ -52,6 +52,23 @@
 #include <string.h>
 #include <math.h>
 
+/* Model state is per-thread. -j N runs N blocks on separate threads and each one
+   is a COMPLETE codec: its own tables, counters, weights, anchors and history.
+   Marking the state thread-local costs one keyword per declaration and no change
+   anywhere else, which is why this is a small patch and not a rewrite into a
+   context struct. CONFIGURATION (g_level, g_blocks) stays shared: it is read, not
+   written, while blocks are coded. g_stretch is a read-only table built once.
+   Getting that split wrong produces wrong output, which is exactly what the
+   byte-identity check against the single-threaded build is there to catch. */
+#if defined(DNAC_NO_THREADS)
+#  define TLS
+#elif defined(_MSC_VER)
+#  define TLS __declspec(thread)
+#else
+#  define TLS __thread
+#endif
+
+
 /* ----------------------- Range coder (Subbotin style) ----------------------- */
 /* Carryless 32-bit range coder. Requires total frequency < BOT.               */
 
@@ -168,9 +185,9 @@ static int rdec_bit(RDec *d, uint32_t p1) {
 #define RUNCAP 1023 /* cap the base-run length used as context for the flag      */
 
 /* flag model: binary {base, non-base}, contexted on run-length (0..RUNCAP)   */
-static uint16_t flag_cnt[(RUNCAP + 1) * 2];
+static TLS uint16_t flag_cnt[(RUNCAP + 1) * 2];
 /* literal model: order-0 over 256 byte values, for escaped (non-ACGT) bytes  */
-static uint16_t lit_cnt[256];
+static TLS uint16_t lit_cnt[256];
 
 static int base_to_sym(int c) {
     switch (c) { case 'A': return 0; case 'C': return 1; case 'G': return 2; case 'T': return 3; }
@@ -201,8 +218,8 @@ static const char SYM_TO_BASE[4] = { 'A', 'C', 'G', 'T' };
 #ifndef MH_EXTRA
 #define MH_EXTRA 0      /* extra doublings of the anchor tables */
 #endif
-static int      g_hashbits;
-static uint32_t g_hashmask;
+static TLS int      g_hashbits;
+static TLS uint32_t g_hashmask;
 
 #ifndef MIX_LR
 #define MIX_LR  0.0010   /* mixer learning rate (overridable: -DMIX_LR=...)    */
@@ -291,20 +308,20 @@ static const int FAST_ORDERS[] = FAST_ORDER_LIST;
 #define TOL_MAX 8               /* failures tolerated before resyncing            */
 #endif
 static const int TOL_ORDERS[] = { 16, 20, 12 };   /* first NSTCM of these are used */
-static uint64_t  g_thist;                   /* the repaired history                */
-static int       g_tfail;                   /* failures since the last resync      */
-static int       g_tpred;                   /* this base's guess by the first STCM  */
-static int       g_nstcm;
+static TLS uint64_t  g_thist;                   /* the repaired history                */
+static TLS int       g_tfail;                   /* failures since the last resync      */
+static TLS int       g_tpred;                   /* this base's guess by the first STCM  */
+static TLS int       g_nstcm;
 
-static int       g_nmodels;                 /* number of order models (incl. STCMs) */
-static int       g_nin;                     /* total mixer inputs = g_nmodels + 1 */
-static int       g_order[MAXIN];
-static int       g_tol[MAXIN];              /* 1 = reads the repaired history      */
-static int       g_ir[MAXIN];               /* 1 = also trained on the other strand */
-static int       g_direct[MAXIN];
-static uint64_t  g_ctxmask[MAXIN];          /* (1<<(2*order))-1, picks last `order` bases */
-static size_t    g_size[MAXIN];
-static uint16_t *g_tab[MAXIN];              /* order-model probability tables      */
+static TLS int       g_nmodels;                 /* number of order models (incl. STCMs) */
+static TLS int       g_nin;                     /* total mixer inputs = g_nmodels + 1 */
+static TLS int       g_order[MAXIN];
+static TLS int       g_tol[MAXIN];              /* 1 = reads the repaired history      */
+static TLS int       g_ir[MAXIN];               /* 1 = also trained on the other strand */
+static TLS int       g_direct[MAXIN];
+static TLS uint64_t  g_ctxmask[MAXIN];          /* (1<<(2*order))-1, picks last `order` bases */
+static TLS size_t    g_size[MAXIN];
+static TLS uint16_t *g_tab[MAXIN];              /* order-model probability tables      */
 #ifndef NMIX
 #define NMIX 4                                  /* experts in the first mixing layer */
 #endif
@@ -323,16 +340,16 @@ static uint16_t *g_tab[MAXIN];              /* order-model probability tables   
 #define LEVEL_MAX     3
 #define LEVEL_DEFAULT 3
 static int g_level = LEVEL_DEFAULT;
-static int g_nmix  = NMIX;     /* experts actually used this run (<= NMIX) */
+static TLS int g_nmix  = NMIX;     /* experts actually used this run (<= NMIX) */
 #ifndef MIX_LR2
 #define MIX_LR2 0.0005                           /* second-layer learning rate        */
 #endif
-static double    g_w[NMIX][NNODES][MIXCTX][MAXIN]; /* expert weights per node/ctx/input */
-static double    g_v[NNODES][MIXCTX][NMIX + 1];    /* second layer (+bias), per regime  */
+static TLS double    g_w[NMIX][NNODES][MIXCTX][MAXIN]; /* expert weights per node/ctx/input */
+static TLS double    g_v[NNODES][MIXCTX][NMIX + 1];    /* second layer (+bias), per regime  */
 typedef struct { double x[NMIX], p[NMIX]; } MixState;
 static uint32_t pq_of_(double p);
-static double    g_apm1[APM_MAXCTX][APM_BINS]; /* SSE stage 1 (match-state context) */
-static double    g_apm2[APM_MAXCTX][APM_BINS]; /* SSE stage 2 (order-2 context)     */
+static TLS double    g_apm1[APM_MAXCTX][APM_BINS]; /* SSE stage 1 (match-state context) */
+static TLS double    g_apm2[APM_MAXCTX][APM_BINS]; /* SSE stage 2 (order-2 context)     */
 
 /* ---- Match models --------------------------------------------------------- */
 /* TWO forward match models with different anchor lengths. A short anchor (13)
@@ -362,8 +379,8 @@ static double    g_apm2[APM_MAXCTX][APM_BINS]; /* SSE stage 2 (order-2 context) 
 #define MISS_MAX  8             /* abandon a match after this many consecutive misses */
 #define MATCH_EMPTY 0xFFFFFFFFu
 
-static uint8_t  *g_seq   = NULL;            /* base symbols (0..3) seen so far     */
-static uint32_t  g_npos  = 0;               /* count of bases in g_seq             */
+static TLS uint8_t  *g_seq   = NULL;            /* base symbols (0..3) seen so far     */
+static TLS uint32_t  g_npos  = 0;               /* count of bases in g_seq             */
 
 typedef struct {
     int       minlen;                       /* anchor length in bases              */
@@ -376,16 +393,16 @@ typedef struct {
 } MatchModel;
 
 #define NMATCH 2
-static MatchModel g_mm[NMATCH];
+static TLS MatchModel g_mm[NMATCH];
 
 /* reverse-complement match: same idea, but predicts complement(seq[rmp]) and walks
    BACKWARD through history (rmp--). Anchored by looking up the RC of the current
    context in the SAME forward hash table. Catches inverted repeats. */
-static uint32_t  g_rmp     = 0;
-static uint32_t  g_rlen    = 0;
-static int       g_ractive = 0;
-static int       g_rmiss   = 0;
-static uint16_t  g_rc_pr[NNODES * 2 * (MLENCAP + 1) * 2];
+static TLS uint32_t  g_rmp     = 0;
+static TLS uint32_t  g_rlen    = 0;
+static TLS int       g_ractive = 0;
+static TLS int       g_rmiss   = 0;
+static TLS uint16_t  g_rc_pr[NNODES * 2 * (MLENCAP + 1) * 2];
 
 static double stretchd(double p) { return log(p / (1.0 - p)); }
 static double squashd(double x)  { return 1.0 / (1.0 + exp(-x)); }
@@ -671,7 +688,7 @@ static int size_bits(size_t n, int cap) {
     return b;
 }
 
-static int g_mhb;   /* anchor-table bucket bits, remembered for state files */
+static TLS int g_mhb;   /* anchor-table bucket bits, remembered for state files */
 
 /* Build the ensemble + match tables. `sizing_n` decides the table sizes and
    `seq_alloc` how much history we can hold; in reference mode the sizes come
@@ -679,7 +696,17 @@ static int g_mhb;   /* anchor-table bucket bits, remembered for state files */
    any target is known, and priming from a FASTA or from a state file give
    bit-identical models. hb/mhb override the computed sizes when a state file
    dictates them. Returns 0 on success. */
+/* The header must record the table geometry before any block is coded, and with
+   -j N no thread has built its tables yet -- so compute it without allocating
+   1.2 GB just to read two numbers back out. Must stay in step with mix_setup. */
+static void geometry_for(size_t sizing_n, int *hb, int *mhb) {
+    *hb  = size_bits(sizing_n, HASHBITS_MAX) - 2 + HASH_EXTRA;
+    *mhb = size_bits(sizing_n, MHBITS_MAX) + 2 + MH_EXTRA;
+    if (*mhb > MHBITS_MAX) *mhb = MHBITS_MAX;
+}
+
 static int mix_setup(int maxorder, size_t sizing_n, size_t seq_alloc, int hb, int mhb) {
+
     stretch_tab_init();
     /* g_hashbits counts BUCKETS of BUCKETW uint16, so the byte footprint of a
        hashed model is the same as it was with one uint16 per (context,node). */
@@ -1254,7 +1281,90 @@ static int do_prime(const char *refpath, const char *statepath, int k) {
 
 /* ------------------------------- Compress ----------------------------------- */
 
-/* Code one span of bytes with the CURRENT model state. The caller builds the
+/* ---------------------------- worker threads --------------------------------- */
+/* Blocks are handed out statically -- thread t takes blocks t, t+T, t+2T ... -- so
+   no lock is needed anywhere: every worker touches only its own Buf, its own slice
+   of the output, and its own thread-local models. Concurrency is capped because
+   each live worker holds a full set of tables; -j sets the BLOCK count (which is
+   format), not the thread count (which is not). */
+#ifndef DNAC_MAXTHREADS
+#define DNAC_MAXTHREADS 16
+#endif
+
+#if !defined(DNAC_NO_THREADS)
+#  if defined(_WIN32)
+#    include <process.h>
+#    include <windows.h>
+#  else
+#    include <pthread.h>
+#  endif
+#endif
+
+static void encode_span(const uint8_t *buf, long n, Buf *out);
+static void decode_span(const uint8_t *cs, size_t cs_len, uint64_t n, uint8_t *dst);
+
+typedef struct {
+    int tid, nthreads, nb, k, hb, mhb, decode, err;
+    long bsz;
+    const uint8_t *src;  long n;      Buf *bufs;          /* encode */
+    const uint8_t *cs;   const size_t *coff;
+    const uint64_t *clen; uint8_t *dst; uint64_t len;     /* decode */
+} Worker;
+
+static void worker_run(Worker *w) {
+    for (int b = w->tid; b < w->nb; b += w->nthreads) {
+        uint64_t start = (uint64_t)b * (uint64_t)w->bsz;
+        uint64_t total = w->decode ? w->len : (uint64_t)w->n;
+        uint64_t blen  = (start + (uint64_t)w->bsz <= total) ? (uint64_t)w->bsz
+                       : (start < total ? total - start : 0);
+        if (mix_setup(w->k, (size_t)w->bsz, (size_t)blen + 1, w->hb, w->mhb)) { w->err = 1; return; }
+        if (w->decode) decode_span(w->cs + w->coff[b], (size_t)w->clen[b], blen, w->dst + start);
+        else {
+            encode_span(w->src + start, (long)blen, &w->bufs[b]);
+            if (w->bufs[b].err) w->err = 1;
+        }
+        mix_free();
+        if (w->err) return;
+    }
+}
+
+#if defined(DNAC_NO_THREADS)
+static int run_workers(Worker *ws, int nthreads) {
+    for (int t = 0; t < nthreads; t++) worker_run(&ws[t]);   /* same output, one core */
+    int err = 0; for (int t = 0; t < nthreads; t++) err |= ws[t].err;
+    return err;
+}
+#elif defined(_WIN32)
+static unsigned __stdcall worker_thunk(void *p) { worker_run((Worker *)p); return 0; }
+static int run_workers(Worker *ws, int nthreads) {
+    HANDLE h[DNAC_MAXTHREADS]; int started = 0;
+    for (int t = 1; t < nthreads; t++) {
+        h[started] = (HANDLE)_beginthreadex(NULL, 0, worker_thunk, &ws[t], 0, NULL);
+        if (!h[started]) { worker_run(&ws[t]); continue; }
+        started++;
+    }
+    worker_run(&ws[0]);                       /* the caller is a worker too */
+    for (int i = 0; i < started; i++) { WaitForSingleObject(h[i], INFINITE); CloseHandle(h[i]); }
+    int err = 0; for (int t = 0; t < nthreads; t++) err |= ws[t].err;
+    return err;
+}
+#else
+static void *worker_thunk(void *p) { worker_run((Worker *)p); return NULL; }
+static int run_workers(Worker *ws, int nthreads) {
+    pthread_t th[DNAC_MAXTHREADS]; int started = 0;
+    for (int t = 1; t < nthreads; t++) {
+        if (pthread_create(&th[started], NULL, worker_thunk, &ws[t]) != 0) { worker_run(&ws[t]); continue; }
+        started++;
+    }
+    worker_run(&ws[0]);
+    for (int i = 0; i < started; i++) pthread_join(th[i], NULL);
+    int err = 0; for (int t = 0; t < nthreads; t++) err |= ws[t].err;
+    return err;
+}
+#endif
+
+/* Code one span of bytes with the CURRENT model state.
+ The caller builds the
    models; a block-parallel encoder calls this once per block, each with its own
    freshly built model -- which is precisely why a block boundary costs what
    docs/negative-results.md #2 measured. */
@@ -1336,7 +1446,12 @@ static int do_compress(const char *inpath, const char *outpath, int k, const cha
         int pre_nb = g_blocks; if (pre_nb > n) pre_nb = (int)(n > 0 ? n : 1); if (pre_nb < 1) pre_nb = 1;
         size_t sizing = refpath ? refn : (size_t)((n + pre_nb - 1) / pre_nb);
         if (sizing < 1) sizing = 1;
-        if (mix_setup(k, sizing, (size_t)n + refn, -1, -1)) {
+        if (pre_nb > 1) {
+            /* Every block builds its own tables on its own thread, so this thread
+               must not build a set too -- it only needs the two numbers the header
+               records, and allocating 1.2 GB to read them back would be absurd. */
+            geometry_for(sizing, &g_hashbits, &g_mhb);
+        } else if (mix_setup(k, sizing, (size_t)n + refn, -1, -1)) {
             free(buf); free(ref); mix_free(); return 1;
         }
 
@@ -1395,23 +1510,18 @@ static int do_compress(const char *inpath, const char *outpath, int k, const cha
     if (nb == 1) {
         encode_span(buf, n, &cs);
     } else {
-        for (int b = 0; b < nb; b++) {
-            long start = (long)b * bsz;
-            long blen  = (start + bsz <= n) ? bsz : n - start;
-            if (blen < 0) blen = 0;
-            if (b > 0) {
-                mix_free();
-                if (mix_setup(k, (size_t)bsz, (size_t)blen + 1, g_hashbits, g_mhb)) {
-                    for (int q = 0; q < nb; q++) buf_free(&bufs[q]);
-                    free(bufs); fclose(out); free(buf); return 1;
-                }
-            }
-            encode_span(buf + start, blen, &bufs[b]);
-            if (bufs[b].err) {
-                fprintf(stderr, "out of memory while coding\n");
-                for (int q = 0; q < nb; q++) buf_free(&bufs[q]);
-                free(bufs); fclose(out); free(buf); mix_free(); return 1;
-            }
+        int nt = nb < DNAC_MAXTHREADS ? nb : DNAC_MAXTHREADS;
+        Worker ws[DNAC_MAXTHREADS];
+        memset(ws, 0, sizeof ws);
+        for (int t = 0; t < nt; t++) {
+            ws[t].tid = t; ws[t].nthreads = nt; ws[t].nb = nb; ws[t].k = k;
+            ws[t].hb = g_hashbits; ws[t].mhb = g_mhb; ws[t].bsz = bsz;
+            ws[t].src = buf; ws[t].n = n; ws[t].bufs = bufs; ws[t].decode = 0;
+        }
+        if (run_workers(ws, nt)) {
+            fprintf(stderr, "a block failed to compress\n");
+            for (int q = 0; q < nb; q++) buf_free(&bufs[q]);
+            free(bufs); fclose(out); free(buf); mix_free(); return 1;
         }
     }
 
@@ -1599,7 +1709,11 @@ static int do_decompress(const char *inpath, const char *outpath, const char *re
                 free(ref); fclose(in); return 1;
             }
         }
-        if (mix_setup(k, need_ref ? refn : (size_t)len, (size_t)len + refn,
+        if (blocked) {
+            /* workers build their own; this thread only needs the geometry it
+               already read out of the header */
+            g_hashbits = hb_hdr; g_mhb = mhb_hdr;
+        } else if (mix_setup(k, need_ref ? refn : (size_t)len, (size_t)len + refn,
                       hb_hdr, mhb_hdr)) {
             free(ref); fclose(in); mix_free(); return 1;
         }
@@ -1630,23 +1744,32 @@ static int do_decompress(const char *inpath, const char *outpath, const char *re
         /* Mirror the encoder exactly: block b gets a model built from scratch,
            sized from the block, and sees only its own slice of the stream. */
         uint64_t bsz = ((uint64_t)len + (uint64_t)nb - 1) / (uint64_t)nb;
+        size_t *coff = (size_t *)malloc((size_t)nb * sizeof(size_t));
+        if (!coff) { fprintf(stderr, "out of memory\n");
+                     free(dst); free(blen_c); free(cs); fclose(out); fclose(in); mix_free(); return 1; }
         size_t off = 0;
         for (int b = 0; b < nb; b++) {
-            uint64_t start = (uint64_t)b * bsz;
-            uint64_t blen  = (start + bsz <= len) ? bsz : (start < len ? len - start : 0);
-            if (off + (size_t)blen_c[b] > cs_len) {
+            /* Every offset is checked BEFORE any thread runs: a truncated file must
+               be a clean refusal, not a worker reading past the buffer. */
+            if (blen_c[b] > cs_len || off + (size_t)blen_c[b] > cs_len) {
                 fprintf(stderr, "truncated block %d of %d\n", b + 1, nb);
-                free(dst); free(blen_c); free(cs); fclose(out); fclose(in); mix_free(); return 1;
+                free(coff); free(dst); free(blen_c); free(cs); fclose(out); fclose(in); mix_free(); return 1;
             }
-            if (b > 0) {
-                mix_free();
-                if (mix_setup(k, (size_t)bsz, (size_t)blen + 1, hb_hdr, mhb_hdr)) {
-                    free(dst); free(blen_c); free(cs); fclose(out); fclose(in); return 1;
-                }
-            }
-            decode_span(cs + off, (size_t)blen_c[b], blen, dst + start);
-            off += (size_t)blen_c[b];
+            coff[b] = off; off += (size_t)blen_c[b];
         }
+        int nt = nb < DNAC_MAXTHREADS ? nb : DNAC_MAXTHREADS;
+        Worker ws[DNAC_MAXTHREADS];
+        memset(ws, 0, sizeof ws);
+        for (int t = 0; t < nt; t++) {
+            ws[t].tid = t; ws[t].nthreads = nt; ws[t].nb = nb; ws[t].k = k;
+            ws[t].hb = hb_hdr; ws[t].mhb = mhb_hdr; ws[t].bsz = (long)bsz;
+            ws[t].cs = cs; ws[t].coff = coff; ws[t].clen = blen_c;
+            ws[t].dst = dst; ws[t].len = len; ws[t].decode = 1;
+        }
+        int werr = run_workers(ws, nt);
+        free(coff);
+        if (werr) { fprintf(stderr, "a block failed to decompress\n");
+                    free(dst); free(blen_c); free(cs); fclose(out); fclose(in); mix_free(); return 1; }
     }
     free(blen_c);
     if (len && fwrite(dst, 1, (size_t)len, out) != (size_t)len) {

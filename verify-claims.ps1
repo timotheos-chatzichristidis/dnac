@@ -53,12 +53,13 @@ function Bases($seq) {
 
 # Compress and return the stored size in bytes. Always round-trips: a size from a
 # run whose losslessness was not checked is not a measurement, it is a number.
-function Size($inFile, $ref, $level) {
+function Size($inFile, $ref, $level, $blocks) {
     $out = Join-Path $work 'vc.dnac'; $rt = Join-Path $work 'vc.rt'
     Remove-Item $out, $rt -Force -ErrorAction SilentlyContinue
     $lvl = if ($level) { "$level" } else { '3' }
-    if ($ref) { & $dnac cr $inFile $out $ref 22 $lvl | Out-Null }
-    else      { & $dnac c  $inFile $out 22 $lvl      | Out-Null }
+    $jarg = if ($blocks) { @('-j', "$blocks") } else { @() }
+    if ($ref) { & $dnac cr $inFile $out $ref 22 $lvl @jarg | Out-Null }
+    else      { & $dnac c  $inFile $out 22 $lvl @jarg      | Out-Null }
     if ($LASTEXITCODE -ne 0 -or -not (Test-Path $out)) { throw "compress failed: $inFile" }
     if ($ref) { & $dnac dr $out $rt $ref | Out-Null } else { & $dnac d $out $rt | Out-Null }
     if ($LASTEXITCODE -ne 0 -or -not (Test-Path $rt)) { throw "decompress failed: $inFile" }
@@ -146,6 +147,18 @@ $claims = @(
      anchor='1,255 MB for chr21'
      expect=1255
      measure={ State (& $F 'chr21.fa') } }
+
+  # -j sizes are published, so they are executed like every other figure. The
+  # block count is part of the format, so these also prove the split itself.
+  @{ id='ecoli-j2-bytes'; tier='fast'; doc='README.md'; unit='B'; tol=0
+     anchor='| 2 | 1,100,603 | +0.72% |'
+     expect=1100603
+     measure={ Size (& $S 'ecoli.seq') $null 3 2 } }
+
+  @{ id='ecoli-j8-bytes'; tier='fast'; doc='README.md'; unit='B'; tol=0
+     anchor='| 8 | 1,116,080 | +2.14% |'
+     expect=1116080
+     measure={ Size (& $S 'ecoli.seq') $null 3 8 } }
 
   @{ id='chr21-ind-alone-bpb'; tier='slow'; doc='README.md'; unit='bpb'; tol=0.0006
      anchor='(0.1% SNPs + indels) | chr21 | 1.504 |'

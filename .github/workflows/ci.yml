@@ -67,8 +67,8 @@ jobs:
 
       - name: Build both
         run: |
-          gcc   -O2 -Wall -Wextra -o dnac_gcc   dnac.c -lm
-          clang -O2 -Wall -Wextra -o dnac_clang dnac.c -lm
+          gcc   -O2 -Wall -Wextra -o dnac_gcc   dnac.c -lm -pthread
+          clang -O2 -Wall -Wextra -o dnac_clang dnac.c -lm -pthread
 
       - name: Same input must compress to identical bytes
         run: |
@@ -104,3 +104,21 @@ jobs:
           ./dnac_gcc   dr c.ref.dnac from_clang.fa ref.fa
           cmp tgt.fa from_gcc.fa
           cmp tgt.fa from_clang.fa
+
+      - name: Threads must not change a single byte
+        run: |
+          # -j N is a FORMAT decision (how many blocks); threading is only who
+          # does the work. A build with no threads at all must produce the same
+          # archive, or the thread-local/shared split of the model state is wrong
+          # somewhere -- which is exactly the bug that would otherwise be silent.
+          gcc -O2 -Wall -Wextra -DDNAC_NO_THREADS -o dnac_nothr dnac.c -lm
+          ./dnac_gcc   gen jb.fa 300000 3
+          for j in 1 2 5 8; do
+            ./dnac_gcc  c jb.fa par$j.dnac 22 3 -j $j
+            ./dnac_nothr c jb.fa seq$j.dnac 22 3 -j $j
+            cmp par$j.dnac seq$j.dnac
+            ./dnac_nothr d par$j.dnac from_par$j.fa
+            ./dnac_gcc   d seq$j.dnac from_seq$j.fa
+            cmp jb.fa from_par$j.fa
+            cmp jb.fa from_seq$j.fa
+          done

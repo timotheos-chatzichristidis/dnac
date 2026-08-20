@@ -3,7 +3,14 @@
 
 CC      ?= cc
 CFLAGS  ?= -O3 -Wall -Wextra
+# -pthread is in LDLIBS, not CFLAGS, because CI passes its own CFLAGS and would
+# drop it -- and then -j N would fail to link on a glibc that still separates
+# libpthread. Windows toolchains use the Win32 API instead and ignore it.
+ifeq ($(OS),Windows_NT)
 LDLIBS   = -lm
+else
+LDLIBS   = -lm -pthread
+endif
 PREFIX  ?= /usr/local
 
 # Windows toolchains append .exe; without this the target is never satisfied and

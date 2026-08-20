@@ -61,7 +61,35 @@ for f in $FILES; do
   done
 done
 
+# -------------------------------------------------- block mode (-j N)
+# Each block is coded against a model of its own, so N blocks is N codecs whose
+# output must concatenate into one decodable stream. -j 1 must stay byte-for-byte
+# what a plain run produces -- that identity is what makes every other measurement
+# in the registry still valid.
+for f in $FILES; do
+  for j in 1 2 3 8; do
+    "$EXE" c "$f" rt.dnac 16 -j "$j" >/dev/null
+    "$EXE" d rt.dnac rt.out >/dev/null
+    report "$f -j=$j" "$(hash_of "$f")" "$(hash_of rt.out)"
+    rm -f rt.dnac rt.out
+  done
+done
+
+# -j 1 is not merely decodable, it is the SAME BYTES as no -j at all.
+"$EXE" c diverged.fa rt_plain.dnac 16 >/dev/null
+"$EXE" c diverged.fa rt_j1.dnac 16 -j 1 >/dev/null
+report "-j 1 is byte-identical to plain" "$(hash_of rt_plain.dnac)" "$(hash_of rt_j1.dnac)"
+rm -f rt_plain.dnac rt_j1.dnac
+
+# more blocks than bytes must not crash or lose data
+printf 'ACGTACGTAC' > tiny_j.fa
+"$EXE" c tiny_j.fa rt.dnac 16 -j 200 >/dev/null
+"$EXE" d rt.dnac rt.out >/dev/null
+report "tiny input, -j 200" "$(hash_of tiny_j.fa)" "$(hash_of rt.out)"
+rm -f tiny_j.fa rt.dnac rt.out
+
 # --------------------------------------------- every compression level
+
 # Levels change which models exist, so each one is a distinct codec and needs
 # its own proof. The level travels in the header; the decoder is given no hint.
 for f in $FILES; do

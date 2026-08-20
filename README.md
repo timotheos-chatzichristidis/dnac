@@ -150,6 +150,35 @@ level 2 comes out **2% smaller than level 3**. The same effect shows up in
 GeCo3 (`-l 16` worse than `-l 9` on *E. coli*) and in fqzcomp (`-s9` worse than
 `-s7` on reads). Measure on your own data before assuming the maximum is best.
 
+## Blocks (`-j N`) — buying decode wall-clock with ratio
+
+Context mixing decodes at the speed it encodes: the decoder has to rebuild the
+identical probability for every bit before it can read it, so it runs the whole
+model too. The only way to cut *wall-clock* is to code the file as N independent
+blocks and put them on N cores — and independence is the price, because block j
+cannot see blocks 0..j-1 while other cores are still producing them.
+
+| `-j` | bytes (E. coli, 4.6 Mbp) | vs one block |
+|---:|---:|---:|
+| 1 (default) | 1,092,692 | — |
+| 2 | 1,100,603 | +0.72% |
+| 4 | 1,108,086 | +1.41% |
+| 8 | 1,116,080 | +2.14% |
+
+On human chr21 the same split costs more — +2.52% at N=2 and +4.40% at N=8 —
+because long-range repeats (Alu, LINE, satellite) are where its compression comes
+from, and a block cannot reach the ones behind it. That is why this is **opt-in
+and will stay opt-in**: at 8 blocks chr21 goes to 1.5637 bpb, behind GeCo3's
+1.5092, and the whole margin this project has is 0.7%. `-j 1` is the default and
+is byte-for-byte identical to a build with no block support at all.
+
+What it buys, and what it does not: RAM does **not** multiply, because the tables
+are sized from the block rather than the file (83 MB per block of 8, against
+595 MB for the whole file — 1.12× across 8 threads, not 8×). Reference mode is
+not supported yet: every block would need its own copy of the primed model, which
+is 1.25 GB for chr21 — ironically the mode where a block boundary is cheapest
+(~245 B) is the one where it is most expensive in memory.
+
 ## Reference-based results (`cr` / `dr`) — the big lever
 
 Two genomes of a species differ by ~0.1%, so a genome stored *against a
@@ -405,7 +434,7 @@ exact/diverged/inverted repeats), across many values of `k`.
 
 ```sh
 make                              # cc -O2 -Wall -Wextra -o dnac dnac.c -lm
-make test                         # 149 SHA-256 round-trips (plain, reference, level, state)
+make test                         # 191 SHA-256 round-trips (plain, reference, level, state, blocks)
 sh scripts/get-data.sh --human    # fetch the exact genomes benchmarked below
 make bench                        # bits/base on whatever is in ./data
 ```
@@ -420,6 +449,7 @@ make bench                        # bits/base on whatever is in ./data
 ./dnac.exe gen sample.fa 2000000        # make a structured sample
 ./dnac.exe c  sample.fa  out.dnac 22    # compress (k = max model order, default 22)
 ./dnac.exe c  sample.fa  out.dnac 22 1  # ...at level 1 (fast); 3 = max, the default
+./dnac.exe c  sample.fa  out.dnac 22 -j 8   # 8 independent blocks (see below)
 ./dnac.exe d  out.dnac   back.fa        # decompress (the level travels in the header)
 
 # reference-based (the same reference is required to decompress)
@@ -465,7 +495,7 @@ Try a **real** genome: download a `.fa` from NCBI/Ensembl and
 - `docs/negative-results.md` — what was measured and rejected, including the
   test showing the reference-mode advantage does **not** transfer outside DNA.
 - `.github/workflows/ci.yml` — every push builds on gcc and clang, Linux and
-  macOS, and must pass all 149 round-trips, plus a cross-build portability check
+  macOS, and must pass all 191 round-trips, plus a cross-build portability check
   that compresses with one table geometry and decodes with another.
 - `README.md` — this file.
 

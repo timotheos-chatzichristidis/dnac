@@ -223,7 +223,15 @@ static uint32_t g_hashmask;
    own recently-coded self. Keeping those anchors is worth 5.44% on a chr21
    individual and 0.67% on W3110; see match_after(). g_refbase is 0 in plain
    mode, which disables the rule (no position is < 0). */
-static uint32_t g_refbase = 0; /* g_seq positions below this belong to the reference */
+/* Blocks requested with -j N. N > 1 codes the input as N independent spans so
+   they can be decoded on N cores -- and so each one loses the history before it,
+   which is the entire cost: +2.52% at N=2 and +4.40% at N=8 on chr21, measured in
+   docs/negative-results.md #2. Opt-in for exactly that reason; -j 1 is byte-for-byte
+   what a build without any of this produces. */
+static int g_blocks = 1;
+
+static uint32_t g_refbase = 0;
+ /* g_seq positions below this belong to the reference */
 
 #define W_INIT  0.20     /* initial mixer weight per input                     */
 #define DIRECT_MAXORDER 8 /* orders <= this use a direct table, else hashed    */
@@ -1246,68 +1254,14 @@ static int do_prime(const char *refpath, const char *statepath, int k) {
 
 /* ------------------------------- Compress ----------------------------------- */
 
-static int do_compress(const char *inpath, const char *outpath, int k, const char *refpath) {
-    FILE *in = fopen(inpath, "rb");
-    if (!in) { perror("open input"); return 1; }
-    fseek(in, 0, SEEK_END);
-    long n = ftell(in);
-    fseek(in, 0, SEEK_SET);
-    if (n < 0) { fclose(in); fprintf(stderr, "bad input size\n"); return 1; }
-    uint8_t *buf = (uint8_t *)malloc((size_t)n ? (size_t)n : 1);
-    if (n && fread(buf, 1, (size_t)n, in) != (size_t)n) { perror("read"); fclose(in); return 1; }
-    fclose(in);
-
+/* Code one span of bytes with the CURRENT model state. The caller builds the
+   models; a block-parallel encoder calls this once per block, each with its own
+   freshly built model -- which is precisely why a block boundary costs what
+   docs/negative-results.md #2 measured. */
+static void encode_span(const uint8_t *buf, long n, Buf *out) {
     memset(lit_cnt, 0, sizeof(lit_cnt));
     memset(flag_cnt, 0, sizeof(flag_cnt));
-
-    /* Three ways in: no reference, a reference FASTA (prime now), or a state
-       file (priming already done). The last two produce identical models. */
-    uint8_t *ref = NULL; size_t refn = 0; uint64_t reffp = 0;
-    int from_state = refpath && is_state_file(refpath);
-    if (from_state) {
-        uint64_t rn = 0;
-        if (state_load(refpath, (size_t)n, &k, &rn, &reffp)) { free(buf); mix_free(); return 1; }
-        refn = (size_t)rn;
-    } else {
-        if (refpath) {
-            ref = ref_load(refpath, &refn);
-            if (!ref) { free(buf); return 1; }
-            reffp = ref_fingerprint(ref, refn);
-        }
-        if (mix_setup(k, refpath ? refn : (size_t)n, (size_t)n + refn, -1, -1)) {
-            free(buf); free(ref); mix_free(); return 1;
-        }
-    }
-
-    FILE *out = fopen(outpath, "wb");
-    if (!out) { perror("open output"); free(buf); free(ref); mix_free(); return 1; }
-    /* header: magic ('C' plain / 'U' reference), k, level, table geometry,
-       original length [, ref info]. Older magics are refused, never guessed at:
-       'A'/'R' predate the level byte, 'B'/'S' predate the stored geometry, and
-       'T' predates sticky reference anchors -- in every case the decoder cannot
-       rebuild the models the encoder used. Plain streams are unaffected by the
-       anchor rule (g_refbase is 0), so 'C' does not move. */
-    fputc('D', out); fputc('N', out); fputc('C', out); fputc(refpath ? 'U' : 'C', out);
-    fputc((int)k, out);
-    fputc(g_level, out);
-    /* The table geometry travels with the file. It used to be recomputed by the
-       decoder from the length and the COMPILE-TIME caps, which made
-       -DHASHBITS_MAX part of the format without anything saying so: a build with
-       a different cap decoded to wrong bytes and reported success. State files
-       always stored their geometry; the stream did not. Now both do. */
-    fputc(g_hashbits, out);
-    fputc(g_mhb, out);
-    put64(out, (uint64_t)n);
-    if (refpath) { put64(out, (uint64_t)refn); put64(out, reffp); }
-
-    if (ref) { prime_with_reference(ref, refn); free(ref); ref = NULL; }
-    /* Everything primed so far is the reference; its anchors are the ones the
-       target must not overwrite. Set from refpath, not from `ref`, so a state
-       file marks the boundary exactly like a FASTA does. */
-    if (refpath) g_refbase = g_npos;
-
-    Buf cs = { NULL, 0, 0, 0 };
-    REnc e; renc_init(&e, &cs);
+    REnc e; renc_init(&e, out);
     uint64_t hist = 0;
     int run = 0;
 
@@ -1346,17 +1300,199 @@ static int do_compress(const char *inpath, const char *outpath, int k, const cha
         if (ft + 1 >= CAP) { fc[0] >>= 1; fc[1] >>= 1; }
     }
     renc_flush(&e);
-    if (cs.err) { fprintf(stderr, "out of memory while coding\n");
-                  buf_free(&cs); fclose(out); free(buf); mix_free(); return 1; }
-    if (cs.len && fwrite(cs.p, 1, cs.len, out) != cs.len) {
-        perror("write output"); buf_free(&cs); fclose(out); free(buf); mix_free(); return 1; }
+}
+
+static int do_compress(const char *inpath, const char *outpath, int k, const char *refpath) {
+    FILE *in = fopen(inpath, "rb");
+    if (!in) { perror("open input"); return 1; }
+    fseek(in, 0, SEEK_END);
+    long n = ftell(in);
+    fseek(in, 0, SEEK_SET);
+    if (n < 0) { fclose(in); fprintf(stderr, "bad input size\n"); return 1; }
+    uint8_t *buf = (uint8_t *)malloc((size_t)n ? (size_t)n : 1);
+    if (n && fread(buf, 1, (size_t)n, in) != (size_t)n) { perror("read"); fclose(in); return 1; }
+    fclose(in);
+
+    memset(lit_cnt, 0, sizeof(lit_cnt));
+    memset(flag_cnt, 0, sizeof(flag_cnt));
+
+    /* Three ways in: no reference, a reference FASTA (prime now), or a state
+       file (priming already done). The last two produce identical models. */
+    uint8_t *ref = NULL; size_t refn = 0; uint64_t reffp = 0;
+    int from_state = refpath && is_state_file(refpath);
+    if (from_state) {
+        uint64_t rn = 0;
+        if (state_load(refpath, (size_t)n, &k, &rn, &reffp)) { free(buf); mix_free(); return 1; }
+        refn = (size_t)rn;
+    } else {
+        if (refpath) {
+            ref = ref_load(refpath, &refn);
+            if (!ref) { free(buf); return 1; }
+            reffp = ref_fingerprint(ref, refn);
+        }
+        /* With -j N the tables are sized from one BLOCK, not the file: every span
+           only ever sees its own bases, and this is why N threads do not cost N
+           times the memory (measured: 83 MB per block of 8 against 595 MB whole). */
+        int pre_nb = g_blocks; if (pre_nb > n) pre_nb = (int)(n > 0 ? n : 1); if (pre_nb < 1) pre_nb = 1;
+        size_t sizing = refpath ? refn : (size_t)((n + pre_nb - 1) / pre_nb);
+        if (sizing < 1) sizing = 1;
+        if (mix_setup(k, sizing, (size_t)n + refn, -1, -1)) {
+            free(buf); free(ref); mix_free(); return 1;
+        }
+
+    }
+
+    /* Decide the block count BEFORE the header is written: a tiny input can force
+       it back down to one, and the magic must agree with what actually follows.
+       (It did not, once: the magic said 'P' while the collapsed encoder wrote no
+       block table, and the decoder reported a truncated one.) */
+    int nb = g_blocks;
+    if (nb > n) nb = (int)(n > 0 ? n : 1);
+    long bsz = (n + nb - 1) / nb;
+    if (bsz < 1) { bsz = 1; nb = 1; }
+
+    FILE *out = fopen(outpath, "wb");
+    if (!out) { perror("open output"); free(buf); free(ref); mix_free(); return 1; }
+    /* header: magic ('C' plain / 'U' reference), k, level, table geometry,
+       original length [, ref info]. Older magics are refused, never guessed at:
+       'A'/'R' predate the level byte, 'B'/'S' predate the stored geometry, and
+       'T' predates sticky reference anchors -- in every case the decoder cannot
+       rebuild the models the encoder used. Plain streams are unaffected by the
+       anchor rule (g_refbase is 0), so 'C' does not move. 'P' is a plain stream
+       cut into blocks (-j N); it carries a block table after the length, and a
+       decoder that predates it says "not a dnac file" rather than misreading
+       the count as coded data. */
+
+    fputc('D', out); fputc('N', out); fputc('C', out);
+    fputc(refpath ? 'U' : (nb > 1 ? 'P' : 'C'), out);
+
+    fputc((int)k, out);
+    fputc(g_level, out);
+    /* The table geometry travels with the file. It used to be recomputed by the
+       decoder from the length and the COMPILE-TIME caps, which made
+       -DHASHBITS_MAX part of the format without anything saying so: a build with
+       a different cap decoded to wrong bytes and reported success. State files
+       always stored their geometry; the stream did not. Now both do. */
+    fputc(g_hashbits, out);
+    fputc(g_mhb, out);
+    put64(out, (uint64_t)n);
+    if (refpath) { put64(out, (uint64_t)refn); put64(out, reffp); }
+
+    if (ref) { prime_with_reference(ref, refn); free(ref); ref = NULL; }
+    /* Everything primed so far is the reference; its anchors are the ones the
+       target must not overwrite. Set from refpath, not from `ref`, so a state
+       file marks the boundary exactly like a FASTA does. */
+    if (refpath) g_refbase = g_npos;
+
+    /* One span per block, each with a MODEL OF ITS OWN -- mix_setup resets every
+       table, counter, weight and anchor -- because a decoder working on block j
+       cannot see blocks 0..j-1 while other cores are still producing them. The
+       geometry is sized from the block length, once, so every block agrees with
+       the single hashbits/mhb pair already in the header. */
+    Buf *bufs = (Buf *)calloc((size_t)nb, sizeof(Buf));
+    if (!bufs) { fprintf(stderr, "out of memory\n"); fclose(out); free(buf); mix_free(); return 1; }
+    Buf cs = { NULL, 0, 0, 0 };
+    if (nb == 1) {
+        encode_span(buf, n, &cs);
+    } else {
+        for (int b = 0; b < nb; b++) {
+            long start = (long)b * bsz;
+            long blen  = (start + bsz <= n) ? bsz : n - start;
+            if (blen < 0) blen = 0;
+            if (b > 0) {
+                mix_free();
+                if (mix_setup(k, (size_t)bsz, (size_t)blen + 1, g_hashbits, g_mhb)) {
+                    for (int q = 0; q < nb; q++) buf_free(&bufs[q]);
+                    free(bufs); fclose(out); free(buf); return 1;
+                }
+            }
+            encode_span(buf + start, blen, &bufs[b]);
+            if (bufs[b].err) {
+                fprintf(stderr, "out of memory while coding\n");
+                for (int q = 0; q < nb; q++) buf_free(&bufs[q]);
+                free(bufs); fclose(out); free(buf); mix_free(); return 1;
+            }
+        }
+    }
+
+    if (nb == 1) {
+        if (cs.err) { fprintf(stderr, "out of memory while coding\n");
+                      buf_free(&cs); free(bufs); fclose(out); free(buf); mix_free(); return 1; }
+        if (cs.len && fwrite(cs.p, 1, cs.len, out) != cs.len) {
+            perror("write output"); buf_free(&cs); free(bufs); fclose(out); free(buf); mix_free(); return 1; }
+    } else {
+        /* block table: the count, then each span size. Raw lengths are derivable
+           from n and the count, so they are not stored. */
+        fputc(nb, out);
+        for (int b = 0; b < nb; b++) put64(out, (uint64_t)bufs[b].len);
+        for (int b = 0; b < nb; b++)
+            if (bufs[b].len && fwrite(bufs[b].p, 1, bufs[b].len, out) != bufs[b].len) {
+                perror("write output");
+                for (int q = 0; q < nb; q++) buf_free(&bufs[q]);
+                free(bufs); fclose(out); free(buf); mix_free(); return 1;
+            }
+    }
     buf_free(&cs);
+    for (int b = 0; b < nb; b++) buf_free(&bufs[b]);
+    free(bufs);
     fclose(out);
     free(buf); mix_free();
     return 0;
 }
 
 /* ------------------------------ Decompress ---------------------------------- */
+
+/* The mirror of encode_span: decode n bytes from one coded span into dst.
+   Writes to memory, not a handle, so a parallel decoder can hand each thread
+   its own slice of the output and its own slice of the stream. */
+static void decode_span(const uint8_t *cs, size_t cs_len, uint64_t n, uint8_t *dst) {
+    memset(lit_cnt, 0, sizeof(lit_cnt));
+    memset(flag_cnt, 0, sizeof(flag_cnt));
+    RDec d; rdec_init(&d, cs, cs_len);
+    uint64_t hist = 0;
+    int run = 0;
+
+    for (uint64_t p = 0; p < n; p++) {
+        /* ctxv depends only on history, so it is known before the flag is
+           decoded -- compute and prefetch here, giving the flag decode as
+           latency cover. A hint only: no model state is touched. */
+        uint64_t ctxv[MAXIN];
+        for (int i = 0; i < g_nmodels; i++)
+            ctxv[i] = (g_tol[i] ? g_thist : hist) & g_ctxmask[i];
+        mix_prefetch(ctxv);
+
+        int rc = run < RUNCAP ? run : RUNCAP;
+        uint16_t *fc = &flag_cnt[rc * 2];
+        uint32_t f0 = (uint32_t)fc[0] + 1, f1 = (uint32_t)fc[1] + 1, ft = f0 + f1;
+        uint32_t fdv = rdec_getfreq(&d, ft);
+        int isbase = (fdv < f0);
+        if (isbase) { rdec_update(&d, 0, f0); fc[0]++; }
+        else        { rdec_update(&d, f0, f1); fc[1]++; }
+
+        if (isbase) {
+            int s = code_base_dec(&d, ctxv, hist);
+            dst[p] = (uint8_t)SYM_TO_BASE[s];
+            hist = (hist << 2) | (uint64_t)s;
+            ir_prefetch(hist);        /* overlaps match_after/stcm_after below */
+            match_after(s, hist);
+            stcm_after(s, hist);
+            ir_train(hist, g_thist);
+            run++;
+        } else {
+            uint32_t lf[256], ltot = 0;
+            for (int i = 0; i < 256; i++) { lf[i] = (uint32_t)lit_cnt[i] + 1; ltot += lf[i]; }
+            uint32_t ldv = rdec_getfreq(&d, ltot);
+            uint32_t lcum = 0; int b = 0;
+            while (b < 255 && lcum + lf[b] <= ldv) { lcum += lf[b]; b++; }
+            rdec_update(&d, lcum, lf[b]);
+            dst[p] = (uint8_t)b;
+            lit_cnt[b]++;
+            if (ltot + 1 >= CAP) for (int i = 0; i < 256; i++) lit_cnt[i] >>= 1;
+            run = 0;
+        }
+        if (ft + 1 >= CAP) { fc[0] >>= 1; fc[1] >>= 1; }
+    }
+}
 
 static int do_decompress(const char *inpath, const char *outpath, const char *refpath) {
     FILE *in = fopen(inpath, "rb");
@@ -1380,10 +1516,11 @@ static int do_decompress(const char *inpath, const char *outpath, const char *re
                         " build's and it cannot be read safely\n");
         fclose(in); return 1;
     }
-    if (m0 != 'D' || m1 != 'N' || m2 != 'C' || (m3 != 'C' && m3 != 'U')) {
+    if (m0 != 'D' || m1 != 'N' || m2 != 'C' || (m3 != 'C' && m3 != 'U' && m3 != 'P')) {
         fprintf(stderr, "not a dnac file\n"); fclose(in); return 1;
     }
     int need_ref = (m3 == 'U');
+    int blocked  = (m3 == 'P');   /* plain stream cut into independent spans */
     if (need_ref && !refpath) {
         fprintf(stderr, "this file was compressed against a reference: use  dnac dr <in> <out> <ref.fa>\n");
         fclose(in); return 1;
@@ -1411,6 +1548,17 @@ static int do_decompress(const char *inpath, const char *outpath, const char *re
     uint64_t len = get64(in);
     uint64_t refn_hdr = 0, refhash_hdr = 0;
     if (need_ref) { refn_hdr = get64(in); refhash_hdr = get64(in); }
+    int nb = 1;
+    uint64_t *blen_c = NULL;
+    if (blocked) {
+        int c = fgetc(in);
+        if (c <= 0) { fprintf(stderr, "truncated block table\n"); fclose(in); return 1; }
+        nb = c;
+        blen_c = (uint64_t *)malloc((size_t)nb * sizeof(uint64_t));
+        if (!blen_c) { fprintf(stderr, "out of memory\n"); fclose(in); return 1; }
+        for (int b = 0; b < nb; b++) blen_c[b] = get64(in);
+    }
+
 
     memset(lit_cnt, 0, sizeof(lit_cnt));
     memset(flag_cnt, 0, sizeof(flag_cnt));
@@ -1474,50 +1622,36 @@ static int do_decompress(const char *inpath, const char *outpath, const char *re
     if (!cs) { fprintf(stderr, "out of memory\n"); fclose(in); mix_free(); return 1; }
     if (fseek(in, cs_start, SEEK_SET) != 0 || (cs_len && fread(cs, 1, cs_len, in) != cs_len)) {
         perror("read input"); free(cs); fclose(in); mix_free(); return 1; }
-    RDec d; rdec_init(&d, cs, cs_len);
-    uint64_t hist = 0;
-    int run = 0;
-
-    for (uint64_t p = 0; p < len; p++) {
-        /* ctxv depends only on history, so it is known before the flag is
-           decoded -- compute and prefetch here, giving the flag decode as
-           latency cover. A hint only: no model state is touched. */
-        uint64_t ctxv[MAXIN];
-        for (int i = 0; i < g_nmodels; i++)
-            ctxv[i] = (g_tol[i] ? g_thist : hist) & g_ctxmask[i];
-        mix_prefetch(ctxv);
-
-        int rc = run < RUNCAP ? run : RUNCAP;
-        uint16_t *fc = &flag_cnt[rc * 2];
-        uint32_t f0 = (uint32_t)fc[0] + 1, f1 = (uint32_t)fc[1] + 1, ft = f0 + f1;
-        uint32_t fdv = rdec_getfreq(&d, ft);
-        int isbase = (fdv < f0);
-        if (isbase) { rdec_update(&d, 0, f0); fc[0]++; }
-        else        { rdec_update(&d, f0, f1); fc[1]++; }
-
-        if (isbase) {
-            int s = code_base_dec(&d, ctxv, hist);
-            fputc(SYM_TO_BASE[s], out);
-            hist = (hist << 2) | (uint64_t)s;
-            ir_prefetch(hist);        /* overlaps match_after/stcm_after below */
-            match_after(s, hist);
-            stcm_after(s, hist);
-            ir_train(hist, g_thist);
-            run++;
-        } else {
-            uint32_t lf[256], ltot = 0;
-            for (int i = 0; i < 256; i++) { lf[i] = (uint32_t)lit_cnt[i] + 1; ltot += lf[i]; }
-            uint32_t ldv = rdec_getfreq(&d, ltot);
-            uint32_t lcum = 0; int b = 0;
-            while (b < 255 && lcum + lf[b] <= ldv) { lcum += lf[b]; b++; }
-            rdec_update(&d, lcum, lf[b]);
-            fputc(b, out);
-            lit_cnt[b]++;
-            if (ltot + 1 >= CAP) for (int i = 0; i < 256; i++) lit_cnt[i] >>= 1;
-            run = 0;
+    uint8_t *dst = (uint8_t *)malloc(len ? (size_t)len : 1);
+    if (!dst) { fprintf(stderr, "out of memory\n"); free(blen_c); free(cs); fclose(out); fclose(in); mix_free(); return 1; }
+    if (!blocked) {
+        decode_span(cs, cs_len, len, dst);
+    } else {
+        /* Mirror the encoder exactly: block b gets a model built from scratch,
+           sized from the block, and sees only its own slice of the stream. */
+        uint64_t bsz = ((uint64_t)len + (uint64_t)nb - 1) / (uint64_t)nb;
+        size_t off = 0;
+        for (int b = 0; b < nb; b++) {
+            uint64_t start = (uint64_t)b * bsz;
+            uint64_t blen  = (start + bsz <= len) ? bsz : (start < len ? len - start : 0);
+            if (off + (size_t)blen_c[b] > cs_len) {
+                fprintf(stderr, "truncated block %d of %d\n", b + 1, nb);
+                free(dst); free(blen_c); free(cs); fclose(out); fclose(in); mix_free(); return 1;
+            }
+            if (b > 0) {
+                mix_free();
+                if (mix_setup(k, (size_t)bsz, (size_t)blen + 1, hb_hdr, mhb_hdr)) {
+                    free(dst); free(blen_c); free(cs); fclose(out); fclose(in); return 1;
+                }
+            }
+            decode_span(cs + off, (size_t)blen_c[b], blen, dst + start);
+            off += (size_t)blen_c[b];
         }
-        if (ft + 1 >= CAP) { fc[0] >>= 1; fc[1] >>= 1; }
     }
+    free(blen_c);
+    if (len && fwrite(dst, 1, (size_t)len, out) != (size_t)len) {
+        perror("write output"); free(dst); free(cs); fclose(out); fclose(in); mix_free(); return 1; }
+    free(dst);
     free(cs);
     fclose(out); fclose(in);
     mix_free();
@@ -1626,7 +1760,30 @@ static int set_level(int lvl) {
     return 0;
 }
 
+/* -j N is pulled out of argv before the positional CLI is parsed, so it can sit
+   anywhere on the line without disturbing the existing argument order. */
+static int take_j_flag(int *argc, char **argv) {
+    for (int i = 1; i < *argc; i++) {
+        int eat = 0; const char *val = NULL;
+        if (strcmp(argv[i], "-j") == 0 && i + 1 < *argc) { val = argv[i + 1]; eat = 2; }
+        else if (strncmp(argv[i], "-j", 2) == 0 && argv[i][2]) { val = argv[i] + 2; eat = 1; }
+        if (!eat) continue;
+        int nb = atoi(val);
+        if (nb < 1 || nb > 255) {
+            fprintf(stderr, "-j must be between 1 and 255\n");
+            return 1;
+        }
+        g_blocks = nb;
+        for (int q = i; q + eat < *argc; q++) argv[q] = argv[q + eat];
+        *argc -= eat;
+        i--;
+    }
+    return 0;
+}
+
 int main(int argc, char **argv) {
+    if (take_j_flag(&argc, argv)) return 1;
+
     if (argc >= 4 && strcmp(argv[1], "c") == 0) {
         int k = (argc >= 5) ? atoi(argv[4]) : 22;
         if (k < 1 || k > 28) { fprintf(stderr, "k (max order) must be 1..28\n"); return 1; }
@@ -1637,7 +1794,13 @@ int main(int argc, char **argv) {
         int k = (argc >= 6) ? atoi(argv[5]) : 22;
         if (k < 1 || k > 28) { fprintf(stderr, "k (max order) must be 1..28\n"); return 1; }
         if (argc >= 7 && set_level(atoi(argv[6]))) return 1;
+        if (g_blocks > 1) {
+            fprintf(stderr, "-j is not supported in reference mode yet: every block would"
+                            " need its own copy of the primed model\n");
+            return 1;
+        }
         return do_compress(argv[2], argv[3], k, argv[4]);
+
     }
     if (argc >= 4 && strcmp(argv[1], "d") == 0) {
         return do_decompress(argv[2], argv[3], NULL);

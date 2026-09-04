@@ -509,6 +509,7 @@ make bench                        # bits/base on whatever is in ./data
 ./bench.ps1 -Exe .\dnac.exe -File .\chr21.fa -K 22   # round-trip + bits/base
 ./bench.ps1 ... -Fast                                # compress only (param sweeps)
 ./adversarial.ps1 -Exe .\dnac.exe                    # 145 losslessness round-trips
+./sweep-tables.ps1 -Macro MHBITS_MAX -Caps 26,25      # table size vs bits/base vs RAM
 ```
 
 No compiler yet? `build.ps1` prints install options; **w64devkit** is the
@@ -536,6 +537,12 @@ Try a **real** genome: download a `.fa` from NCBI/Ensembl and
   `scripts/roundtrip.sh` is the POSIX port CI runs; it covers the same ground
   plus an out-of-range level, the reference path at every level, a state/stream
   level mismatch and the block modes, for 192.
+- `sweep-tables.ps1` — re-derives the table-size trade-off in `PROGRESS.md` §11
+  (`-Macro HASHBITS_MAX|MHBITS_MAX`, `-Caps 26,25,24`). Every point round-trips
+  and every archive's header is read back to confirm the geometry actually used.
+  Answer: per unit of compression given up, `HASHBITS_MAX` buys 5.4x more memory
+  than `MHBITS_MAX`, so the anchor tables keep their headroom and HASHBITS is the
+  lever if memory has to come down.
 - `Makefile`, `scripts/*.sh` — the same build, losslessness and benchmark paths
   for Linux/macOS/WSL, plus `scripts/get-data.sh` which fetches the exact
   sequences the tables above were measured on, by accession.

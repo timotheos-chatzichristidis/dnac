@@ -314,18 +314,38 @@ What varies *between builds*, or between the file and its documentation, needs a
 different kind of check. Hence the new CI step that compresses with one geometry
 and decodes with another.
 
-### Next: the MHBITS_MAX sweep (not yet run)
+### The MHBITS_MAX sweep — RUN 2026-09-04, and the default stays at 26
 
-The anchor tables are ~536 MB of the 1.24 GB peak — two match models at
-2^26 x 4 bytes — and `MHBITS_MAX` was left untouched by the 2026-08-18 sweep,
-which only moved `HASHBITS_MAX`. They deliberately get +2 doublings of headroom
-on the argument that a collision there hands the model a WRONG match rather than
-blurred statistics, so the trade may well be real; it has simply never been
-measured. Method: same as the HASHBITS sweep (`-DMHBITS_MAX=`, full chr21.seq at
--l3, record bytes / seconds / peak working set). Expect a memory win, not a speed
-one — that was the lesson from HASHBITS, where 2.4x less RAM bought only 1.11x.
-Safe to run and to adopt now: since v0.3.0 the geometry travels in the header, so
-changing the default no longer breaks anyone's archives.
+The anchor tables are ~536 MB of the 1.24 GB peak (two match models at
+2^26 x 4 bytes) and the 2026-08-18 sweep only moved `HASHBITS_MAX`. They get +2
+doublings of headroom deliberately, on the argument that a collision there hands
+the model a WRONG match rather than blurred statistics. That argument had never
+been tested. It is now, on the full chr21.seq at -l3, every point SHA-256
+round-tripped and every archive's header read back to confirm the geometry
+actually used (`hashbits=24` throughout, `mhb` = the cap):
+
+| `MHBITS_MAX` | anchors | bytes | bits/base | vs 26 | peak RSS | vs 26 |
+|---|---:|---:|---:|---:|---:|---:|
+| 23 | 64 MB | 7,551,429 | 1.5069 | +0.601% | 918 MB | -26.8% |
+| 24 | 128 MB | 7,532,466 | 1.5032 | +0.349% | 966 MB | -23.0% |
+| 25 | 256 MB | 7,516,513 | 1.5000 | +0.137% | 1,061 MB | -15.4% |
+| **26 (default)** | 512 MB | **7,506,264** | **1.4979** | — | 1,254 MB | — |
+| 27 | 1,024 MB | 7,499,327 | 1.4965 | -0.092% | 1,638 MB | +30.6% |
+
+Going up is not worth it: 0.092% for another 384 MB. Going down is steeper than
+it looks, and the useful number is the comparison with the *other* lever —
+`HASHBITS_MAX` 26->25 costs +0.051% for -31% RAM, while `MHBITS_MAX` 26->25 costs
++0.137% for -15.4%. **Per unit of compression given up, HASHBITS buys 5.4x more
+memory.** So the standing suspicion that the anchors' +2 doublings were excessive
+is wrong: anchor space is the expensive space, exactly for the reason it was given
+the headroom in the first place. If memory has to come down, HASHBITS is the lever.
+
+**No speed conclusion is drawn from this sweep, deliberately.** Cap 26 was run
+twice on identical input and produced byte-identical output in 170.3 s and
+137.7 s — 24% run-to-run variance, which swamps the sweep's entire 134.7–170.3 s
+range. That is the negative control for the timing column, and it confirms the
+HASHBITS lesson a second time: shrinking tables buys memory, NOT speed. Any future
+speed claim measured on this machine needs repeats, not a single run.
 
 Known and accepted: `cr`/`prime` silently ignore a user-supplied `k`/`lvl` when
 the reference is a state file (the state's own values win). Consistent and

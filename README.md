@@ -133,6 +133,20 @@ dnac c in.fa out.dnac 22 1     # k=22, level 1
 dnac d out.dnac back.fa        # no level needed: it is in the header
 ```
 
+### `-map` — where the bits actually go
+
+```sh
+dnac c chr21.fa out.dnac 22 -map chr21.map.tsv -mapw 1000
+```
+
+While compressing, `-map` writes one row per window of `-mapw` bases (default
+1000) with what that window cost: `-log2(p)` summed over every bit the coder
+wrote. It is a diagnostic for tuning — it reads probabilities the coder computed
+anyway and touches no model state, so **the archive is byte-identical with and
+without it**, and both round-trip suites check exactly that. Encode only, and it
+needs `-j 1`: with several blocks the windows would be filled in whatever order
+the threads happen to finish.
+
 The level is stored in the header, not passed to the decoder, because it decides
 *which models exist* — it is part of the format, not a hint. A primed state
 carries its level too, and decoding a stream with a state primed at a different
@@ -466,7 +480,7 @@ exact/diverged/inverted repeats), across many values of `k`.
 
 ```sh
 make                              # cc -O2 -Wall -Wextra -o dnac dnac.c -lm
-make test                         # 191 SHA-256 round-trips (plain, reference, level, state, blocks)
+make test                         # 192 SHA-256 round-trips (plain, reference, level, state, blocks)
 sh scripts/get-data.sh --human    # fetch the exact genomes benchmarked below
 make bench                        # bits/base on whatever is in ./data
 ```
@@ -494,7 +508,7 @@ make bench                        # bits/base on whatever is in ./data
 # measurement
 ./bench.ps1 -Exe .\dnac.exe -File .\chr21.fa -K 22   # round-trip + bits/base
 ./bench.ps1 ... -Fast                                # compress only (param sweeps)
-./adversarial.ps1 -Exe .\dnac.exe                    # 144 losslessness round-trips
+./adversarial.ps1 -Exe .\dnac.exe                    # 145 losslessness round-trips
 ```
 
 No compiler yet? `build.ps1` prints install options; **w64devkit** is the
@@ -514,20 +528,21 @@ Try a **real** genome: download a `.fa` from NCBI/Ensembl and
 - `build.ps1`, `test.ps1` — Windows build & demo.
 - `bench.ps1` — round-trip + bits/base for one build on one file (`-Fast` to
   compress only, for parameter sweeps).
-- `adversarial.ps1` — 144 SHA-256-verified round-trips: 10 nasty inputs × 6
+- `adversarial.ps1` — 145 SHA-256-verified round-trips: 10 nasty inputs × 6
   values of `k`, × 3 compression levels, plus reference mode (unrelated/short/
-  messy references, primed state files, FASTA↔state interchange) and the
-  refusals: the wrong reference, and a state file from an older dnac.
-  `scripts/roundtrip.sh` is the POSIX port CI runs and adds 5 more checks (an
-  out-of-range level, the reference path at every level, and a state/stream
-  level mismatch) for 149.
+  messy references, primed state files, FASTA↔state interchange), the refusals
+  (the wrong reference, a state file from an older dnac) and the check that
+  `-map` leaves the compressed bytes byte-identical.
+  `scripts/roundtrip.sh` is the POSIX port CI runs; it covers the same ground
+  plus an out-of-range level, the reference path at every level, a state/stream
+  level mismatch and the block modes, for 192.
 - `Makefile`, `scripts/*.sh` — the same build, losslessness and benchmark paths
   for Linux/macOS/WSL, plus `scripts/get-data.sh` which fetches the exact
   sequences the tables above were measured on, by accession.
 - `docs/negative-results.md` — what was measured and rejected, including the
   test showing the reference-mode advantage does **not** transfer outside DNA.
 - `.github/workflows/ci.yml` — every push builds on gcc and clang, Linux and
-  macOS, and must pass all 191 round-trips, plus a cross-build portability check
+  macOS, and must pass all 192 round-trips, plus a cross-build portability check
   that compresses with one table geometry and decodes with another.
 - `README.md` — this file.
 

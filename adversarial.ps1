@@ -137,6 +137,20 @@ $n++
 if ($LASTEXITCODE -eq 0) { $fail++; Write-Host "FAIL: a v0.2.x stream was accepted" -ForegroundColor Red }
 Remove-Item $v02, (Join-Path $dir "v02.out") -Force -ErrorAction SilentlyContinue
 
+# -map is a diagnostic, not part of the format: the same input must compress to
+# byte-identical bytes with and without it. Nothing else in this file can catch a
+# flag that quietly perturbs the coder, because every other case runs one binary
+# with one set of arguments -- the same blind spot that hid three earlier bugs.
+$m1 = Join-Path $dir "map_off.dnac"; $m2 = Join-Path $dir "map_on.dnac"
+$mt = Join-Path $dir "map.tsv"
+& $Exe c $files[-1] $m1 16 | Out-Null
+& $Exe c $files[-1] $m2 16 -map $mt | Out-Null
+$n++
+if ((Get-FileHash $m1 -Algorithm SHA256).Hash -ne (Get-FileHash $m2 -Algorithm SHA256).Hash) {
+    $fail++; Write-Host "FAIL: -map changed the compressed bytes" -ForegroundColor Red
+}
+Remove-Item $m1, $m2, $mt -Force -ErrorAction SilentlyContinue
+
 if ($fail -ne 0) { Write-Host "$fail of $n FAILED" -ForegroundColor Red; exit 1 }
 Write-Host "$n/$n adversarial roundtrips lossless" -ForegroundColor Green
 exit 0   # the wrong-reference test leaves $LASTEXITCODE=1 on purpose

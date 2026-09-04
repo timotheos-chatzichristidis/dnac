@@ -1030,6 +1030,76 @@ static void prime_with_reference(const uint8_t *ref, size_t n) {
     }
 }
 
+
+/* ------------------- Per-base bit-cost map (diagnostic only) -----------------
+   The coder already knows, for every bit it writes, the probability it assigned
+   to that bit. -log2(that probability) IS what the bit costs. Summing the two
+   bits of a base gives the cost of the base; bucketing by position gives a map
+   of WHERE the input surprised the model -- which model is failing, and where.
+
+   This exists for tuning, not for the format. It is write-only: it reads
+   probabilities the coder computed anyway and touches no model state, so a build
+   with the map compiled in emits byte-identical archives and -map changes
+   nothing but the extra TSV. adversarial.ps1 and scripts/roundtrip.sh both
+   assert that identity, because "diagnostics that cannot alter output" is
+   exactly the kind of claim that rots silently.
+
+   The arithmetic coder rounds, so the windows sum to slightly less than the real
+   file; the difference is a few bytes over a genome. Deliberately NOT
+   thread-local: -map refuses -j > 1 rather than hand back a map whose windows
+   were filled in whatever order the threads finished. */
+static double   *g_map    = NULL;    /* bits per window                        */
+static uint64_t *g_mapn   = NULL;    /* bases per window                       */
+static uint64_t  g_mapw   = 1000;    /* window size, in bases                  */
+static uint64_t  g_mapnw  = 0;       /* number of windows                      */
+static uint64_t  g_mappos = 0;       /* bases coded so far                     */
+static double    g_mapcur = 0.0;     /* bits of the base in progress           */
+static const char *g_mappath = NULL;
+
+static void map_bit(int bit, uint32_t p1) {
+    if (!g_map) return;
+    double p = bit ? (double)p1 : (double)(PSCALE - p1);
+    g_mapcur += -log2(p / (double)PSCALE);
+}
+
+static void map_base(void) {
+    if (!g_map) return;
+    uint64_t w = g_mappos / g_mapw;
+    if (w < g_mapnw) { g_map[w] += g_mapcur; g_mapn[w]++; }
+    g_mappos++;
+    g_mapcur = 0.0;
+}
+
+static int map_alloc(uint64_t upper_bound_bases) {
+    g_mapnw = upper_bound_bases / g_mapw + 2;
+    g_map  = (double   *)calloc((size_t)g_mapnw, sizeof(double));
+    g_mapn = (uint64_t *)calloc((size_t)g_mapnw, sizeof(uint64_t));
+    if (!g_map || !g_mapn) { fprintf(stderr, "out of memory for the map\n"); return 1; }
+    g_mappos = 0; g_mapcur = 0.0;
+    return 0;
+}
+
+/* tgt_start counts BASES, not file bytes: FASTA headers and newlines go down the
+   literal path and never reach a window. */
+static int map_dump(const char *path) {
+    FILE *f = fopen(path, "wb");
+    if (!f) { perror("open map"); return 1; }
+    fprintf(f, "window\tstart_base\tbases\tbits\tbits_per_base\n");
+    for (uint64_t w = 0; w < g_mapnw; w++) {
+        if (!g_mapn[w]) continue;
+        fprintf(f, "%llu\t%llu\t%llu\t%.4f\t%.6f\n",
+                (unsigned long long)w, (unsigned long long)(w * g_mapw),
+                (unsigned long long)g_mapn[w], g_map[w],
+                g_map[w] / (double)g_mapn[w]);
+    }
+    fclose(f);
+    fprintf(stderr, "map: %llu bases in %llu-base windows -> %s\n",
+            (unsigned long long)g_mappos, (unsigned long long)g_mapw, path);
+    return 0;
+}
+
+static void map_free(void) { free(g_map); free(g_mapn); g_map = NULL; g_mapn = NULL; }
+
 static void code_base_enc(REnc *e, const uint64_t *ctxv, uint64_t hist, int s) {
     double st[MAXIN], pp; uint16_t *slot[MAXIN], *ex[NMATCH + 1];
     int b1 = s >> 1, b0 = s & 1;
@@ -1040,16 +1110,23 @@ static void code_base_enc(REnc *e, const uint64_t *ctxv, uint64_t hist, int s) {
 
     extra_slots(0, 0, ex);
     mix_predict(0, mc, ctxv, ex, st, slot, &ms, &pp);
-    renc_bit(e, b1, pq_of(sse_apply(0, hist, pp, &ss)));
+    uint32_t q1 = pq_of(sse_apply(0, hist, pp, &ss));   /* hoisted so the map sees
+                                                           the same number the
+                                                           coder was handed */
+    renc_bit(e, b1, q1);
+    map_bit(b1, q1);
     mix_update(0, mc, st, slot, b1, pp, &ms);
     sse_update(0, hist, &ss, b1);
 
     int node = b1 ? 2 : 1;
     extra_slots(node, b1, ex);
     mix_predict(node, mc, ctxv, ex, st, slot, &ms, &pp);
-    renc_bit(e, b0, pq_of(sse_apply(node, hist, pp, &ss)));
+    uint32_t q0 = pq_of(sse_apply(node, hist, pp, &ss));
+    renc_bit(e, b0, q0);
+    map_bit(b0, q0);
     mix_update(node, mc, st, slot, b0, pp, &ms);
     sse_update(node, hist, &ss, b0);
+    map_base();
 }
 static int code_base_dec(RDec *d, const uint64_t *ctxv, uint64_t hist) {
     double st[MAXIN], pp; uint16_t *slot[MAXIN], *ex[NMATCH + 1];
@@ -1507,6 +1584,11 @@ static int do_compress(const char *inpath, const char *outpath, int k, const cha
     Buf *bufs = (Buf *)calloc((size_t)nb, sizeof(Buf));
     if (!bufs) { fprintf(stderr, "out of memory\n"); fclose(out); free(buf); mix_free(); return 1; }
     Buf cs = { NULL, 0, 0, 0 };
+    /* n bytes is an upper bound on the number of bases, which is all the map
+       needs to size itself; empty windows are simply not printed. */
+    if (g_mappath && map_alloc((uint64_t)n)) {
+        free(bufs); fclose(out); free(buf); mix_free(); return 1;
+    }
     if (nb == 1) {
         encode_span(buf, n, &cs);
     } else {
@@ -1547,6 +1629,7 @@ static int do_compress(const char *inpath, const char *outpath, int k, const cha
     free(bufs);
     fclose(out);
     free(buf); mix_free();
+    if (g_mappath) { int r = map_dump(g_mappath); map_free(); if (r) return 1; }
     return 0;
 }
 
@@ -1904,8 +1987,35 @@ static int take_j_flag(int *argc, char **argv) {
     return 0;
 }
 
+
+/* -map <file> and -mapw <bases> leave argv the same way -j does, so they can sit
+   anywhere on the line without disturbing the positional arguments. */
+static int take_map_flags(int *argc, char **argv) {
+    for (int i = 1; i < *argc; i++) {
+        int eat = 0;
+        if (strcmp(argv[i], "-map") == 0 && i + 1 < *argc) {
+            g_mappath = argv[i + 1]; eat = 2;
+        } else if (strcmp(argv[i], "-mapw") == 0 && i + 1 < *argc) {
+            long w = atol(argv[i + 1]);
+            if (w < 1) { fprintf(stderr, "-mapw must be at least 1\n"); return 1; }
+            g_mapw = (uint64_t)w; eat = 2;
+        }
+        if (!eat) continue;
+        for (int q = i; q + eat < *argc; q++) argv[q] = argv[q + eat];
+        *argc -= eat;
+        i--;
+    }
+    return 0;
+}
+
 int main(int argc, char **argv) {
     if (take_j_flag(&argc, argv)) return 1;
+    if (take_map_flags(&argc, argv)) return 1;
+    if (g_mappath && g_blocks > 1) {
+        fprintf(stderr, "-map needs -j 1: with several blocks the windows would be"
+                        " filled in whatever order the threads happen to finish\n");
+        return 1;
+    }
 
     if (argc >= 4 && strcmp(argv[1], "c") == 0) {
         int k = (argc >= 5) ? atoi(argv[4]) : 22;
@@ -1957,6 +2067,9 @@ int main(int argc, char **argv) {
         "  dnac prime <ref.fa> <state> [k] [lvl]  pay the priming pass once\n"
         "     lvl = 1 fast (~2.2x, +0.4%% size) | 2 balanced | 3 max (default)\n"
         "  dnac gen <out> <bases> [seed] generate a structured sample\n"
-        "  dnac mut <in> <out> [per-mille] [seed]   simulate a resequenced genome\n");
+        "  dnac mut <in> <out> [per-mille] [seed]   simulate a resequenced genome\n"
+        "  -map <file.tsv> [-mapw N]     write a per-window bit-cost map while\n"
+        "                                compressing (encode only, -j 1; the\n"
+        "                                archive is byte-identical either way)\n");
     return 1;
 }

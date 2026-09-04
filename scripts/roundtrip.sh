@@ -186,6 +186,18 @@ if "$EXE" d v02.dnac v02.out >/dev/null 2>&1; then
 fi
 rm -f v02.dnac v02.out
 
+# -map is a diagnostic, not part of the format: the same input must compress to
+# byte-identical bytes with and without it. Nothing else in this file can catch a
+# flag that quietly perturbs the coder, because every other case runs one binary
+# with one set of arguments -- the same blind spot that hid three earlier bugs.
+"$EXE" c diverged.fa map_off.dnac 16 >/dev/null
+"$EXE" c diverged.fa map_on.dnac 16 -map map.tsv >/dev/null 2>&1
+n=$((n+1))
+if ! cmp -s map_off.dnac map_on.dnac; then
+  fail=$((fail+1)); echo "FAIL: -map changed the compressed bytes"
+fi
+rm -f map_off.dnac map_on.dnac map.tsv
+
 # ------------------------------------------------------------------- verdict
 if [ "$fail" -ne 0 ]; then echo "$fail of $n FAILED"; exit 1; fi
 echo "$n/$n adversarial round-trips lossless"

@@ -52,6 +52,20 @@
 #include <string.h>
 #include <math.h>
 
+/* 64-bit file offsets. `long` is 32 bits on Windows (LLP64), so plain
+   fseek/ftell cap every file this program touches at 2 GB. That is invisible
+   on Linux, where long is 64 bits, and it is exactly how a 2.95 GB human
+   reference came back as "empty reference". A reference genome is the one
+   input routinely bigger than 2 GB, so for a DNA tool this is not a corner
+   case. Pure I/O: no bitstream, header or model change. */
+#if defined(_WIN32)
+  #define dnac_fseek64(f,o,w) _fseeki64((f),(o),(w))
+  #define dnac_ftell64(f)     _ftelli64(f)
+#else
+  #define dnac_fseek64(f,o,w) fseeko((f),(off_t)(o),(w))
+  #define dnac_ftell64(f)     ((int64_t)ftello(f))
+#endif
+
 /* Model state is per-thread. -j N runs N blocks on separate threads and each one
    is a COMPLETE codec: its own tables, counters, weights, anchors and history.
    Marking the state thread-local costs one keyword per declaration and no change
@@ -1163,9 +1177,9 @@ static int code_base_dec(RDec *d, const uint64_t *ctxv, uint64_t hist) {
 static uint8_t *ref_load(const char *path, size_t *n) {
     FILE *f = fopen(path, "rb");
     if (!f) { perror("open reference"); return NULL; }
-    fseek(f, 0, SEEK_END);
-    long sz = ftell(f);
-    fseek(f, 0, SEEK_SET);
+    dnac_fseek64(f, 0, SEEK_END);
+    int64_t sz = dnac_ftell64(f);
+    dnac_fseek64(f, 0, SEEK_SET);
     if (sz <= 0) { fclose(f); fprintf(stderr, "empty reference\n"); return NULL; }
     uint8_t *raw = (uint8_t *)malloc((size_t)sz);
     if (!raw || fread(raw, 1, (size_t)sz, f) != (size_t)sz) {
@@ -1174,7 +1188,7 @@ static uint8_t *ref_load(const char *path, size_t *n) {
     fclose(f);
     size_t m = 0;
     int in_header = 0;
-    for (long i = 0; i < sz; i++) {
+    for (int64_t i = 0; i < sz; i++) {
         int c = raw[i];
         if (c == '>' || c == ';') in_header = 1;
         if (c == '\n') { in_header = 0; continue; }
@@ -1492,9 +1506,9 @@ static void encode_span(const uint8_t *buf, long n, Buf *out) {
 static int do_compress(const char *inpath, const char *outpath, int k, const char *refpath) {
     FILE *in = fopen(inpath, "rb");
     if (!in) { perror("open input"); return 1; }
-    fseek(in, 0, SEEK_END);
-    long n = ftell(in);
-    fseek(in, 0, SEEK_SET);
+    dnac_fseek64(in, 0, SEEK_END);
+    int64_t n = dnac_ftell64(in);
+    dnac_fseek64(in, 0, SEEK_SET);
     if (n < 0) { fclose(in); fprintf(stderr, "bad input size\n"); return 1; }
     uint8_t *buf = (uint8_t *)malloc((size_t)n ? (size_t)n : 1);
     if (n && fread(buf, 1, (size_t)n, in) != (size_t)n) { perror("read"); fclose(in); return 1; }
@@ -1811,13 +1825,13 @@ static int do_decompress(const char *inpath, const char *outpath, const char *re
     /* Pull the coded stream into memory: a block-parallel decoder hands each
        thread its own slice, and even single-block decode no longer needs the
        handle. */
-    long cs_start = ftell(in);
-    if (cs_start < 0 || fseek(in, 0, SEEK_END) != 0) { perror("seek input"); fclose(in); mix_free(); return 1; }
-    long cs_end = ftell(in);
+    int64_t cs_start = dnac_ftell64(in);
+    if (cs_start < 0 || dnac_fseek64(in, 0, SEEK_END) != 0) { perror("seek input"); fclose(in); mix_free(); return 1; }
+    int64_t cs_end = dnac_ftell64(in);
     size_t cs_len = (size_t)(cs_end - cs_start);
     uint8_t *cs = (uint8_t *)malloc(cs_len ? cs_len : 1);
     if (!cs) { fprintf(stderr, "out of memory\n"); fclose(in); mix_free(); return 1; }
-    if (fseek(in, cs_start, SEEK_SET) != 0 || (cs_len && fread(cs, 1, cs_len, in) != cs_len)) {
+    if (dnac_fseek64(in, cs_start, SEEK_SET) != 0 || (cs_len && fread(cs, 1, cs_len, in) != cs_len)) {
         perror("read input"); free(cs); fclose(in); mix_free(); return 1; }
     uint8_t *dst = (uint8_t *)malloc(len ? (size_t)len : 1);
     if (!dst) { fprintf(stderr, "out of memory\n"); free(blen_c); free(cs); fclose(out); fclose(in); mix_free(); return 1; }

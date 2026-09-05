@@ -84,7 +84,7 @@ reverted because it did not pay:
 
 ---
 
-## 2. Block boundaries cannot be placed cheaply — parallel decode costs 2.5% to enter
+## 3. Block boundaries cannot be placed cheaply — parallel decode costs 2.5% to enter
 
 *Measured 2026-08-19.*
 
@@ -145,6 +145,100 @@ Two findings from the same sweep are *positive* and worth keeping:
   come from the reference, so each thread needs the full 600 MB (chr21: 1.25 GB).
   Sharing one *frozen* primed model across threads is the untested idea that
   would remove it.
+
+---
+
+## 4. `-j N` is a loss on high-coverage read data, and the prediction was inverted
+
+*Measured 2026-09-04.*
+
+Block mode gives 5.1x encode on 8 cores, and had never been measured on sequencing
+reads. The reasoning on record was that *a reads file has no long-range structure
+for a block boundary to cut*, so `-j 8` should cost under 1% against chr21's 4.4%.
+
+It costs **+12.97% at `-j 2` and +86.50% at `-j 8`** on a 46x-coverage short-read
+set — twenty times what a genome pays. The intuition was exactly backwards. At 46x
+coverage a reads file has almost *only* long-range structure: reads sit in random
+genome order, so a read overlaps one half a million positions away in the file,
+not its neighbour. Every read depends uniformly on the whole file, and at `-j 8`
+each block sees 5.8x coverage and relearns the genome from scratch.
+
+Confirmed as a mechanism rather than a dataset quirk by predicting the opposite
+case and checking it: at 0.0645x coverage (GIAB HG002) the same short-read blocking
+costs only **+3.72%**, and an 11.5x ONT set is **−2.34%** — blocking makes it
+*smaller* while running 3.4x faster. **Block cost tracks cross-read redundancy,
+i.e. coverage — not read length and not file size.**
+
+Not a table-geometry artefact: at these lengths the whole file and a 1/8 block
+both saturate the caps at `hashbits=24, mhb=26`, so only the block-local model
+differs.
+
+---
+
+## 5. Reference mode does not scale with the reference — it saturates at chromosome scale
+
+*Measured 2026-09-04.*
+
+`cr` primes the model on a reference and then codes the target through the normal
+path; it does not care that the target is a reads file. Pointed at reads for the
+first time, it looked like the best result the project had produced: reads that
+chr21 explains went from 1.1270 to **0.2708 bits/base, −76.0%**. At 0.0645x
+coverage that is the same neighbourhood as 0.2318 at 46x self-referential — the
+reference substituting for roughly 700x more data.
+
+The obvious extrapolation — that the whole read set would fall to ~0.27 with the
+whole human genome primed — was written down explicitly as an extrapolation and
+then **run. It was wrong by about a factor of five.** GRCh38 (2,948,627,755 bases,
+2 h 11 m to prime, a 3.88 GB state file) gives Illumina **1.3253** (−16.9%) and
+ONT **1.7745** (−1.25%).
+
+The control isolates the cause. The same reads, three references:
+
+| reference | bits/base |
+|---|---:|
+| none | 1.1270 |
+| chr21 alone (40 Mbp) | **0.2708** |
+| whole GRCh38 (2.95 Gbp) | **0.8639** |
+
+**73x more reference — one that strictly contains the chr21 that worked — made it
+3.2x worse.** The content is there; the index cannot reach it. Anchor tables hold
+2^26 buckets at one position each: chr21 is 0.60 positions per bucket, the genome
+is 43.9, so nearly every anchor is overwritten and the survivors are whatever was
+primed last.
+
+Lifting it needs 2^30–2^32 buckets — 8–34 GB of anchor tables plus 2.95 GB of
+history. **An index problem, not a model problem**, and the same problem CRAM
+solves with alignment instead of hashing.
+
+*Method note worth more than the number:* the `MHBITS_MAX` sweep run the same
+morning concluded "27 buys 0.092%, not worth it, 26 stays". Correct **on chr21**.
+At genome scale that same parameter is the binding constraint on the entire mode.
+A hyperparameter can look settled in one regime and be the ceiling in another —
+state the regime with the sweep.
+
+---
+
+## 6. Compression-as-classifier is already published, and our edge is absent where it counts
+
+*Checked 2026-09-05, before running the experiment.*
+
+A model that predicts DNA well also scores how well a given reference explains an
+unknown sample, which is a classifier — and the measured dynamic range is large:
+the right organism as reference gives 496x, an unrelated one costs +0.14%.
+
+That is **FALCON2** (Pratas & Pinho — the GeCo authors), published in
+*Bioinformatics* in 2026. They also already measured the hypothesis this project
+would have tested, that exact-k-mer tools go blind on short or damaged reads while
+a compression model degrades gracefully: 0.968 AUPRC against Kraken2's 0.184, and
+being 22x slower than Kraken2 was not disqualifying.
+
+Our own head-to-head says the idea would not transfer here anyway. Against GeCo3's
+reference templates dnac is 19.6% ahead on the near-identical pair and **1.1% ahead
+on the diverged pair** — and diverged is the case classification actually needs help
+with. Separation between a right and a wrong reference is set by biology, not by
+the last 1% of modelling: **a better compressor is not a better classifier.**
+
+Twenty minutes of prior-art reading closed a direction that would have cost weeks.
 
 ---
 

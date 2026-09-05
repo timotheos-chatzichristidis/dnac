@@ -5,6 +5,7 @@
 #
 #   sh scripts/get-data.sh          # bacteria only (~15 MB, seconds)
 #   sh scripts/get-data.sh --human  # also human chr21 (~12 MB gz -> 47 MB)
+#   sh scripts/get-data.sh --meta   # the metagenome for "Where this loses" (~300 MB)
 set -eu
 cd "$(dirname "$0")/.."
 mkdir -p data
@@ -34,6 +35,25 @@ if [ "${1:-}" = "--human" ]; then
   fi
   # The 10 MB slice used for fast parameter sweeps.
   [ -s chr21_slice.fa ] || head -c 10000000 chr21.fa > chr21_slice.fa
+fi
+
+if [ "${1:-}" = "--meta" ]; then
+  # The metagenome the "Where this loses" table was measured on. No reference
+  # genome exists for a metagenomic sample, which is what makes it the fair
+  # fight against gzip/zstd/xz. A 300 MB prefix of the run is plenty for the
+  # 200 Mbase stream; the range request keeps it honest (identical bytes) and
+  # small (the full run is 1.56 GB).
+  echo "Human gut metagenome (ENA DRR003618, 300 MB prefix):"
+  if [ -s meta.seq ]; then
+    echo "  have meta.seq"
+  else
+    [ -s gut.part.gz ] || curl -fsSL -r 0-314572799 -o gut.part.gz       "https://ftp.sra.ebi.ac.uk/vol1/fastq/DRR003/DRR003618/DRR003618.fastq.gz"
+    # every 4th line from the 2nd is the sequence; stop at exactly 200 Mbases so
+    # the file is byte-identical to the one the README table was measured on
+    gzip -dc gut.part.gz 2>/dev/null       | awk 'NR%4==2 { print; b+=length($0); if (b>=200000000) exit }' > meta.seq
+    rm -f gut.part.gz
+  fi
+  echo "  meta.seq: $(wc -c < meta.seq) bytes"
 fi
 
 echo

@@ -13,6 +13,13 @@ the measurement rewarded it, reverted when it did not. What the measurement
 *rejected* is written down as well, in
 [docs/negative-results.md](docs/negative-results.md).
 
+**Read [Where this loses](#where-this-loses) alongside the results below.** It is
+1.47x smaller than `zstd -19` on data with no reference and **635x slower to
+decompress**; on aligned reads CRAM wins on structure, because an aligner hands it
+each read's position for free; and its reference mode saturates at about
+chromosome scale. Those figures are measured to the same standard as the winning
+ones.
+
 ## Results (real genomes, bits per ACGT base — lower is better)
 
 | method                         | human chr21 | E. coli | notes |
@@ -114,6 +121,100 @@ and no comparison between the two decoders exists here.
 *chr21 = Ensembl GRCh38, 40,088,619 ACGT bases (the 6.6M `N` gap bytes and
 newlines are handled losslessly but excluded from bits/base). Compression is
 lossless — every result here was verified by SHA-256 round-trip.*
+
+## Where this loses
+
+Everything above is where `dnac` wins. This section is where it does not, measured
+with the same discipline, because a benchmark table that only reports its author's
+victories is an advertisement.
+
+Each figure says how it was obtained, because they were not all obtained the same
+way. The metagenome table is round-tripped and re-derivable — `sh
+scripts/get-data.sh --meta` fetches the same bytes and `./verify-claims.ps1 -Tier
+meta` re-runs it. The reference-scale table is round-tripped but needs a
+whole-genome priming pass (2 h 11 m, a 3.88 GB state file), so it is recorded with
+its method rather than wired into the registry. The CRAM figure is arithmetic and
+is labelled as such.
+
+### Against the general-purpose compressors, on data with no reference
+
+Human gut metagenome (ENA `DRR003618`), first 200,000,000 bases. Nobody has a
+reference genome for a metagenome, so this is the fair fight: our model against
+theirs, no outside information for either side.
+
+| tool | bytes | bits/base | encode | decode |
+|------|------:|----------:|-------:|-------:|
+| **dnac -l3** | 17,323,036 | **0.6929** | 439.8 s | 417.1 s |
+| **dnac -l1** | 17,653,816 | **0.7062** | 187.1 s | 190.6 s |
+| xz -9e | 25,072,456 | 1.0029 | 254.0 s | 2.0 s |
+| zstd -19 --long=27 | 25,427,359 | 1.0171 | 150.7 s | **0.3 s** |
+| bzip2 -9 | 46,527,654 | 1.8611 | 20.0 s | 6.3 s |
+| gzip -9 | 49,936,274 | 1.9975 | 126.3 s | 1.8 s |
+
+**1.47x smaller than zstd — a 31% saving, not the 2x that would make anyone
+change tools.** Against gzip it is 2.88x, but gzip is not what you would choose
+for a new archive.
+
+### Decompression is 635x slower than zstd, and that is structural
+
+`-l1` *encodes* in 187 s against zstd's 151 s — 24% slower, not the orders of
+magnitude one might assume. Decoding is the problem: **190.6 s against 0.3 s.**
+
+This does not get optimised away. A context-mixing decoder has to rebuild the
+identical model, symbol by symbol, before it can read the next bit, so decode
+time equals encode time by construction. At roughly 1 Mbase/s, re-reading a
+petabyte of archived sequence is about 31 core-years. The only application where
+that is acceptable is cold archive — written once, read almost never — which is
+also the application where a 31% saving does not justify an unusual format for
+data someone must still be able to read in twenty years.
+
+### Against CRAM, on aligned reads: lost on structure, not on tuning
+
+CRAM is handed each read's position by an aligner and stores only the differences
+from the reference. Per 250 bp Illumina read that is roughly 15 bits for a
+delta-coded position plus ~0.5 mismatches at ~10 bits each — **on the order of
+0.08 bits/base**. `dnac`'s best measured figure on reads, with a reference small
+enough to fit its index, is 0.2708; with a whole human genome primed, 1.3253.
+
+*(That 0.08 is arithmetic, not a measurement — samtools does not run on Windows
+and this was not executed. It would have to be wrong by more than 10x to change
+the conclusion.)*
+
+The gap is structural. Sequencing centres align anyway, because they need the
+alignment to find variants, so CRAM gets the position for free. `dnac` searches
+for it with a hash table, and the next section is what that search costs.
+
+### Reference mode saturates at about chromosome scale
+
+The anchor tables hold 2^26 buckets with one position each. chr21 has 40.1M
+positions — 0.60 per bucket, essentially collision-free. A whole human genome has
+2.95G — **43.9 per bucket**, so almost every anchor is overwritten. The same reads,
+against three references:
+
+| reference | bits/base |
+|-----------|----------:|
+| none | 1.1270 |
+| chr21 alone (40 Mbp) | **0.2708** |
+| whole GRCh38 (2.95 Gbp) | **0.8639** |
+
+Giving the codec 73x more reference — a reference that strictly *contains* the
+chr21 that worked — made it 3.2x worse. The content is there; the index cannot
+reach it. Lifting that needs 2^30–2^32 anchor buckets, which is 8–34 GB of tables
+plus 2.95 GB of history: a server, not a laptop.
+
+### Compression-as-classifier already exists
+
+A model that predicts DNA well also scores *how well a given reference explains a
+sample*, which is a classifier. That is **FALCON2** (Pratas & Pinho — the GeCo
+authors), published in *Bioinformatics* in 2026, and it already reports the result
+this codec would have been tested for: on short, damaged reads it reaches 0.968
+AUPRC where Kraken2 reaches 0.184.
+
+Our own numbers say the idea would not transfer here anyway. Against GeCo3's
+reference templates we are 19.6% ahead on the near-identical pair and **1.1% ahead
+on the diverged pair** — and the diverged case is the one classification needs help
+with. Separation between a right and a wrong reference is set by biology, not by
+the last 1% of modelling: a better compressor is not a better classifier.
 
 ## Compression levels
 
@@ -546,8 +647,13 @@ Try a **real** genome: download a `.fa` from NCBI/Ensembl and
 - `Makefile`, `scripts/*.sh` — the same build, losslessness and benchmark paths
   for Linux/macOS/WSL, plus `scripts/get-data.sh` which fetches the exact
   sequences the tables above were measured on, by accession.
-- `docs/negative-results.md` — what was measured and rejected, including the
-  test showing the reference-mode advantage does **not** transfer outside DNA.
+- `docs/negative-results.md` — six ideas that were built or measured and then
+  rejected by the measurement: the reference-mode advantage does **not** transfer
+  outside DNA; block boundaries cost 2.5% to enter and **+86%** on high-coverage
+  reads; reference mode saturates at chromosome scale; and compression-as-a-
+  classifier is already published work whose edge we do not have. Kept because
+  knowing where a technique *stops* working is worth as much as knowing where it
+  starts.
 - `.github/workflows/ci.yml` — every push builds on gcc and clang, Linux and
   macOS, and must pass all 192 round-trips, plus a cross-build portability check
   that compresses with one table geometry and decodes with another.

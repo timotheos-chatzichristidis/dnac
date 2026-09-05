@@ -19,12 +19,21 @@
 # Tiers:  fast  (~2 min, E. coli scale)   -- run before every commit that touches
 #                                            dnac.c or the docs
 #         slow  (~15 min, full chr21)     -- run before tagging a release
+#         meta  (needs bench-external/seq/meta.seq, ~25 min) -- the "Where this
+#           loses" table: the metagenome bake-off against gzip/bzip2/zstd/xz.
+#           These are the only rows here defending a number a COMPETITOR set, and
+#           they exist because an unverified losing number rots exactly as fast as
+#           an unverified winning one. Get the data with
+#           `sh scripts/get-data.sh --meta` and copy data/meta.seq into
+#           bench-external/seq/. xz is resolved by its --version string, because a
+#           busybox applet named xz that cannot compress usually wins on PATH.
 #         extern(needs GeCo3 built, ~10 min) -- the COMPETITOR's columns. Until
 #           2026-08-20 nothing re-ran these, which meant the only figures in the
 #           README nobody checked were the comparative claims -- the ones a reader
 #           is most entitled to distrust. Run before touching a head-to-head claim.
 #
 # Usage:  ./verify-claims.ps1 [-Tier fast|slow|extern|all] [-SelfTest] [-Only <id>]
+#         ./verify-claims.ps1 -Tier meta              # ~25 min, the losing columns
 #         ./verify-claims.ps1 -AnchorsOnly -Tier all     # seconds: after editing a doc,
 #           checks every claim's sentence is still there without re-measuring anything.
 #           Catches a hand-edited figure immediately; it does NOT prove the value.
@@ -34,7 +43,7 @@
 # in benchmark.ps1.
 
 param(
-    [ValidateSet('fast','slow','extern','all')][string]$Tier = 'fast',
+    [ValidateSet('fast','slow','extern','meta','all')][string]$Tier = 'fast',
     [switch]$SelfTest,
     [switch]$AnchorsOnly,
     [string]$Only
@@ -97,6 +106,56 @@ function PeakMB($inFile, $level, $blocks) {
     [math]::Round($m / 1MB, 0)
 }
 
+# A general-purpose compressor, round-tripped like everything else. These rows
+# exist because the README's "Where this loses" table is the only place the
+# project reports a competitor beating it on something, and an unverified losing
+# number rots exactly as fast as an unverified winning one.
+# w64devkit ships a busybox xz that can only DECOMPRESS, so xz is resolved to a
+# real XZ Utils binary rather than trusted from PATH order.
+# Find an xz that can COMPRESS. Several toolchains ship a busybox applet named
+# xz that only decompresses (w64devkit does), and it usually wins on PATH, so
+# identify the real one by what `--version` reports rather than by where it sits.
+# Override with $env:DNAC_XZ when it lives somewhere unusual.
+function Resolve-Xz {
+    $cands = @()
+    if ($env:DNAC_XZ) { $cands += $env:DNAC_XZ }
+    $cands += (Get-Command xz -All -ErrorAction SilentlyContinue | ForEach-Object { $_.Source })
+    $cands += @(
+        'C:/Program Files/Git/mingw64/bin/xz.exe',
+        'C:/laragon/bin/git/mingw64/bin/xz.exe',
+        '/usr/bin/xz'
+    )
+    foreach ($c in $cands) {
+        if (-not $c -or -not (Test-Path $c)) { continue }
+        $v = & $c --version 2>&1 | Out-String
+        if ($v -match 'XZ Utils') { return $c }
+    }
+    $null
+}
+
+function Ext($tool, $inFile) {
+    $out = Join-Path $work 'vc.ext'; $rt = Join-Path $work 'vc.extrt'
+    Remove-Item $out, $rt -Force -ErrorAction SilentlyContinue
+    if ((Resolve-Path $inFile).Path -eq $rt) { throw "round-trip path collides with input" }
+    $xz = Resolve-Xz
+    switch ($tool) {
+        'gzip'  { & gzip -9 -c $inFile > $out;                 & gzip  -dc $out > $rt }
+        'bzip2' { & bzip2 -9 -c $inFile > $out;                & bzip2 -dc $out > $rt }
+        'zstd'  { & zstd -19 --long=27 -q -f -o $out $inFile;  & zstd -d --long=27 -q -f -o $rt $out }
+        'xz'    { if (-not $xz) { throw "no XZ Utils xz found - a busybox applet cannot compress; set DNAC_XZ" }
+                  & $xz -9e -T1 -c $inFile > $out;             & $xz -dc $out > $rt }
+        default { throw "unknown tool $tool" }
+    }
+    if (-not (Test-Path $out) -or (Get-Item $out).Length -eq 0) { throw "$tool produced nothing" }
+    if (-not (Test-Path $rt)  -or (Get-Item $rt).Length  -eq 0) { throw "$tool decompressed to nothing" }
+    if ((Get-FileHash $inFile -Algorithm SHA256).Hash -ne (Get-FileHash $rt -Algorithm SHA256).Hash) {
+        throw "$tool was NOT LOSSLESS on $inFile"
+    }
+    $n = (Get-Item $out).Length
+    Remove-Item $out, $rt -Force -ErrorAction SilentlyContinue
+    $n
+}
+
 # GeCo3, run exactly as benchmark.ps1 does: relative paths inside $work, because
 # GeCo3 treats ':' as its multi-file separator and would read "C:\..." as a file
 # named "C". Returns the stored size of the .co, or throws.
@@ -151,6 +210,41 @@ $F = { param($n) Join-Path $root $n }                        # FASTA files in th
 # that editing the number breaks it, loose enough to survive reflowing prose.
 
 $claims = @(
+
+  # --- "Where this loses": the metagenome bake-off. 200,000,000 bases of ENA
+  # DRR003618, fetched by `sh scripts/get-data.sh --meta` and copied to
+  # bench-external/seq/meta.seq. These are the only rows here where the number
+  # being defended is one a competitor set.
+  @{ id='meta-dnac-l3-bytes'; tier='meta'; doc='README.md'; unit='B'; tol=0
+     anchor='| **dnac -l3** | 17,323,036 |'
+     expect=17323036
+     measure={ Size (& $S 'meta.seq') $null 3 } }
+
+  @{ id='meta-dnac-l1-bytes'; tier='meta'; doc='README.md'; unit='B'; tol=0
+     anchor='| **dnac -l1** | 17,653,816 |'
+     expect=17653816
+     measure={ Size (& $S 'meta.seq') $null 1 } }
+
+  @{ id='meta-zstd-bytes'; tier='meta'; doc='README.md'; unit='B'; tol=0
+     anchor='| zstd -19 --long=27 | 25,427,359 |'
+     expect=25427359
+     measure={ Ext 'zstd' (& $S 'meta.seq') } }
+
+  @{ id='meta-xz-bytes'; tier='meta'; doc='README.md'; unit='B'; tol=0
+     anchor='| xz -9e | 25,072,456 |'
+     expect=25072456
+     measure={ Ext 'xz' (& $S 'meta.seq') } }
+
+  @{ id='meta-bzip2-bytes'; tier='meta'; doc='README.md'; unit='B'; tol=0
+     anchor='| bzip2 -9 | 46,527,654 |'
+     expect=46527654
+     measure={ Ext 'bzip2' (& $S 'meta.seq') } }
+
+  @{ id='meta-gzip-bytes'; tier='meta'; doc='README.md'; unit='B'; tol=0
+     anchor='| gzip -9 | 49,936,274 |'
+     expect=49936274
+     measure={ Ext 'gzip' (& $S 'meta.seq') } }
+
   @{ id='ecoli-seq-bpb'; tier='fast'; doc='README.md'; unit='bpb'; tol=0.0002
      anchor='| E. coli (4,641,652 bases) | **dnac `-l 3`** | **1.8833**'
      expect=1.8833

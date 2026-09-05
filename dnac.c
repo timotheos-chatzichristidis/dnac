@@ -393,6 +393,26 @@ static TLS double    g_apm2[APM_MAXCTX][APM_BINS]; /* SSE stage 2 (order-2 conte
 #define MISS_MAX  8             /* abandon a match after this many consecutive misses */
 #define MATCH_EMPTY 0xFFFFFFFFu
 
+/* Positions live in uint32_t (g_npos) and MATCH_EMPTY is the all-ones value, so
+   a position must stay below it. Nothing checked that until 2026-09-05: a
+   reference plus target past this would have wrapped silently and produced
+   wrong output with a zero exit code, the failure mode this project refuses
+   everywhere else. It is reachable, not theoretical -- GRCh38 as plain ACGT is
+   2.95 Gbases, leaving about 1.3 Gbases of headroom for the target. */
+#ifndef DNAC_MAXPOS                 /* lowered by tests to watch the check go red */
+#define DNAC_MAXPOS ((uint64_t)MATCH_EMPTY - 1u)
+#endif
+
+static int too_many_bases(uint64_t total, const char *what) {
+    if (total > DNAC_MAXPOS) {
+        fprintf(stderr, "%s totals %llu bases; positions are tracked in 32 bits,"
+                        " so the limit is %llu\n", what,
+                (unsigned long long)total, (unsigned long long)DNAC_MAXPOS);
+        return 1;
+    }
+    return 0;
+}
+
 static TLS uint8_t  *g_seq   = NULL;            /* base symbols (0..3) seen so far     */
 static TLS uint32_t  g_npos  = 0;               /* count of bases in g_seq             */
 
@@ -1323,6 +1343,9 @@ static int state_load(const char *path, size_t extra, int *k_out,
     uint64_t refn  = get64(f);
     uint64_t reffp = get64(f);
 
+    if (too_many_bases(refn + (uint64_t)extra, "state reference plus target")) {
+        fclose(f); return 1;
+    }
     if (mix_setup(k, (size_t)refn, (size_t)refn + extra, hashbits, mhb)) { fclose(f); return 1; }
     if (g_nmodels != nmodels) {
         fprintf(stderr, "state file was built by a different dnac build\n"); fclose(f); return 1;
@@ -1361,6 +1384,7 @@ static int do_prime(const char *refpath, const char *statepath, int k) {
     size_t refn = 0;
     uint8_t *ref = ref_load(refpath, &refn);
     if (!ref) return 1;
+    if (too_many_bases((uint64_t)refn, "reference")) { free(ref); return 1; }
     if (mix_setup(k, refn, refn, -1, -1)) { free(ref); mix_free(); return 1; }
     uint64_t fp = ref_fingerprint(ref, refn);
     prime_with_reference(ref, refn);
@@ -1520,6 +1544,8 @@ static int do_compress(const char *inpath, const char *outpath, int k, const cha
     /* Three ways in: no reference, a reference FASTA (prime now), or a state
        file (priming already done). The last two produce identical models. */
     uint8_t *ref = NULL; size_t refn = 0; uint64_t reffp = 0;
+    /* Plain mode has no reference, so the input alone fills the position space. */
+    if (!refpath && too_many_bases((uint64_t)n, "input")) { free(buf); return 1; }
     int from_state = refpath && is_state_file(refpath);
     if (from_state) {
         uint64_t rn = 0;
@@ -1530,6 +1556,9 @@ static int do_compress(const char *inpath, const char *outpath, int k, const cha
             ref = ref_load(refpath, &refn);
             if (!ref) { free(buf); return 1; }
             reffp = ref_fingerprint(ref, refn);
+            if (too_many_bases((uint64_t)refn + (uint64_t)n, "reference plus input")) {
+                free(ref); free(buf); return 1;
+            }
         }
         /* With -j N the tables are sized from one BLOCK, not the file: every span
            only ever sees its own bases, and this is why N threads do not cost N
@@ -1755,6 +1784,10 @@ static int do_decompress(const char *inpath, const char *outpath, const char *re
     uint64_t len = get64(in);
     uint64_t refn_hdr = 0, refhash_hdr = 0;
     if (need_ref) { refn_hdr = get64(in); refhash_hdr = get64(in); }
+    /* Both sizes are known from the header here, before any table is built, so
+       refuse a stream this build cannot represent instead of wrapping g_npos
+       part-way through the decode. Mirrors the encoder-side check. */
+    if (too_many_bases(refn_hdr + len, "reference plus output")) { fclose(in); return 1; }
     int nb = 1;
     uint64_t *blen_c = NULL;
     if (blocked) {

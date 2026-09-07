@@ -9,8 +9,8 @@ authors:
 repository-code: "https://github.com/timotheos-chatzichristidis/dnac"
 url: "https://github.com/timotheos-chatzichristidis/dnac"
 license: GPL-3.0-or-later
-version: 0.7.0
-date-released: "2026-09-05"
+version: 0.8.0
+date-released: "2026-09-07"
 abstract: >-
   A single-file lossless DNA compressor in C. It codes each base as two binary
   decisions and predicts them with an ensemble of finite-context models,

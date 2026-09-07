@@ -93,7 +93,7 @@ rm -f tiny_j.fa rt.dnac rt.out
 # Levels change which models exist, so each one is a distinct codec and needs
 # its own proof. The level travels in the header; the decoder is given no hint.
 for f in $FILES; do
-  for lvl in 1 2 3; do
+  for lvl in 1 2 3 4; do
     "$EXE" c "$f" rt.dnac 22 "$lvl" >/dev/null
     "$EXE" d rt.dnac rt.out         >/dev/null
     report "$f level=$lvl" "$(hash_of "$f")" "$(hash_of rt.out)"
@@ -124,7 +124,7 @@ for f in $FILES; do
 done
 
 # ------------------------------------------- reference mode at every level
-for lvl in 1 2 3; do
+for lvl in 1 2 3 4; do
   "$EXE" cr diverged.fa rt.dnac ref_dna.fa 16 "$lvl" >/dev/null
   "$EXE" dr rt.dnac rt.out ref_dna.fa                >/dev/null
   report "ref level=$lvl" "$(hash_of diverged.fa)" "$(hash_of rt.out)"

@@ -24,7 +24,7 @@ jobs:
         run: make CC=${{ matrix.cc }} CFLAGS="-O2 -Wall -Wextra"
 
       # The only claim that must never regress: every byte comes back.
-      # 192 SHA-256 round-trips across plain, reference, level, state and block modes.
+      # 203 SHA-256 round-trips across plain, reference, level, state and block modes.
       - name: Losslessness round-trips
         run: sh scripts/roundtrip.sh ./dnac
 
@@ -85,7 +85,7 @@ jobs:
 
       - name: Cross-decode both directions, every level
         run: |
-          for lvl in 1 2 3; do
+          for lvl in 1 2 3 4; do
             ./dnac_gcc   c s.fa g$lvl.dnac 22 $lvl
             ./dnac_clang c s.fa c$lvl.dnac 22 $lvl
             ./dnac_clang d g$lvl.dnac from_gcc$lvl.fa

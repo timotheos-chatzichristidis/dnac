@@ -48,7 +48,7 @@ foreach ($f in $files) {
 # --- compression levels: each level builds a different model set, so each one ---
 # --- is a distinct codec and needs its own proof. The decoder gets no hint. -----
 foreach ($f in $files) {
-    foreach ($lvl in @(1, 2, 3)) {
+    foreach ($lvl in @(1, 2, 3, 4)) {
         $c = "$f.l$lvl.dnac"; $r = "$f.l$lvl.rt"
         & $Exe c $f $c 22 $lvl | Out-Null
         & $Exe d $c $r         | Out-Null

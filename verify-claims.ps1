@@ -316,19 +316,58 @@ $claims = @(
      measure={ Bpb (Size (& $F 'ecoli.fa') (& $F 'chr21.fa') 3) (Bases (& $F 'ecoli.fa')) } }
 
   @{ id='slice-l1-bpb'; tier='fast'; doc='README.md'; unit='bpb'; tol=6e-05
-     anchor='| 1 `fast` | 6 orders, 2 mixing experts, no IR, no tolerant models | 9.7 s | 1.7190 |'
+     anchor='| 1 `fast` | 6 orders, 2 mixing experts, no IR, no tolerant models | 10.4 s | 1.7190 |'
      expect=1.719
      measure={ Bpb (Size (& $F 'chr21_slice.fa') $null 1) (Bases (& $F 'chr21_slice.fa')) } }
 
   @{ id='slice-l2-bpb'; tier='fast'; doc='README.md'; unit='bpb'; tol=6e-05
-     anchor='| 2 `balanced` | all orders, 4 experts, no IR, no tolerant models | 13.8 s | 1.7175 |'
+     anchor='| 2 `balanced` | all orders, 4 experts, no IR, no tolerant models | 14.9 s | 1.7175 |'
      expect=1.7175
      measure={ Bpb (Size (& $F 'chr21_slice.fa') $null 2) (Bases (& $F 'chr21_slice.fa')) } }
 
   @{ id='slice-l3-bpb'; tier='fast'; doc='README.md'; unit='bpb'; tol=6e-05
-     anchor='| 3 `max` (default) | everything | 20.0 s | 1.7126 |'
+     anchor='| 3 `max` (default) | everything | 21.7 s | 1.7126 |'
      expect=1.7126
      measure={ Bpb (Size (& $F 'chr21_slice.fa') $null 3) (Bases (& $F 'chr21_slice.fa')) } }
+
+  # The level paragraph's load-bearing number: what IR training and the tolerant
+  # models are worth in SIZE. Nothing else here defends it, and it is the half of
+  # that paragraph a check can hold -- the other half was a timing, which is why
+  # it went stale unnoticed (it said ~21% of the run each; a paired ablation
+  # measures 11-13% for IR training). Per-model splits need a compiler and live
+  # in docs/model-ablation.md, re-derived by ./ablate.ps1.
+  @{ id='slice-l3-vs-l2-pct'; tier='fast'; doc='README.md'; unit='%'; tol=0.002
+     anchor='worth 0.289% of compressed size'
+     expect=0.289
+     measure={
+        $l3 = Size (& $F 'chr21_slice.fa') $null 3
+        $l2 = Size (& $F 'chr21_slice.fa') $null 2
+        [math]::Round(100.0 * ($l2 - $l3) / $l3, 3) } }
+
+  # Level 4 (light). Three rows because the claim has three independent halves --
+  # the bits/base it costs, the bytes on a whole chromosome (where the cost is
+  # largest), and the memory it saves, which is the reason it exists. The RAM
+  # rows carry a wide tolerance for the same reason the -j ones do: peak working
+  # set is sampled, not exact.
+  @{ id='slice-l4-bpb'; tier='fast'; doc='README.md'; unit='bpb'; tol=6e-05
+     anchor='| 4 `light` | 8 orders, 4 experts, IR, no tolerant models | 16.2 s | 1.7146 |'
+     expect=1.7146
+     measure={ Bpb (Size (& $F 'chr21_slice.fa') $null 4) (Bases (& $F 'chr21_slice.fa')) } }
+
+  @{ id='ecoli-l4-ram'; tier='fast'; doc='README.md'; unit='MB'; tol=65
+     anchor='| E. coli, 4.6 Mbp | 603 MB | **507 MB** | 1.8834 | +0.006% |'
+     expect=507
+     measure={ PeakMB (& $S 'ecoli.seq') 4 $null } }
+
+  @{ id='chr21-l4-ram'; tier='slow'; doc='README.md'; unit='MB'; tol=130
+     anchor='| chr21, 40 Mbp | 1,254 MB | **869 MB** | 1.5020 | +0.270% |'
+     expect=869
+     measure={ PeakMB (& $S 'chr21.seq') 4 $null } }
+
+  @{ id='chr21-l4-bpb'; tier='slow'; doc='README.md'; unit='bpb'; tol=6e-05
+     anchor='| chr21, 40 Mbp | 1,254 MB | **869 MB** | 1.5020 | +0.270% |'
+     expect=1.5020
+     measure={ Bpb (Size (& $S 'chr21.seq') $null 4) (Bases (& $S 'chr21.seq')) } }
 
   @{ id='sliceseq-l3-bpb'; tier='fast'; doc='README.md'; unit='bpb'; tol=6e-05
      anchor='| chr21 slice (9,836,065 bases) | **dnac `-l 3`** | **1.7114** |'

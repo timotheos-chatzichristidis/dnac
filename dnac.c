@@ -299,6 +299,18 @@ static const int MASTER_ORDERS[] = MASTER_ORDER_LIST;
 #endif
 static const int FAST_ORDERS[] = FAST_ORDER_LIST;
 
+/* The set used by level 4, which is the master set minus orders 3 and 18. Both
+   were picked by measurement, not by taste (./ablate.ps1, docs/model-ablation.md):
+   order 18 correlates 0.91 with order 22 -- they are very nearly the same model --
+   and order 3 sits between orders 2 and 4 at r=0.73/0.81, pure interpolation.
+   Removing either alone costs under 0.031% on both a bacterial and a human
+   genome, and order 3 is NEGATIVE on human (the file gets smaller without it).
+   Order 18 is hashed, so dropping it also returns a whole table. */
+#ifndef LIGHT_ORDER_LIST
+#define LIGHT_ORDER_LIST { 1, 2, 4, 6, 8, 11, 14, 22 }
+#endif
+static const int LIGHT_ORDERS[] = LIGHT_ORDER_LIST;
+
 /* Substitution-tolerant context models (the GeCo idea we were missing).
    A normal order model conditions on the last k bases AS THEY ARE. Inside a
    diverged repeat, one SNP poisons the next k contexts: they have never been
@@ -349,9 +361,25 @@ static TLS uint16_t *g_tab[MAXIN];              /* order-model probability table
      1  fast           + 6 orders, 2 mix experts    9.7 s   1.7190   (2.1x, +0.37%)
 
    The level is written into the header because the decoder must build exactly
-   the same set of models; it is not a hint. */
+   the same set of models; it is not a hint.
+
+   LEVEL 4 IS NOT A HIGHER SETTING THAN 3. It is a different trade on a
+   different axis: level 3 minus the two tolerant models, minus orders 3 and 18,
+   keeping inverted-repeat training and all four mixing experts. That is 11
+   prediction inputs instead of 15 and, more to the point, THREE hashed tables
+   instead of six -- roughly a third of the codec's memory, plus ~18% of its run
+   time in both directions, for +0.121% on human sequence and +0.012% on E. coli
+   (paired measurement, minimum of three runs; ./ablate.ps1 and
+   docs/model-ablation.md).
+
+   It gets a number of its own rather than replacing 3 because the level byte is
+   FORMAT: redefining what "3" means would make every archive already written at
+   level 3 decode to wrong bytes, silently, which is the single worst failure
+   this codebase can have. So the numbers are model-set identifiers and are not
+   ordered by quality. On size the order is 3 < 4 < 2 < 1; on memory and time,
+   4 sits between 2 and 3. */
 #define LEVEL_MIN     1
-#define LEVEL_MAX     3
+#define LEVEL_MAX     4
 #define LEVEL_DEFAULT 3
 static int g_level = LEVEL_DEFAULT;
 static TLS int g_nmix  = NMIX;     /* experts actually used this run (<= NMIX) */
@@ -748,12 +776,17 @@ static int mix_setup(int maxorder, size_t sizing_n, size_t seq_alloc, int hb, in
     g_hashmask = (uint32_t)(((size_t)1 << g_hashbits) - 1);
     /* The level decides which models exist at all. Encoder and decoder run this
        identically because the level travels in the header. */
-    const int *orders  = (g_level <= 1) ? FAST_ORDERS : MASTER_ORDERS;
-    size_t     norders = (g_level <= 1) ? sizeof(FAST_ORDERS)  / sizeof(FAST_ORDERS[0])
-                                        : sizeof(MASTER_ORDERS) / sizeof(MASTER_ORDERS[0]);
+    const int *orders; size_t norders;
+    if (g_level <= 1) {
+        orders = FAST_ORDERS;   norders = sizeof(FAST_ORDERS)   / sizeof(FAST_ORDERS[0]);
+    } else if (g_level == 4) {
+        orders = LIGHT_ORDERS;  norders = sizeof(LIGHT_ORDERS)  / sizeof(LIGHT_ORDERS[0]);
+    } else {
+        orders = MASTER_ORDERS; norders = sizeof(MASTER_ORDERS) / sizeof(MASTER_ORDERS[0]);
+    }
     g_nmix       = (g_level <= 1) ? 2 : NMIX;
-    int use_ir   = (g_level >= 3);
-    int use_stcm = (g_level >= 3);
+    int use_ir   = (g_level >= 3);   /* levels 3 and 4 */
+    int use_stcm = (g_level == 3);   /* level 3 only -- level 4 drops them */
 
     g_nmodels = 0;
     for (size_t m = 0; m < norders; m++) {
@@ -927,6 +960,33 @@ static void mix_ctxs(uint64_t hist, int *mc) {
     mc[3] = 0;                                             /* one global expert    */
 }
 
+/* ---------------------------------------------------- model ablation --------
+   Two compile-time instruments for answering "which model earns what", the one
+   question the round-trip suites and verify-claims.ps1 cannot see. Both are OFF
+   unless defined, and neither exists in a normal build.
+
+   -DDNAC_ABLATE=<mask>  zeroes the stretch of every input whose bit is set.
+   A zeroed input contributes nothing to any expert AND stops learning (the
+   mixer's gradient is proportional to st[i]), so this removes the INPUT while
+   leaving table geometry, hashing and memory untouched -- which is what
+   separates "this model is worth nothing" from "this model was crowded out of
+   a smaller table". Deleting entries from MASTER_ORDER_LIST cannot do that.
+   Input order: the order models (g_nmodels of them, the tolerant ones last),
+   then the NMATCH forward match models, then the reverse-complement model.
+
+   -DDNAC_DIAG  dumps, per block, each input's mean contribution to the mixers
+   and the correlation matrix between inputs -- the map of which models are
+   near-duplicates. See docs/model-ablation.md.
+
+   An ablated build writes a DIFFERENT archive (fewer inputs predict worse) but
+   decodes its own output: the mask is a compile-time constant applied
+   identically on both sides. A DIAG build is byte-identical to a normal one --
+   it only reads numbers the mixer computed anyway, exactly like -map.
+   ./ablate.ps1 drives both. */
+#ifdef DNAC_DIAG
+static TLS double g_dg_n, g_dg_s[MAXIN], g_dg_ss[MAXIN], g_dg_p[MAXIN][MAXIN], g_dg_c[MAXIN];
+#endif
+
 static uint32_t mix_predict(int node, const int *mc, const uint64_t *ctxv, uint16_t **extra,
                             double *st, uint16_t **slot, MixState *ms, double *pout) {
     for (int i = 0; i < g_nmodels; i++) {
@@ -939,11 +999,24 @@ static uint32_t mix_predict(int node, const int *mc, const uint64_t *ctxv, uint1
         slot[i] = extra[e];
         st[i] = CTR_STRETCH(*extra[e]);
     }
+#ifdef DNAC_ABLATE
+    for (int i = 0; i < g_nin; i++) if ((DNAC_ABLATE) & (1u << i)) st[i] = 0.0;
+#endif
+#ifdef DNAC_DIAG
+    g_dg_n += 1.0;
+    for (int i = 0; i < g_nin; i++) {
+        g_dg_s[i] += st[i]; g_dg_ss[i] += st[i] * st[i];
+        for (int j = i; j < g_nin; j++) g_dg_p[i][j] += st[i] * st[j];
+    }
+#endif
     double X = g_v[node][mc[0]][NMIX];              /* layer-2 bias              */
     for (int k = 0; k < g_nmix; k++) {
         double x = 0.0;
         const double *w = g_w[k][node][mc[k]];
         for (int i = 0; i < g_nin; i++) x += w[i] * st[i];
+#ifdef DNAC_DIAG
+        for (int i = 0; i < g_nin; i++) g_dg_c[i] += fabs(w[i] * st[i]);
+#endif
         if (x < -12.0) x = -12.0;                   /* keep one expert from */
         if (x >  12.0) x =  12.0;                   /* dominating the layer above */
         ms->x[k] = x;
@@ -1525,6 +1598,26 @@ static void encode_span(const uint8_t *buf, long n, Buf *out) {
         if (ft + 1 >= CAP) { fc[0] >>= 1; fc[1] >>= 1; }
     }
     renc_flush(&e);
+#ifdef DNAC_DIAG
+    fprintf(stderr, "DIAG n=%.0f nin=%d\n", g_dg_n, g_nin);
+    for (int i = 0; i < g_nin; i++) {
+        double mi = g_dg_s[i] / g_dg_n, vi = g_dg_ss[i] / g_dg_n - mi * mi;
+        fprintf(stderr, "IN %2d order=%2d tol=%d sd=%.4f contrib=%.5f\n",
+                i, i < g_nmodels ? g_order[i] : -1, i < g_nmodels ? g_tol[i] : 0,
+                vi > 0 ? sqrt(vi) : 0.0, g_dg_c[i] / g_dg_n / g_nmix);
+    }
+    for (int i = 0; i < g_nin; i++) {
+        fprintf(stderr, "COR %2d", i);
+        for (int j = 0; j < g_nin; j++) {
+            int a = i < j ? i : j, b = i < j ? j : i;
+            double ma = g_dg_s[a] / g_dg_n, mb = g_dg_s[b] / g_dg_n;
+            double va = g_dg_ss[a] / g_dg_n - ma * ma, vb = g_dg_ss[b] / g_dg_n - mb * mb;
+            double cv = g_dg_p[a][b] / g_dg_n - ma * mb;
+            fprintf(stderr, " %5.2f", (va > 1e-12 && vb > 1e-12) ? cv / sqrt(va * vb) : 0.0);
+        }
+        fputc(10, stderr);
+    }
+#endif
 }
 
 static int do_compress(const char *inpath, const char *outpath, int k, const char *refpath) {
@@ -2006,7 +2099,7 @@ static int do_mutate(const char *inpath, const char *outpath, double permille, u
 
 static int set_level(int lvl) {
     if (lvl < LEVEL_MIN || lvl > LEVEL_MAX) {
-        fprintf(stderr, "level must be %d..%d (1 fast, 3 max)\n", LEVEL_MIN, LEVEL_MAX);
+        fprintf(stderr, "level must be %d..%d (1 fast, 3 max, 4 light)\n", LEVEL_MIN, LEVEL_MAX);
         return 1;
     }
     g_level = lvl;
@@ -2113,6 +2206,8 @@ int main(int argc, char **argv) {
         "     <ref> may be a FASTA file or a primed state built with:\n"
         "  dnac prime <ref.fa> <state> [k] [lvl]  pay the priming pass once\n"
         "     lvl = 1 fast (~2.2x, +0.4%% size) | 2 balanced | 3 max (default)\n"
+        "           4 light: a third less memory, ~18%% faster, +0.12%% size;\n"
+        "           NOT a higher setting than 3 -- see docs/model-ablation.md\n"
         "  dnac gen <out> <bases> [seed] generate a structured sample\n"
         "  dnac mut <in> <out> [per-mille] [seed]   simulate a resequenced genome\n"
         "  -map <file.tsv> [-mapw N]     write a per-window bit-cost map while\n"

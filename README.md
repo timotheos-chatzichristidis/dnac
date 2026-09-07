@@ -219,20 +219,79 @@ the last 1% of modelling: a better compressor is not a better classifier.
 ## Compression levels
 
 Most of the codec's time goes into models that earn very little. Measured by
-ablation on the 10 MB chr21 slice, inverted-repeat training and the
-substitution-tolerant context models cost ~21% of the run *each* while together
-they are worth 0.29% of compressed size. Three levels expose that trade:
+ablation on the 10 MB chr21 slice, inverted-repeat training costs **13%** of the
+run and the substitution-tolerant context models cost **19%**, while together
+they are worth 0.289% of compressed size. Four levels expose that trade, listed
+here fastest first — **the numbers are model-set identifiers, not a quality
+ladder**, and level 4 is deliberately not "better than 3":
 
 | level | models | time | bits/base | vs max |
 |:-----:|--------|-----:|----------:|--------|
-| 1 `fast` | 6 orders, 2 mixing experts, no IR, no tolerant models | 9.7 s | 1.7190 | **2.1× faster**, +0.37% size |
-| 2 `balanced` | all orders, 4 experts, no IR, no tolerant models | 13.8 s | 1.7175 | 1.4× faster, +0.29% |
-| 3 `max` (default) | everything | 20.0 s | 1.7126 | — |
+| 1 `fast` | 6 orders, 2 mixing experts, no IR, no tolerant models | 10.4 s | 1.7190 | **2.1× faster**, +0.375% size |
+| 2 `balanced` | all orders, 4 experts, no IR, no tolerant models | 14.9 s | 1.7175 | 1.5× faster, +0.289% |
+| 4 `light` | 8 orders, 4 experts, IR, no tolerant models | 16.2 s | 1.7146 | 1.3× faster, +0.121%, **−31% RAM** |
+| 3 `max` (default) | everything | 21.7 s | 1.7126 | — |
+
+All four timed back to back in one session, minimum of three runs. The level
+byte travels in the header, so `4` had to be a new value rather than a redefined
+`3`: changing what an existing level means would make every archive already
+written at that level decode to wrong bytes with exit 0. Levels 1–3 are
+byte-identical before and after level 4 was added, and a decoder that predates it
+refuses it by name.
 
 ```sh
 dnac c in.fa out.dnac 22 1     # k=22, level 1
+dnac c in.fa out.dnac 22 4     # level 4: a third less memory, 1.3x faster
 dnac d out.dnac back.fa        # no level needed: it is in the header
 ```
+
+**Level 4 is the memory setting.** It is level 3 minus the two tolerant models
+and minus orders 3 and 18 — the two the correlation matrix showed to be nearly
+redundant (order 18 correlates 0.91 with order 22; order 3 sits between orders 2
+and 4). That is 11 prediction inputs instead of 15 and, more usefully, three
+hashed tables instead of six. Measured peak resident set, not computed:
+
+| dataset | RAM `-l 3` | RAM `-l 4` | bits/base `-l 4` | size cost |
+|---|---:|---:|---:|---:|
+| chr21, 40 Mbp | 1,254 MB | **869 MB** | 1.5020 | +0.270% |
+| E. coli, 4.6 Mbp | 603 MB | **507 MB** | 1.8834 | +0.006% |
+
+The size cost grows with the sequence — +0.006% on a bacterial genome, +0.121% on
+a 10 MB slice, +0.270% on a whole chromosome — because the models it drops are
+the ones that earn over long range. Against the other memory lever, honestly:
+`HASHBITS_MAX 26→25` buys the same −31% for +0.051%, five times cheaper. What it
+does not buy is time. Level 4 is a *time* lever whose memory saving is a bonus,
+and the two compose.
+
+Those two percentages replace an earlier "~21% each", which was wrong for
+inverted-repeat training — most likely measured before `ir_prefetch` was added to
+overlap its cache miss, and then only ever re-read, never re-run. They are now
+paired measurements: every configuration timed back to back inside one loop,
+minimum of three runs, because run-to-run noise on this codec reaches 24% on
+identical input for byte-identical output. The size half of the claim, which is
+deterministic, has a row in `verify-claims.ps1`; the timings deliberately do not,
+for the same reason no other wall-clock figure here does.
+
+### Which of the 15 predictors earns what
+
+`./ablate.ps1` answers the question the round-trip suites structurally cannot:
+what any individual model is worth. It zeroes one input inside the mixer — the
+input stops contributing *and* stops learning — while leaving table geometry and
+memory untouched, which is what separates *"this model is worth nothing"* from
+*"this model was crowded out of a smaller table"*.
+
+The full tables for both a bacterial and a human genome are in
+[`docs/model-ablation.md`](docs/model-ablation.md). The three findings that
+change how the codec should be read:
+
+- **No single order model is worth more than 0.11%**, and four inputs have
+  *negative* value — removing them makes the file smaller.
+- **The reverse-complement match model is the most valuable single input on human
+  sequence** (+0.888% to remove, twice the next one). The cheapest model in the
+  codec earns the most.
+- **Leave-one-out understates a group by up to 2.4×** on human sequence: the
+  mixer reroutes around any one missing input, so the per-input table is not a
+  shopping list. Candidate model sets have to be measured as sets.
 
 ### `-map` — where the bits actually go
 
@@ -581,7 +640,7 @@ exact/diverged/inverted repeats), across many values of `k`.
 
 ```sh
 make                              # cc -O2 -Wall -Wextra -o dnac dnac.c -lm
-make test                         # 192 SHA-256 round-trips (plain, reference, level, state, blocks)
+make test                         # 203 SHA-256 round-trips (plain, reference, level, state, blocks)
 sh scripts/get-data.sh --human    # fetch the exact genomes benchmarked below
 make bench                        # bits/base on whatever is in ./data
 ```
@@ -609,7 +668,7 @@ make bench                        # bits/base on whatever is in ./data
 # measurement
 ./bench.ps1 -Exe .\dnac.exe -File .\chr21.fa -K 22   # round-trip + bits/base
 ./bench.ps1 ... -Fast                                # compress only (param sweeps)
-./adversarial.ps1 -Exe .\dnac.exe                    # 145 losslessness round-trips
+./adversarial.ps1 -Exe .\dnac.exe                    # 155 losslessness round-trips
 ./sweep-tables.ps1 -Macro MHBITS_MAX -Caps 26,25      # table size vs bits/base vs RAM
 ```
 
@@ -630,14 +689,21 @@ Try a **real** genome: download a `.fa` from NCBI/Ensembl and
 - `build.ps1`, `test.ps1` — Windows build & demo.
 - `bench.ps1` — round-trip + bits/base for one build on one file (`-Fast` to
   compress only, for parameter sweeps).
-- `adversarial.ps1` — 145 SHA-256-verified round-trips: 10 nasty inputs × 6
-  values of `k`, × 3 compression levels, plus reference mode (unrelated/short/
+- `adversarial.ps1` — 155 SHA-256-verified round-trips: 10 nasty inputs × 6
+  values of `k`, × 4 compression levels, plus reference mode (unrelated/short/
   messy references, primed state files, FASTA↔state interchange), the refusals
   (the wrong reference, a state file from an older dnac) and the check that
   `-map` leaves the compressed bytes byte-identical.
   `scripts/roundtrip.sh` is the POSIX port CI runs; it covers the same ground
   plus an out-of-range level, the reference path at every level, a state/stream
-  level mismatch and the block modes, for 192.
+  level mismatch and the block modes, for 203.
+- `ablate.ps1` — what each of the 15 prediction inputs is worth
+  (`-Mode loo|diag|mask`). Drives `-DDNAC_ABLATE` / `-DDNAC_DIAG` in `dnac.c`:
+  the first zeroes an input inside the mixer without touching table geometry, so
+  the answer is the value of the *model* rather than of the memory it held; the
+  second dumps the correlation matrix between inputs and verifies itself
+  byte-identical to a normal build before printing. Every size round-trips
+  first. Results in `docs/model-ablation.md`.
 - `sweep-tables.ps1` — re-derives the table-size trade-off in `PROGRESS.md` §11
   (`-Macro HASHBITS_MAX|MHBITS_MAX`, `-Caps 26,25,24`). Every point round-trips
   and every archive's header is read back to confirm the geometry actually used.
@@ -655,7 +721,7 @@ Try a **real** genome: download a `.fa` from NCBI/Ensembl and
   knowing where a technique *stops* working is worth as much as knowing where it
   starts.
 - `.github/workflows/ci.yml` — every push builds on gcc and clang, Linux and
-  macOS, and must pass all 192 round-trips, plus a cross-build portability check
+  macOS, and must pass all 203 round-trips, plus a cross-build portability check
   that compresses with one table geometry and decodes with another.
 - `README.md` — this file.
 

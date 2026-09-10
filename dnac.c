@@ -659,9 +659,15 @@ static uint16_t *rc_slot(int node, int b1) {
 /* The cue's slot. Same shape as a match model's, but the flag is the ROOM's
    state, not the cue's own: the cue is always heard in the context of whether
    the master is missing right now. */
+/* CUE_ROOM=0 is "taking the headphones off": the cue is heard on its own, not
+   through what the room ear hears. Timotheos's claim is that this spoils the
+   osmosis. docs/cue-room-prediction.md. */
+#ifndef CUE_ROOM
+#define CUE_ROOM 1
+#endif
 static uint16_t *cue_slot(int node, int b1) {
     int bucket = 0, pbit = 0;
-    int room = (g_mm[0].miss > 0) ? 1 : 0;
+    int room = (CUE_ROOM && g_mm[0].miss > 0) ? 1 : 0;
     if (g_cactive && g_clen > 0 && g_cmp < g_npos) {
         int psym = g_seq[g_cmp];
         if (node == 0) {

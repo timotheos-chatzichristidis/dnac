@@ -665,6 +665,11 @@ static uint16_t *rc_slot(int node, int b1) {
 #ifndef CUE_ROOM
 #define CUE_ROOM 1
 #endif
+/* CUE_MIXFREE=1: the mixer also stops hearing the cue through the match state
+   (see mix_predict). With CUE_ROOM it makes the 2x2 of docs/cue-mix-prediction.md */
+#ifndef CUE_MIXFREE
+#define CUE_MIXFREE 0
+#endif
 static uint16_t *cue_slot(int node, int b1) {
     int bucket = 0, pbit = 0;
     int room = (CUE_ROOM && g_mm[0].miss > 0) ? 1 : 0;
@@ -1196,6 +1201,14 @@ static uint32_t mix_predict(int node, const int *mc, const uint64_t *ctxv, uint1
         double x = 0.0;
         const double *w = g_w[k][node][mc[k]];
         for (int i = 0; i < g_nin; i++) x += w[i] * st[i];
+#if defined(DNAC_CUE) && CUE_MIXFREE
+        /* ablation: the two experts keyed on the match state weigh the cue with
+           ONE context-free weight, so the mixer cannot hear it through the room */
+        if (k == 0 || k == 2) {
+            int ci = g_nin - 1;
+            x += (g_w[k][node][0][ci] - w[ci]) * st[ci];
+        }
+#endif
 #ifdef DNAC_DIAG
         for (int i = 0; i < g_nin; i++) g_dg_c[i] += fabs(w[i] * st[i]);
 #endif
@@ -1218,6 +1231,13 @@ static void mix_update(int node, const int *mc, const double *st, uint16_t *cons
     for (int k = 0; k < g_nmix; k++) {
         double errk = (double)bit - ms->p[k];
         double *w = g_w[k][node][mc[k]];
+#if defined(DNAC_CUE) && CUE_MIXFREE
+        if (k == 0 || k == 2) {
+            int ci = g_nin - 1;
+            for (int i = 0; i < ci; i++) w[i] += MIX_LR * errk * st[i];
+            g_w[k][node][0][ci] += MIX_LR * errk * st[ci];
+        } else
+#endif
         for (int i = 0; i < g_nin; i++) w[i] += MIX_LR * errk * st[i];
         g_v[node][mc[0]][k] += MIX_LR2 * errf * ms->x[k];
     }

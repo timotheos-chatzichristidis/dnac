@@ -429,6 +429,21 @@ static TLS double    g_apm2[APM_MAXCTX][APM_BINS]; /* SSE stage 2 (order-2 conte
 #define NUDGE_MINLEN 16         /* only nudge a match that was established        */
 #endif
 #endif
+#ifdef DNAC_CUE                    /* see match_after() and docs/cue-prediction.md   */
+#ifndef CUE_L
+#define CUE_L        3          /* bases that must agree to load the cue          */
+#endif
+#ifndef CUE_D
+#define CUE_D        12         /* largest shift tried, either way                */
+#endif
+#ifndef CUE_SWITCH
+#define CUE_SWITCH   12         /* cue confidence needed to mix it in             */
+#endif
+#define CUE_MINLEN   16         /* only a miss after an established match loads it */
+#define NCUE 1
+#else
+#define NCUE 0
+#endif
 #define MISS_MAX  8             /* abandon a match after this many consecutive misses */
 #define MATCH_EMPTY 0xFFFFFFFFu
 
@@ -461,7 +476,7 @@ typedef struct {
     uint32_t *hash;                         /* context -> last end position        */
     uint32_t  mp, mlen;                     /* follow position + confidence        */
     int       active, miss;
-#ifdef DNAC_NUDGE
+#if defined(DNAC_NUDGE) || defined(DNAC_CUE)
     uint32_t  mlen_pre;                     /* confidence when this miss run began */
 #endif
     /* adaptive probs, indexed by (node, just-missed flag, conf bucket, pred bit)  */
@@ -479,6 +494,29 @@ static TLS uint32_t  g_rlen    = 0;
 static TLS int       g_ractive = 0;
 static TLS int       g_rmiss   = 0;
 static TLS uint16_t  g_rc_pr[NNODES * 2 * (MLENCAP + 1) * 2];
+
+/* inputs after the order models: forward matches, the RC match, and the cue */
+#define NEXTRA (NMATCH + 1 + NCUE)
+
+#ifdef DNAC_CUE
+/* THE CUE -- Timotheos's way of mixing: one ear PERMANENTLY on the incoming track,
+   the other PERMANENTLY on the room, never taking the headphones off. The room
+   ear is the master match model, unchanged. The headphone ear is this second
+   deck, following a candidate shifted phase; its prediction is ALWAYS a mixer
+   input, never switched in or out. Its probabilities are indexed by what the
+   room ear hears (is the master missing?), so the two are learned together over
+   the whole file -- the "osmosis". The track is mixed in (the master takes this
+   phase) only once the cue has kept agreeing for CUE_SWITCH. */
+static TLS uint32_t  g_cmp     = 0;
+static TLS uint32_t  g_clen    = 0;
+static TLS int       g_cactive = 0;
+static TLS int       g_cmiss   = 0;
+static TLS uint16_t  g_c_pr[NNODES * 2 * (MLENCAP + 1) * 2];
+static void cue_reset(void) {
+    g_cmp = 0; g_clen = 0; g_cactive = 0; g_cmiss = 0;
+    for (size_t j = 0; j < sizeof(g_c_pr) / sizeof(g_c_pr[0]); j++) g_c_pr[j] = CTR_INIT;
+}
+#endif
 
 static double stretchd(double p) { return log(p / (1.0 - p)); }
 static double squashd(double x)  { return 1.0 / (1.0 + exp(-x)); }
@@ -609,6 +647,27 @@ static uint16_t *rc_slot(int node, int b1) {
     return &g_rc_pr[(((node * 2 + mflag) * (MLENCAP + 1)) + bucket) * 2 + pbit];
 }
 
+#ifdef DNAC_CUE
+/* The cue's slot. Same shape as a match model's, but the flag is the ROOM's
+   state, not the cue's own: the cue is always heard in the context of whether
+   the master is missing right now. */
+static uint16_t *cue_slot(int node, int b1) {
+    int bucket = 0, pbit = 0;
+    int room = (g_mm[0].miss > 0) ? 1 : 0;
+    if (g_cactive && g_clen > 0 && g_cmp < g_npos) {
+        int psym = g_seq[g_cmp];
+        if (node == 0) {
+            pbit = psym >> 1;
+            bucket = (g_clen < MLENCAP) ? (int)g_clen : MLENCAP;
+        } else if ((psym >> 1) == b1) {
+            pbit = psym & 1;
+            bucket = (g_clen < MLENCAP) ? (int)g_clen : MLENCAP;
+        }
+    }
+    return &g_c_pr[(((node * 2 + room) * (MLENCAP + 1)) + bucket) * 2 + pbit];
+}
+#endif
+
 /* How many bases agree, walking backwards from two end positions. Used to pick
    between the candidates in an anchor bucket: a hash hit only proves the last
    `minlen` bases agree (and may be a collision), while the candidate whose
@@ -679,6 +738,18 @@ static void match_after(int s, uint64_t newhist) {
     g_seq[np] = (uint8_t)s;
     g_npos = np + 1;
 
+#ifdef DNAC_CUE
+    /* the headphone ear follows its own phase, exactly as a match model does */
+    if (g_cactive && g_cmp < np) {
+        if (g_seq[g_cmp] == (uint8_t)s) { if (g_clen < MLENCAP) g_clen++; g_cmiss = 0; }
+        else { g_clen >>= 1; if (++g_cmiss > MISS_MAX) g_cactive = 0; }
+        g_cmp++;
+        if (g_cmp >= g_npos) g_cactive = 0;
+    } else {
+        g_cactive = 0;
+    }
+#endif
+
     uint32_t hidx[NMATCH];
     for (int mi = 0; mi < NMATCH; mi++) {
         MatchModel *m = &g_mm[mi];
@@ -688,12 +759,28 @@ static void match_after(int s, uint64_t newhist) {
                 m->miss = 0;
                 m->mp++;
             } else {                                /* miss: tolerate, drop confidence */
-#ifdef DNAC_NUDGE
+#if defined(DNAC_NUDGE) || defined(DNAC_CUE)
                 if (m->miss == 0) m->mlen_pre = m->mlen;
 #endif
                 m->mlen >>= 1;
                 m->miss++;
                 m->mp++;
+#ifdef DNAC_CUE
+                /* the room ear just lost the beat: put a candidate shifted phase in
+                   the headphones (if they are free or the one there is failing). It
+                   only SPEAKS through the mixer; it takes nothing over. */
+                if (mi == 0 && m->mlen_pre >= CUE_MINLEN && (!g_cactive || g_cmiss > 0)) {
+                    for (int a = 1, done = 0; a <= CUE_D && !done; a++)
+                        for (int sg = -1; sg <= 1 && !done; sg += 2) {
+                            int64_t q = (int64_t)m->mp + sg * a;
+                            if (q < CUE_L || q > (int64_t)np) continue;
+                            if (back_agree((uint32_t)(q - 1), np, CUE_L) == CUE_L) {
+                                g_cmp = (uint32_t)q; g_clen = CUE_L;
+                                g_cactive = 1; g_cmiss = 0; done = 1;
+                            }
+                        }
+                }
+#endif
 #ifdef DNAC_NUDGE
                 /* THE NUDGE (a DJ's move when the second deck slips a beat): the
                    step above assumed a substitution, i.e. the same phase. After an
@@ -745,6 +832,22 @@ static void match_after(int s, uint64_t newhist) {
             if (best != MATCH_EMPTY) { m->mp = best + 1; m->active = 1; m->mlen = 1; m->miss = 0; }
         }
     }
+
+#ifdef DNAC_CUE
+    /* MIX IT IN: the cue has kept agreeing long enough, so every forward master
+       that is still missing, and is less sure than the cue, takes its phase. */
+    if (g_cactive && g_cmiss == 0 && g_clen >= CUE_SWITCH) {
+        int mixed = 0;
+        for (int mi = 0; mi < NMATCH; mi++) {
+            MatchModel *m = &g_mm[mi];
+            if (m->miss > 0 && m->mlen < g_clen) {
+                m->mp = g_cmp; m->mlen = g_clen; m->miss = 0; m->active = 1;
+                mixed = 1;
+            }
+        }
+        if (mixed) g_cactive = 0;
+    }
+#endif
 
     /* reverse-complement follow: predict complement(seq[rmp]), walk backward */
     if (g_ractive && g_rmp < np) {
@@ -873,7 +976,7 @@ static int mix_setup(int maxorder, size_t sizing_n, size_t seq_alloc, int hb, in
         memset(g_tab[i], 0, g_size[i] * sizeof(uint16_t));
         g_nmodels++; g_nstcm++;
     }
-    g_nin = g_nmodels + NMATCH + 1;  /* + forward matches + reverse-complement match */
+    g_nin = g_nmodels + NEXTRA;      /* + forward matches + reverse-complement match (+ cue) */
     if (g_nin > MAXIN) { fprintf(stderr, "too many mixer inputs\n"); return -1; }
     /* every expert slot is initialised, including ones this level will not use,
        so a saved state is byte-deterministic for a given level */
@@ -923,7 +1026,10 @@ static int mix_setup(int maxorder, size_t sizing_n, size_t seq_alloc, int hb, in
     }
     g_rmp = 0; g_rlen = 0; g_ractive = 0; g_rmiss = 0;
     for (size_t j = 0; j < sizeof(g_rc_pr) / sizeof(g_rc_pr[0]); j++) g_rc_pr[j] = CTR_INIT;
-    g_seq = (uint8_t *)malloc(seq_alloc ? seq_alloc : 1);
+#ifdef DNAC_CUE
+    cue_reset();
+#endif
+    g_seq =(uint8_t *)malloc(seq_alloc ? seq_alloc : 1);
     if (!g_seq) { fprintf(stderr, "out of memory for match model\n"); return -1; }
     return 0;
 }
@@ -986,6 +1092,9 @@ static void stcm_after(int s, uint64_t truehist) {
 static void extra_slots(int node, int b1, uint16_t **ex) {
     for (int mi = 0; mi < NMATCH; mi++) ex[mi] = match_slot_of(&g_mm[mi], node, b1);
     ex[NMATCH] = rc_slot(node, b1);
+#ifdef DNAC_CUE
+    ex[NMATCH + 1] = cue_slot(node, b1);
+#endif
 }
 
 /* TWO-LAYER MIXING. One mixer has to pick a single context to specialise on.
@@ -1038,7 +1147,7 @@ static uint32_t mix_predict(int node, const int *mc, const uint64_t *ctxv, uint1
         slot[i] = sp;
         st[i] = CTR_STRETCH(*sp);
     }
-    for (int e = 0; e < NMATCH + 1; e++) {          /* forward matches, RC match */
+    for (int e = 0; e < NEXTRA; e++) {              /* forward matches, RC match, cue */
         int i = g_nmodels + e;
         slot[i] = extra[e];
         st[i] = CTR_STRETCH(*extra[e]);
@@ -1144,7 +1253,7 @@ static void sse_update(int node, uint64_t hist, const SSEState *ss, int bit) {
    anchors) learns it before the target is coded. Encoder and decoder run this
    identically over the same reference file, so they stay in lockstep. */
 static void train_base(const uint64_t *ctxv, uint64_t hist, int s) {
-    double st[MAXIN], pp; uint16_t *slot[MAXIN], *ex[NMATCH + 1];
+    double st[MAXIN], pp; uint16_t *slot[MAXIN], *ex[NEXTRA];
     int b1 = s >> 1, b0 = s & 1;
     int mc[NMIX]; MixState ms;
     SSEState ss;
@@ -1179,10 +1288,13 @@ static void prime_with_reference(const uint8_t *ref, size_t n) {
             stcm_after(s, hist);
             ir_train(hist, g_thist);
     }
-#ifdef DNAC_NUDGE
+#if defined(DNAC_NUDGE) || defined(DNAC_CUE)
     /* not in the state file, so a FASTA reference must end priming exactly as a
        loaded state starts: without it, the two ways in would stop being identical */
     for (int mi = 0; mi < NMATCH; mi++) g_mm[mi].mlen_pre = 0;
+#endif
+#ifdef DNAC_CUE
+    cue_reset();                            /* same reason: the cue is not saved */
 #endif
 }
 
@@ -1257,7 +1369,7 @@ static int map_dump(const char *path) {
 static void map_free(void) { free(g_map); free(g_mapn); g_map = NULL; g_mapn = NULL; }
 
 static void code_base_enc(REnc *e, const uint64_t *ctxv, uint64_t hist, int s) {
-    double st[MAXIN], pp; uint16_t *slot[MAXIN], *ex[NMATCH + 1];
+    double st[MAXIN], pp; uint16_t *slot[MAXIN], *ex[NEXTRA];
     int b1 = s >> 1, b0 = s & 1;
     int mc[NMIX]; MixState ms;
     SSEState ss;
@@ -1285,7 +1397,7 @@ static void code_base_enc(REnc *e, const uint64_t *ctxv, uint64_t hist, int s) {
     map_base();
 }
 static int code_base_dec(RDec *d, const uint64_t *ctxv, uint64_t hist) {
-    double st[MAXIN], pp; uint16_t *slot[MAXIN], *ex[NMATCH + 1];
+    double st[MAXIN], pp; uint16_t *slot[MAXIN], *ex[NEXTRA];
     int mc[NMIX]; MixState ms;
     SSEState ss;
     stcm_prepare();
@@ -1489,7 +1601,7 @@ static int state_load(const char *path, size_t extra, int *k_out,
         MatchModel *m = &g_mm[mi];
         m->mp = (uint32_t)get64(f); m->mlen = (uint32_t)get64(f);
         m->active = (int)get64(f);  m->miss = (int)get64(f);
-#ifdef DNAC_NUDGE
+#if defined(DNAC_NUDGE) || defined(DNAC_CUE)
         m->mlen_pre = 0;                    /* as prime_with_reference() leaves it */
 #endif
         ok &= rd(m->hash, sizeof(uint32_t), ((size_t)1 << m->hbits) * MWAYS, f);

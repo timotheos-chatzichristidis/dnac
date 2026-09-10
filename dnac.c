@@ -418,6 +418,17 @@ static TLS double    g_apm2[APM_MAXCTX][APM_BINS]; /* SSE stage 2 (order-2 conte
 #define MWAY_EXTRA 0            /* extra bucket-bits (memory) when MWAYS > 1       */
 #endif
 #define MLENCAP   63            /* cap on match length used as confidence bucket  */
+#ifdef DNAC_NUDGE                  /* see match_after() and docs/nudge-prediction.md */
+#ifndef NUDGE_L
+#define NUDGE_L      5          /* bases that must agree at the shifted phase     */
+#endif
+#ifndef NUDGE_D
+#define NUDGE_D      12         /* largest shift tried, either way                */
+#endif
+#ifndef NUDGE_MINLEN
+#define NUDGE_MINLEN 16         /* only nudge a match that was established        */
+#endif
+#endif
 #define MISS_MAX  8             /* abandon a match after this many consecutive misses */
 #define MATCH_EMPTY 0xFFFFFFFFu
 
@@ -450,6 +461,9 @@ typedef struct {
     uint32_t *hash;                         /* context -> last end position        */
     uint32_t  mp, mlen;                     /* follow position + confidence        */
     int       active, miss;
+#ifdef DNAC_NUDGE
+    uint32_t  mlen_pre;                     /* confidence when this miss run began */
+#endif
     /* adaptive probs, indexed by (node, just-missed flag, conf bucket, pred bit)  */
     uint16_t  pr[NNODES * 2 * (MLENCAP + 1) * 2];
 } MatchModel;
@@ -674,9 +688,39 @@ static void match_after(int s, uint64_t newhist) {
                 m->miss = 0;
                 m->mp++;
             } else {                                /* miss: tolerate, drop confidence */
+#ifdef DNAC_NUDGE
+                if (m->miss == 0) m->mlen_pre = m->mlen;
+#endif
                 m->mlen >>= 1;
                 m->miss++;
                 m->mp++;
+#ifdef DNAC_NUDGE
+                /* THE NUDGE (a DJ's move when the second deck slips a beat): the
+                   step above assumed a substitution, i.e. the same phase. After an
+                   insertion or deletion the phase is wrong and every later base
+                   misses until the hash re-anchors ~MMIN clean bases on. Instead,
+                   push the pointer a few bases forward or back and keep the first
+                   shift under which the last NUDGE_L coded bases agree with the
+                   earlier copy. Only for a match that was established, and only
+                   from bases both sides already have, so the decoder follows. */
+                if (m->mlen_pre >= NUDGE_MINLEN) {
+                    for (int a = 1; a <= NUDGE_D; a++) {
+                        int done = 0;
+                        for (int sg = -1; sg <= 1; sg += 2) {
+                            int64_t q = (int64_t)m->mp + sg * a;   /* next base to predict */
+                            if (q < NUDGE_L || q > (int64_t)np) continue;
+                            if (back_agree((uint32_t)(q - 1), np, NUDGE_L) == NUDGE_L) {
+                                m->mp = (uint32_t)q;
+                                m->mlen = m->mlen_pre >> 1;
+                                m->miss = 0;
+                                done = 1;
+                                break;
+                            }
+                        }
+                        if (done) break;
+                    }
+                }
+#endif
                 if (m->miss > MISS_MAX) m->active = 0;
             }
             if (m->mp >= g_npos) m->active = 0;
@@ -1135,6 +1179,11 @@ static void prime_with_reference(const uint8_t *ref, size_t n) {
             stcm_after(s, hist);
             ir_train(hist, g_thist);
     }
+#ifdef DNAC_NUDGE
+    /* not in the state file, so a FASTA reference must end priming exactly as a
+       loaded state starts: without it, the two ways in would stop being identical */
+    for (int mi = 0; mi < NMATCH; mi++) g_mm[mi].mlen_pre = 0;
+#endif
 }
 
 
@@ -1440,6 +1489,9 @@ static int state_load(const char *path, size_t extra, int *k_out,
         MatchModel *m = &g_mm[mi];
         m->mp = (uint32_t)get64(f); m->mlen = (uint32_t)get64(f);
         m->active = (int)get64(f);  m->miss = (int)get64(f);
+#ifdef DNAC_NUDGE
+        m->mlen_pre = 0;                    /* as prime_with_reference() leaves it */
+#endif
         ok &= rd(m->hash, sizeof(uint32_t), ((size_t)1 << m->hbits) * MWAYS, f);
         ok &= rd(m->pr, sizeof(uint16_t), sizeof(m->pr) / sizeof(m->pr[0]), f);
     }

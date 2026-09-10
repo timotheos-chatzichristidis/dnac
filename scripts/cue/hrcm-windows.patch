@@ -1,0 +1,119 @@
+diff --git a/compress.cpp b/compress.cpp
+index 2d84651..fd9b91e 100644
+--- a/compress.cpp
++++ b/compress.cpp
+@@ -98,7 +98,7 @@ int integerCoding(char ch) { //encoding ACGT
+ //read the input file, get the filename of every sequence and the sequence amount
+ int readFile(char *filename)
+ {
+-	FILE* fp = fopen(filename, "r");
++	FILE* fp = fopen(filename, "rb");
+ 	if (NULL == fp) {
+ 		printf("Error: failed to open file %s\n", filename);
+ 		exit(-1);
+@@ -122,7 +122,7 @@ void referenceSequenceExtraction(char *str_referenceName)
+ 	char cha[LINE_CHA_NUM];      //the content of one line
+ 
+ 	printf("The reference file is %s.\n", str_referenceName);
+-	FILE* fp = fopen(str_referenceName, "r");
++	FILE* fp = fopen(str_referenceName, "rb");
+ 	if (NULL == fp)
+ 	{
+ 		printf("Error: fail to open reference file %s.\n", str_referenceName);
+@@ -168,7 +168,7 @@ void referenceSequenceExtraction(char *str_referenceName)
+ 
+ void targetSequenceExtraction(char *str_sequenceName, int &_seq_code_len, int &_seq_low_len, int &_nCha_len, int &_spe_cha_len)
+ {
+-	FILE *fp = fopen(str_sequenceName, "r");
++	FILE *fp = fopen(str_sequenceName, "rb");
+ 	if (NULL == fp) {
+ 		printf("Error: fail to open sequence file %s.\n", str_sequenceName);
+ 		return;
+@@ -800,7 +800,7 @@ void compress(char *filename)
+ 	{
+ 		printf("Info: Compressing...Please wait for a moment.\n");
+ 		initial();
+-		char temp_filename[100], resultFilename1[100], resultFilename2[100], cmd[100];
++		char temp_filename[100], resultFilename1[100], resultFilename2[100], cmd[2048];
+ 		extractFileName(filename, temp_filename);
+ 		sprintf(resultFilename1, "%s.hrcm", temp_filename);//stores the match result of all to-be-compressed sequences
+ 		sprintf(resultFilename2, "%s.desc", temp_filename);//stores the identifier and line width of all to-be-compressed sequences
+@@ -808,7 +808,7 @@ void compress(char *filename)
+ 		referenceSequenceExtraction(seqName[0]);//reference sequence information extraction
+ 		kMerHashingConstruct();//construct the hash index for the first match based on k-mer
+ 
+-		FILE *fp1 = fopen(resultFilename1, "w");
++		FILE *fp1 = fopen(resultFilename1, "wb");
+ 		if (NULL == fp1) {
+ 			printf("Error: fail to open %s.\n", resultFilename1);
+ 			exit(-1);
+@@ -816,7 +816,7 @@ void compress(char *filename)
+ 		codeMatch(fp1);
+ 		fclose(fp1);
+ 
+-		FILE *fp2 = fopen(resultFilename2, "w");
++		FILE *fp2 = fopen(resultFilename2, "wb");
+ 		if (NULL == fp2) {
+ 			printf("Error: fail to open %s.\n", resultFilename2);
+ 			exit(-1);
+@@ -824,9 +824,9 @@ void compress(char *filename)
+ 		runLengthCoding(fp2, &lineWidth_vec[0], seqNumber - 1, 0);//save lineWidth data
+ 		saveIdentifierData(fp2, identifier_vec);//save identifier data
+ 		fclose(fp2);
+-		sprintf(cmd, "./7za a %s.7z %s %s -m0=PPMd", temp_filename, resultFilename1, resultFilename2);
++		sprintf(cmd, SEVENZ " a -y %s.7z %s %s -m0=PPMd", temp_filename, resultFilename1, resultFilename2);
+ 		system(cmd); //for linux
+-		sprintf(cmd, "rm -f %s %s", resultFilename1, resultFilename2);
++		sprintf(cmd, "echo keep %s %s", resultFilename1, resultFilename2);
+ 		system(cmd); //for linux
+ 		compressClear();
+ 	}
+@@ -872,7 +872,7 @@ int main(int argc, char *argv[]) {
+ 		per = argv[6];
+ 		percent = atoi(per); 
+ 	}
+-	while ((oc = getopt(argc, argv, "r:t:f:")) >= 0)
++	while ((oc = getopt(argc - 1, argv + 1, "r:t:f:")) >= 0)  /* mingw getopt does not permute: skip the mode word */
+ 	{
+ 		switch (oc)
+ 		{
+diff --git a/decompress.cpp b/decompress.cpp
+index c2da64f..6357d7a 100644
+--- a/decompress.cpp
++++ b/decompress.cpp
+@@ -371,14 +371,14 @@ void decompress(char *filename)
+ 	printf("Info: Decompressing...Please wait for a moment.\n");
+ 	sec_seq_num = ceil(percent * seqNumber / 100);
+ 	initial();
+-	char temp_filename[100], resultFilename1[100], resultFilename2[100], targetFilename[100], cmd[100];
++	char temp_filename[100], resultFilename1[100], resultFilename2[100], targetFilename[100], cmd[2048];
+ 	extractFileName(filename, temp_filename);
+ 	sprintf(resultFilename1, "%s.hrcm", temp_filename);
+ 	sprintf(resultFilename2, "%s.desc", temp_filename);
+-	sprintf(cmd, "./7za x %s.7z", temp_filename);
++	sprintf(cmd, SEVENZ " x -y %s.7z", temp_filename);
+ 	system(cmd);
+ 
+-	FILE *fp2 = fopen(resultFilename2, "r");
++	FILE *fp2 = fopen(resultFilename2, "rb");
+ 	if (NULL == fp2)
+ 	{
+ 		printf("Error: fail to open %s.\n", resultFilename2);
+@@ -390,7 +390,7 @@ void decompress(char *filename)
+ 
+ 	referenceSequenceExtraction(seqName[0]);//reference sequence information extraction
+ 
+-	FILE *fp1 = fopen(resultFilename1, "r");
++	FILE *fp1 = fopen(resultFilename1, "rb");
+ 	if (NULL == fp1)
+ 	{
+ 		printf("Error: fail to open %s.\n", resultFilename1);
+@@ -406,7 +406,7 @@ void decompress(char *filename)
+ 
+ 		extractFileName(seqName[i], temp_filename);
+ 		sprintf(targetFilename, "%s.fasta", temp_filename);
+-		FILE *fp = fopen(targetFilename, "w");
++		FILE *fp = fopen(targetFilename, "wb");
+ 		if (NULL == fp)
+ 		{
+ 			printf("Error: fail to open target sequence file %s. No. %d\n", targetFilename, i);

@@ -1,0 +1,9 @@
+fa	zstd-patch-from	3143939	yes	97.441277800
+fa	dnac-base	586615	yes	189.748659900
+fa	dnac-cue	551594	yes	193.667428800
+seq	zstd-patch-from	882586	yes	83.697083200
+seq	dnac-base	581022	yes	203.729457600
+seq	dnac-cue	545982	yes	193.320330200
+fa	HRCM	1438137	NO	5.593909000
+seq	GeCo3-R	1243961	unverified	105.411788700
+seq	GeCo3-H	877373	unverified	156.423038000

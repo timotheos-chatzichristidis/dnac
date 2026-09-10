@@ -511,9 +511,17 @@ static TLS uint32_t  g_cmp     = 0;
 static TLS uint32_t  g_clen    = 0;
 static TLS int       g_cactive = 0;
 static TLS int       g_cmiss   = 0;
-static TLS uint16_t  g_c_pr[NNODES * 2 * (MLENCAP + 1) * 2];
+/* CUE_BACK=1 adds the second half of the method: the cue ALTERNATES decks. After
+   B is mixed in, the headphones go to A while it fades out (role 1), and if B is
+   the one going wrong, A comes back by the same rule. The ear knows which deck it
+   is hearing, so role is part of the table index. CUE_BACK=0 is docs/cue.md. */
+#ifndef CUE_BACK
+#define CUE_BACK 0
+#endif
+static TLS int       g_crole   = 0;         /* 0 = incoming deck, 1 = outgoing deck */
+static TLS uint16_t  g_c_pr[NNODES * 2 * (CUE_BACK ? 2 : 1) * (MLENCAP + 1) * 2];
 static void cue_reset(void) {
-    g_cmp = 0; g_clen = 0; g_cactive = 0; g_cmiss = 0;
+    g_cmp = 0; g_clen = 0; g_cactive = 0; g_cmiss = 0; g_crole = 0;
     for (size_t j = 0; j < sizeof(g_c_pr) / sizeof(g_c_pr[0]); j++) g_c_pr[j] = CTR_INIT;
 }
 #endif
@@ -664,7 +672,10 @@ static uint16_t *cue_slot(int node, int b1) {
             bucket = (g_clen < MLENCAP) ? (int)g_clen : MLENCAP;
         }
     }
-    return &g_c_pr[(((node * 2 + room) * (MLENCAP + 1)) + bucket) * 2 + pbit];
+#if CUE_BACK
+    room = room * 2 + g_crole;              /* which deck the headphone ear is on */
+#endif
+    return &g_c_pr[(((node * (CUE_BACK ? 4 : 2) + room) * (MLENCAP + 1)) + bucket) * 2 + pbit];
 }
 #endif
 
@@ -776,7 +787,7 @@ static void match_after(int s, uint64_t newhist) {
                             if (q < CUE_L || q > (int64_t)np) continue;
                             if (back_agree((uint32_t)(q - 1), np, CUE_L) == CUE_L) {
                                 g_cmp = (uint32_t)q; g_clen = CUE_L;
-                                g_cactive = 1; g_cmiss = 0; done = 1;
+                                g_cactive = 1; g_cmiss = 0; g_crole = 0; done = 1;
                             }
                         }
                 }
@@ -838,6 +849,9 @@ static void match_after(int s, uint64_t newhist) {
        that is still missing, and is less sure than the cue, takes its phase. */
     if (g_cactive && g_cmiss == 0 && g_clen >= CUE_SWITCH) {
         int mixed = 0;
+        /* deck A: the phase master 0 was on, if it still had one */
+        uint32_t a_mp = g_mm[0].mp, a_len = g_mm[0].mlen;
+        int a_live = g_mm[0].active && g_mm[0].miss > 0 && g_mm[0].mlen < g_clen;
         for (int mi = 0; mi < NMATCH; mi++) {
             MatchModel *m = &g_mm[mi];
             if (m->miss > 0 && m->mlen < g_clen) {
@@ -846,6 +860,15 @@ static void match_after(int s, uint64_t newhist) {
             }
         }
         if (mixed) g_cactive = 0;
+#if CUE_BACK
+        /* B is on the speakers now, so the outer ear has it; the headphones go
+           to A while it fades, in case it is B that turns out wrong */
+        if (mixed && a_live && a_mp < g_npos) {
+            g_cmp = a_mp; g_clen = a_len; g_cmiss = 0; g_cactive = 1; g_crole = 1;
+        }
+#else
+        (void)a_mp; (void)a_len; (void)a_live;
+#endif
     }
 #endif
 

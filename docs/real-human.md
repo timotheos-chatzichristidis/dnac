@@ -16,6 +16,9 @@ archives round-trip byte-identically.
 | **R4** | gain larger in the second half of the shared set | **held**: −13.26% first half, **−23.21%** second |
 | **R5** | lossless | **held** |
 
+**Replicated on chromosome 22** (`docs/remaining.md`): −5.83% file, −16.24% on
+shared sequence, −0.01% on novel.
+
 ## Where the gain comes from
 
 Windows are fixed from the v0.8.0 map (1 kb each, same target, so paired):

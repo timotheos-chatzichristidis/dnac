@@ -35,6 +35,7 @@ needle and dropped it somewhere else.
 | 2026-09-10 | Against zstd, HRCM and GeCo3's own templates: dnac with the cue is the smallest, 1.6x ahead of the best | `competitors*.md` |
 | 2026-09-10 | His refinement (the cue alternates decks) built and measured: **not detectable**. Kept on record as a failure | `cue-back*.md` |
 | 2026-09-10 | His sharpest claim tested, blind. Its first half held: a permanent second ear is what learns along the file (0.58–0.61 against 0.91 without one, and 0.92 for the jump-only nudge). Its second half, as translated (the headphone ear must be heard *through* the room), **failed**: removing it changes real sequence by 0.1% | `cue-room*.md` |
+| 2026-09-10 | The 2x2 settles it: hearing the cue through the room matters at neither layer. The permanence carries the gain. Robustness 203/203, time +3%, and **chromosome 22 replicates chr21**: −5.83% file, −16.24% shared, 0 on novel | `remaining*.md` |
 
 ## Who contributed what, stated plainly
 

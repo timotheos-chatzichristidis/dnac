@@ -1174,13 +1174,23 @@ static void mix_ctxs(uint64_t hist, int *mc) {
 static TLS double g_dg_n, g_dg_s[MAXIN], g_dg_ss[MAXIN], g_dg_p[MAXIN][MAXIN], g_dg_c[MAXIN];
 #endif
 
+/* -DDNAC_PROF: cycle counters around each stage of coding one base, printed at
+   the end of a span. Diagnostic only; the bitstream is unchanged. */
+#ifdef DNAC_PROF
+#include <x86intrin.h>
+static uint64_t g_prof[12];
+#define PT(i, expr) do { uint64_t t_ = __rdtsc(); expr; g_prof[i] += __rdtsc() - t_; } while (0)
+#else
+#define PT(i, expr) expr
+#endif
+
 static uint32_t mix_predict(int node, const int *mc, const uint64_t *ctxv, uint16_t **extra,
                             double *st, uint16_t **slot, MixState *ms, double *pout) {
-    for (int i = 0; i < g_nmodels; i++) {
+    PT(0, for (int i = 0; i < g_nmodels; i++) {
         uint16_t *sp = mix_slot(i, ctxv[i], node);
         slot[i] = sp;
         st[i] = CTR_STRETCH(*sp);
-    }
+    });
     for (int e = 0; e < NEXTRA; e++) {              /* forward matches, RC match, cue */
         int i = g_nmodels + e;
         slot[i] = extra[e];
@@ -1422,27 +1432,28 @@ static void code_base_enc(REnc *e, const uint64_t *ctxv, uint64_t hist, int s) {
     int b1 = s >> 1, b0 = s & 1;
     int mc[NMIX]; MixState ms;
     SSEState ss;
-    stcm_prepare();
-    mix_ctxs(hist, mc);
+    PT(6, stcm_prepare(); mix_ctxs(hist, mc));
 
-    extra_slots(0, 0, ex);
-    mix_predict(0, mc, ctxv, ex, st, slot, &ms, &pp);
-    uint32_t q1 = pq_of(sse_apply(0, hist, pp, &ss));   /* hoisted so the map sees
+    PT(6, extra_slots(0, 0, ex));
+    PT(1, mix_predict(0, mc, ctxv, ex, st, slot, &ms, &pp));
+    uint32_t q1;
+    PT(2, q1 = pq_of(sse_apply(0, hist, pp, &ss)));     /* hoisted so the map sees
                                                            the same number the
                                                            coder was handed */
-    renc_bit(e, b1, q1);
+    PT(3, renc_bit(e, b1, q1));
     map_bit(b1, q1);
-    mix_update(0, mc, st, slot, b1, pp, &ms);
-    sse_update(0, hist, &ss, b1);
+    PT(4, mix_update(0, mc, st, slot, b1, pp, &ms));
+    PT(5, sse_update(0, hist, &ss, b1));
 
     int node = b1 ? 2 : 1;
-    extra_slots(node, b1, ex);
-    mix_predict(node, mc, ctxv, ex, st, slot, &ms, &pp);
-    uint32_t q0 = pq_of(sse_apply(node, hist, pp, &ss));
-    renc_bit(e, b0, q0);
+    PT(6, extra_slots(node, b1, ex));
+    PT(1, mix_predict(node, mc, ctxv, ex, st, slot, &ms, &pp));
+    uint32_t q0;
+    PT(2, q0 = pq_of(sse_apply(node, hist, pp, &ss)));
+    PT(3, renc_bit(e, b0, q0));
     map_bit(b0, q0);
-    mix_update(node, mc, st, slot, b0, pp, &ms);
-    sse_update(node, hist, &ss, b0);
+    PT(4, mix_update(node, mc, st, slot, b0, pp, &ms));
+    PT(5, sse_update(node, hist, &ss, b0));
     map_base();
 }
 static int code_base_dec(RDec *d, const uint64_t *ctxv, uint64_t hist) {
@@ -1784,19 +1795,25 @@ static void encode_span(const uint8_t *buf, long n, Buf *out) {
         uint32_t f0 = (uint32_t)fc[0] + 1, f1 = (uint32_t)fc[1] + 1, ft = f0 + f1;
 
         if (s >= 0) {                          /* a base: flag=0, then mixed prediction */
+#ifdef DNAC_PROF
+            uint64_t tb_ = __rdtsc();
+#endif
             uint64_t ctxv[MAXIN];
-            for (int i = 0; i < g_nmodels; i++)
+            PT(11, for (int i = 0; i < g_nmodels; i++)
                 ctxv[i] = (g_tol[i] ? g_thist : hist) & g_ctxmask[i];
             mix_prefetch(ctxv);       /* fetch overlaps the flag coder below */
-            renc_encode(&e, 0, f0, ft);
+            renc_encode(&e, 0, f0, ft));
             fc[0]++;
             code_base_enc(&e, ctxv, hist, s);
             hist = (hist << 2) | (uint64_t)s;
             ir_prefetch(hist);        /* overlaps match_after/stcm_after below */
-            match_after(s, hist);
-            stcm_after(s, hist);
-            ir_train(hist, g_thist);
+            PT(7, match_after(s, hist));
+            PT(8, stcm_after(s, hist));
+            PT(9, ir_train(hist, g_thist));
             run++;
+#ifdef DNAC_PROF
+            g_prof[10] += __rdtsc() - tb_;
+#endif
         } else {                               /* not a base: flag=1, then literal byte */
             renc_encode(&e, f0, f1, ft);
             fc[1]++;
@@ -1811,6 +1828,19 @@ static void encode_span(const uint8_t *buf, long n, Buf *out) {
         if (ft + 1 >= CAP) { fc[0] >>= 1; fc[1] >>= 1; }
     }
     renc_flush(&e);
+#ifdef DNAC_PROF
+    {
+        static const char *nm[12] = { "order-model table lookups (inside mix)",
+            "mixer total (lookups + dot products)", "SSE apply", "range coder",
+            "mixer update", "SSE update", "contexts/slots setup", "match_after (matches+cue)",
+            "stcm_after", "ir_train (other-strand training)", "WHOLE base", "ctx+prefetch+flag" };
+        double tot = (double)g_prof[10];
+        fprintf(stderr, "PROF cycles per base over %ld bytes (total %.0f Mcycles)\n", n, tot / 1e6);
+        for (int i = 0; i < 12; i++)
+            fprintf(stderr, "PROF %-42s %8.0f cyc/base  %5.1f%%\n", nm[i],
+                    (double)g_prof[i] / (double)n, 100.0 * (double)g_prof[i] / tot);
+    }
+#endif
 #ifdef DNAC_DIAG
     fprintf(stderr, "DIAG n=%.0f nin=%d\n", g_dg_n, g_nin);
     for (int i = 0; i < g_nin; i++) {

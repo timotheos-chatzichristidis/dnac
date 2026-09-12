@@ -28,6 +28,34 @@ jobs:
       - name: Losslessness round-trips
         run: sh scripts/roundtrip.sh ./dnac
 
+      # v0.9.0's new mechanism (docs/cue.md) lives behind -DDNAC_CUE, so the
+      # default build proves nothing about it. Losslessness is the one claim
+      # that must never regress, and it has to hold for the build we intend to
+      # ship, not only for the one that is easy to test.
+      - name: Build with the cue
+        run: ${{ matrix.cc }} -O2 -Wall -Wextra -DDNAC_CUE -o dnac_cue dnac.c -lm
+
+      - name: Losslessness round-trips, with the cue
+        run: sh scripts/roundtrip.sh ./dnac_cue
+
+      # The cue is a second match deck, so the two things that must not happen
+      # are: it changes nothing (the flag never reached the compiler, and every
+      # figure on the branch is a build compared with itself), or it changes the
+      # archive of a file it has no business touching. An indel-dense target
+      # exercises the first; the flag being off must leave the stream alone.
+      - name: The flag must change the output, and only with the flag
+        run: |
+          ./dnac gen cue_ref.fa 300000 5
+          ./dnac mut cue_ref.fa cue_tgt.fa 8 9
+          ./dnac     cr cue_tgt.fa plain.dnac cue_ref.fa 22 3
+          ./dnac_cue cr cue_tgt.fa cue.dnac   cue_ref.fa 22 3
+          ./dnac_cue dr cue.dnac   cue_back.fa cue_ref.fa
+          cmp cue_tgt.fa cue_back.fa
+          if cmp -s plain.dnac cue.dnac; then
+            echo "-DDNAC_CUE produced a byte-identical archive: the flag is not reaching the compiler"
+            exit 1
+          fi
+
       - name: Sanity — compress/decompress a generated genome
         run: |
           ./dnac gen sample.fa 500000 42

@@ -18,7 +18,8 @@
 #
 # Tiers:  fast  (~2 min, E. coli scale)   -- run before every commit that touches
 #                                            dnac.c or the docs
-#         slow  (~15 min, full chr21)     -- run before tagging a release
+#         slow  (2 h 52 min measured -- it was ~15 min before the cue rows
+#                added the real human pairs) -- run before tagging a release
 #         meta  (needs bench-external/seq/meta.seq, ~25 min) -- the "Where this
 #           loses" table: the metagenome bake-off against gzip/bzip2/zstd/xz.
 #           These are the only rows here defending a number a COMPETITOR set, and
@@ -27,12 +28,22 @@
 #           `sh scripts/get-data.sh --meta` and copy data/meta.seq into
 #           bench-external/seq/. xz is resolved by its --version string, because a
 #           busybox applet named xz that cannot compress usually wins on PATH.
+#         cue   (needs a compiler and the cue data, 65 min measured) -- every figure in
+#           docs/nudge.md, docs/cue*.md, docs/remaining.md and docs/speed.md that
+#           is E. coli-scale. It is its own tier rather than part of `fast`
+#           because `fast` is a pre-commit gate and a gate nobody can afford to
+#           run stops being run. These rows COMPILE the build they defend (the
+#           cue lives behind -DDNAC_CUE), and they leave primed states and -map
+#           files in bench-external/work/cue -- 7.9 GB measured, all disposable
+#           (the states are 616 MB each, one per build and level).
+#           Get the data with `sh scripts/get-data.sh --cue` and
+#           `sh scripts/cue/make-targets.sh`.
 #         extern(needs GeCo3 built, ~10 min) -- the COMPETITOR's columns. Until
 #           2026-08-20 nothing re-ran these, which meant the only figures in the
 #           README nobody checked were the comparative claims -- the ones a reader
 #           is most entitled to distrust. Run before touching a head-to-head claim.
 #
-# Usage:  ./verify-claims.ps1 [-Tier fast|slow|extern|all] [-SelfTest] [-Only <id>]
+# Usage:  ./verify-claims.ps1 [-Tier fast|slow|extern|meta|cue|all] [-SelfTest] [-Only <id>]
 #         ./verify-claims.ps1 -Tier meta              # ~25 min, the losing columns
 #         ./verify-claims.ps1 -AnchorsOnly -Tier all     # seconds: after editing a doc,
 #           checks every claim's sentence is still there without re-measuring anything.
@@ -43,7 +54,7 @@
 # in benchmark.ps1.
 
 param(
-    [ValidateSet('fast','slow','extern','meta','all')][string]$Tier = 'fast',
+    [ValidateSet('fast','slow','extern','meta','cue','all')][string]$Tier = 'fast',
     [switch]$SelfTest,
     [switch]$AnchorsOnly,
     [string]$Only
@@ -65,15 +76,18 @@ function Bases($seq) {
 
 # Compress and return the stored size in bytes. Always round-trips: a size from a
 # run whose losslessness was not checked is not a measurement, it is a number.
-function Size($inFile, $ref, $level, $blocks) {
+function Size($inFile, $ref, $level, $blocks, $exe) {
+    # $exe: an experiment build (the cue rows below). Default is the repository's
+    # own dnac.exe, which is what every pre-v0.9.0 row measures.
+    if (-not $exe) { $exe = $dnac }
     $out = Join-Path $work 'vc.dnac'; $rt = Join-Path $work 'vc.rt'
     Remove-Item $out, $rt -Force -ErrorAction SilentlyContinue
     $lvl = if ($level) { "$level" } else { '3' }
     $jarg = if ($blocks) { @('-j', "$blocks") } else { @() }
-    if ($ref) { & $dnac cr $inFile $out $ref 22 $lvl @jarg | Out-Null }
-    else      { & $dnac c  $inFile $out 22 $lvl @jarg      | Out-Null }
+    if ($ref) { & $exe cr $inFile $out $ref 22 $lvl @jarg | Out-Null }
+    else      { & $exe c  $inFile $out 22 $lvl @jarg      | Out-Null }
     if ($LASTEXITCODE -ne 0 -or -not (Test-Path $out)) { throw "compress failed: $inFile" }
-    if ($ref) { & $dnac dr $out $rt $ref | Out-Null } else { & $dnac d $out $rt | Out-Null }
+    if ($ref) { & $exe dr $out $rt $ref | Out-Null } else { & $exe d $out $rt | Out-Null }
     if ($LASTEXITCODE -ne 0 -or -not (Test-Path $rt)) { throw "decompress failed: $inFile" }
     if ((Get-FileHash $inFile -Algorithm SHA256).Hash -ne (Get-FileHash $rt -Algorithm SHA256).Hash) {
         throw "NOT LOSSLESS on $inFile - stop everything else and fix this"
@@ -201,6 +215,285 @@ function State($ref) {
 # idle one reads 98 s, and a "fix" based on that would be a new wrong number.
 # Timings are re-measured by hand on an idle machine via ./bench.ps1 and are
 # stated as one machine's numbers. Sizes are deterministic; times are not.
+
+
+# --- the cue (v0.9.0, branch `nudge`) -----------------------------------------
+# The figures in docs/nudge.md, docs/cue*.md, docs/real-human.md,
+# docs/competitors.md, docs/remaining.md and docs/speed.md were measured with
+# builds that do not exist until someone compiles them: the cue lives behind
+# -DDNAC_CUE, and every ablation behind another flag. So these rows COMPILE the
+# build they are defending, exactly as ./ablate.ps1 does, and measure it here.
+#
+# Three things make that affordable. A build is compiled once per run; the
+# E. coli reference is primed once per build (a state and its FASTA give
+# byte-identical archives, so this changes no number); and every size is
+# memoised, because one byte count feeds several published figures -- the size
+# itself, the cost per event derived from it, and the percentage against v0.8.0.
+#
+# `base` is the unflagged build, and every "against v0.8.0" figure on this branch
+# rests on it being v0.8.0. Two things hold that premise here. -SelfTest asserts
+# that the flag actually reaches the compiler -- that `cue` and `base` do NOT
+# produce the same bytes -- which is the failure that would silently turn every
+# comparison below into a comparison of a build with itself. What is NOT checked
+# yet is `base` against a STORED v0.8.0 archive; that needs the archives, and it
+# is Batch 4's job (docs/v0.9.0-plan.md).
+$cueWork    = Join-Path $work 'cue'
+$cueTargets = Join-Path $root 'bench-external\cue\ecoli-targets'
+$cueHuman   = Join-Path $root 'bench-external\cue\human'
+$script:CueExeMemo   = @{}
+$script:CueStateMemo = @{}
+$script:CueSizeMemo  = @{}
+$script:CueMapMemo   = @{}
+
+# The flags each label in the docs was built with. Kept in step with
+# scripts/cue/common.sh, which is the shell-side copy of the same table.
+function CueDefs($label) {
+    switch ($label) {
+        'base'      { @() }
+        'cue'       { @('-DDNAC_CUE') }
+        'noroom'    { @('-DDNAC_CUE','-DCUE_ROOM=0') }
+        'mf'        { @('-DDNAC_CUE','-DCUE_MIXFREE=1') }
+        'mf_noroom' { @('-DDNAC_CUE','-DCUE_ROOM=0','-DCUE_MIXFREE=1') }
+        'cue2'      { @('-DDNAC_CUE','-DCUE_BACK=1') }
+        'nudge'     { @('-DDNAC_NUDGE','-DNUDGE_L=5','-DNUDGE_D=12') }
+        default {
+            if ($label -match '^L(\d+)D(\d+)$') { @('-DDNAC_NUDGE', "-DNUDGE_L=$($Matches[1])", "-DNUDGE_D=$($Matches[2])") }
+            else { throw "unknown cue build label '$label'" }
+        }
+    }
+}
+
+function CueExe($label) {
+    if ($script:CueExeMemo.ContainsKey($label)) { return $script:CueExeMemo[$label] }
+    New-Item -ItemType Directory -Force $cueWork | Out-Null
+    $cc  = if ($env:DNAC_CC) { $env:DNAC_CC } else { 'gcc' }
+    $exe = Join-Path $cueWork "dnac_$label.exe"
+    $log = & $cc @('-O3','-o',$exe,(Join-Path $root 'dnac.c'),'-lm') @(CueDefs $label) 2>&1
+    if ($LASTEXITCODE -ne 0) { throw "$cc failed for '$label' (set DNAC_CC if gcc is elsewhere):`n$log" }
+    $script:CueExeMemo[$label] = $exe
+    $exe
+}
+
+# One priming pass of E. coli MG1655 per build and level, reused by all ten
+# targets. The level is part of the state: a state primed at one level refuses
+# to decode a stream written at another, which is why it travels in the name.
+function CueState($label, $level) {
+    if (-not $level) { $level = 3 }
+    $key = "$label|$level"
+    if ($script:CueStateMemo.ContainsKey($key)) { return $script:CueStateMemo[$key] }
+    $st = Join-Path $cueWork "ref_$label.l$level.state"
+    if (-not (Test-Path $st)) {
+        & (CueExe $label) prime (& $F 'ecoli.fa') $st 22 "$level" | Out-Null
+        if ($LASTEXITCODE -ne 0 -or -not (Test-Path $st)) { throw "prime failed for '$label' at level $level" }
+    }
+    $script:CueStateMemo[$key] = $st
+    $st
+}
+
+function CueSize($label, $inFile, $ref, $level) {
+    $key = "$label|$inFile|$ref|$level"
+    if ($script:CueSizeMemo.ContainsKey($key)) { return $script:CueSizeMemo[$key] }
+    $n = Size $inFile $ref $level $null (CueExe $label)
+    $script:CueSizeMemo[$key] = $n
+    $n
+}
+
+# One of the ten controlled targets, against the primed E. coli reference.
+function CueTarget($label, $target, $level) {
+    if (-not $level) { $level = 3 }
+    $fa = Join-Path $cueTargets "$target.fa"
+    if (-not (Test-Path $fa)) { throw "missing $target.fa - run: sh scripts/cue/make-targets.sh" }
+    CueSize $label $fa (CueState $label $level) $level
+}
+
+# The three real and simulated E. coli pairs, against the same primed reference.
+function CueReal($label, $name, $level) {
+    if (-not $level) { $level = 3 }
+    CueSize $label (& $F "$name.fa") (CueState $label $level) $level
+}
+
+# The simulated human individual, against chr21 itself (no state: one target).
+function CueChr21Ind($label) { CueSize $label (& $F 'chr21_ind.fa') (& $F 'chr21.fa') 3 }
+
+# Cost per event in bits: (target - zero-event control) x 8 / 2,000 events,
+# meaned over the three seeds. The control is what makes this a cost per event
+# and not a file size -- it is the same genome with no events in it, so
+# everything the codec pays for the genome itself cancels.
+function CuePerEvent($label, $kind, $level) {
+    $ctl = CueTarget $label 'ctl' $level
+    $v = 1,2,3 | ForEach-Object { ((CueTarget $label "${kind}_$_" $level) - $ctl) * 8.0 / 2000.0 }
+    [math]::Round(($v | Measure-Object -Average).Average, 2)
+}
+
+function CuePct($a, $b) { [math]::Round(100.0 * ($b / $a - 1.0), 2) }   # b against a, per cent
+
+# The bit-cost map, bucketed into 1,000-base windows, for the real human pair.
+# -map reads probabilities the coder computed anyway and touches no model state,
+# so the archive is byte-identical with and without it (both round-trip suites
+# assert exactly that) and the paired size rows below are the losslessness check
+# for these runs.
+function CueMap($label, $target, $ref) {
+    $key = "$label|$target"
+    if ($script:CueMapMemo.ContainsKey($key)) { return $script:CueMapMemo[$key] }
+    New-Item -ItemType Directory -Force $cueWork | Out-Null
+    $map = Join-Path $cueWork "$target.$label.map.tsv"
+    if (-not (Test-Path $map)) {
+        $tmp = Join-Path $cueWork 'map.dnac'
+        & (CueExe $label) cr (Join-Path $cueHuman "$target.fa") $tmp (Join-Path $cueHuman "$ref.fa") 22 3 -map $map -mapw 1000 | Out-Null
+        if ($LASTEXITCODE -ne 0 -or -not (Test-Path $map)) { throw "-map run failed: $target ($label)" }
+        Remove-Item $tmp -Force -ErrorAction SilentlyContinue
+    }
+    # bits_per_base comes from the file rather than bits/1000: the last window
+    # of a chromosome is a short one (chr21's is 682 bases), and dividing it by
+    # a thousand anyway would put it in the wrong class.
+    $rows = @(Import-Csv $map -Delimiter "`t" | ForEach-Object {
+        [pscustomobject]@{ bits = [double]$_.bits; bpb = [double]$_.bits_per_base } })
+    $script:CueMapMemo[$key] = $rows
+    $rows
+}
+
+# The split docs/real-human.md reports: windows are classed ONCE, by what
+# v0.8.0 paid for them (shared < 0.2 bits/base, diverged 0.2-1.0, novel >= 1.0),
+# and the same windows are then summed for both builds. Classing each build on
+# its own numbers would move the goalposts with the result.
+function CueWindowSums($target, $ref, $klass, $label, $half) {
+    if (-not $label) { $label = 'cue' }
+    $b = CueMap 'base'  $target $ref
+    $c = CueMap $label  $target $ref
+    if ($b.Count -ne $c.Count) { throw "map lengths differ for $target ($($b.Count) vs $($c.Count))" }
+    $sb = 0.0; $sc = 0.0; $n = 0
+    $lo = 0; $hi = $b.Count
+    if ($half -eq 'first')  { $hi = [int]($b.Count / 2) }
+    if ($half -eq 'second') { $lo = [int]($b.Count / 2) }
+    for ($i = $lo; $i -lt $hi; $i++) {
+        $bpb = $b[$i].bpb
+        $in = switch ($klass) {
+            'shared'   { $bpb -lt 0.2 }
+            'diverged' { $bpb -ge 0.2 -and $bpb -lt 1.0 }
+            'novel'    { $bpb -ge 1.0 }
+            'all'      { $true }
+        }
+        if ($in) { $sb += $b[$i].bits; $sc += $c[$i].bits; $n++ }
+    }
+    @{ base = $sb; cue = $sc; windows = $n; total = $b.Count }
+}
+
+function CueWindows($target, $ref, $klass, $label, $half) {
+    $w = CueWindowSums $target $ref $klass $label $half
+    [math]::Round(100.0 * ($w.cue / $w.base - 1.0), 2)
+}
+
+# The osmosis: cost per event in the FIRST and the SECOND half of each target.
+# The arithmetic lives in scripts/cue/halves.py -- the same script that produced
+# the published table -- because the event positions come from the seeded draw
+# that built the targets, and a second implementation of that would be a second
+# thing to get wrong. Returns kind -> @{ first; second; ratio }.
+function CueHalves($label) {
+    $key = "halves|$label"
+    if ($script:CueMapMemo.ContainsKey($key)) { return $script:CueMapMemo[$key] }
+    New-Item -ItemType Directory -Force $cueWork | Out-Null
+    $exe = CueExe $label; $st = CueState $label 3
+    foreach ($t in @('ctl','hp_1','hp_2','hp_3','ind_1','ind_2','ind_3','sub_1','sub_2','sub_3')) {
+        $map = Join-Path $cueWork "$t.$label.map.tsv"
+        if (Test-Path $map) { continue }
+        $tmp = Join-Path $cueWork 'm.dnac'
+        & $exe cr (Join-Path $cueTargets "$t.fa") $tmp $st 22 3 -map $map -mapw 1000 | Out-Null
+        if ($LASTEXITCODE -ne 0 -or -not (Test-Path $map)) { throw "-map run failed: $t ($label)" }
+        Remove-Item $tmp -Force -ErrorAction SilentlyContinue
+    }
+    $py = if ($env:PYTHON) { $env:PYTHON } else { 'python' }
+    $env:TGT = $cueTargets; $env:REF = (& $F 'ecoli.fa')
+    $out = & $py (Join-Path $root 'scripts\cue\halves.py') $label $cueWork 2>&1
+    if ($LASTEXITCODE -ne 0) { throw "halves.py failed for '$label' (set PYTHON if python is elsewhere):`n$out" }
+    $h = @{}
+    foreach ($line in $out) {
+        $f = "$line" -split "`t"
+        if ($f.Count -ge 5) { $h[$f[1]] = @{ first = [double]$f[2]; second = [double]$f[3]; ratio = [double]$f[4] } }
+    }
+    if (-not $h.ContainsKey('hp')) { throw "halves.py produced nothing usable for '$label':`n$out" }
+    $script:CueMapMemo[$key] = $h
+    $h
+}
+
+# Losslessness of an experiment build, run through the same 203-case suite CI
+# runs on the default build. Returns the number of round-trips that passed, so
+# a claim of "203/203" is a number this can be wrong about, not a promise.
+function Resolve-Sh {
+    if ($env:DNAC_SH) { return $env:DNAC_SH }
+    $cands = @('C:/Program Files/Git/bin/sh.exe', 'C:/Program Files/Git/usr/bin/sh.exe',
+               'C:/laragon/bin/git/usr/bin/sh.exe', 'C:/laragon/bin/git/bin/sh.exe', '/usr/bin/sh')
+    $cands += (Get-Command sh -All -ErrorAction SilentlyContinue | ForEach-Object { $_.Source })
+    foreach ($c in $cands) {
+        if (-not $c -or -not (Test-Path $c)) { continue }
+        # The probe is /dev/urandom: a busybox sh wins on PATH inside a toolchain
+        # and cannot run the suite, which needs it for the random cases.
+        & $c -c 'head -c 4 /dev/urandom > /dev/null 2>&1' 2>$null
+        if ($LASTEXITCODE -eq 0) { return $c }
+    }
+    $null
+}
+
+function CueRoundtripExe($exe) {
+    $sh = Resolve-Sh
+    if (-not $sh) { throw "no POSIX sh with /dev/urandom found - set DNAC_SH" }
+    $out = & $sh (Join-Path $root 'scripts/roundtrip.sh') $exe 2>&1 | Out-String
+    if ($out -match '(\d+)/(\d+) adversarial round-trips lossless') { return [int]$Matches[1] }
+    throw "roundtrip.sh did not report a clean count for '$exe':`n$out"
+}
+
+function CueRoundtrip($label) { CueRoundtripExe (CueExe $label) }
+
+# zstd's --patch-from: the trivial diff, and the answer to "what does the most
+# ordinary tool do with the same two files?" Round-tripped like everything else.
+function ZstdPatch($inFile, $ref) {
+    $out = Join-Path $work 'vc.zst'; $rt = Join-Path $work 'vc.zstrt'
+    Remove-Item $out, $rt -Force -ErrorAction SilentlyContinue
+    & zstd -q -f -19 --long=27 --patch-from=$ref $inFile -o $out | Out-Null
+    if (-not (Test-Path $out)) { throw "zstd --patch-from produced nothing" }
+    & zstd -q -f -d --long=27 --patch-from=$ref $out -o $rt | Out-Null
+    if ((Get-FileHash $inFile -Algorithm SHA256).Hash -ne (Get-FileHash $rt -Algorithm SHA256).Hash) {
+        throw "zstd --patch-from was NOT LOSSLESS on $inFile"
+    }
+    $n = (Get-Item $out).Length
+    Remove-Item $out, $rt -Force -ErrorAction SilentlyContinue
+    $n
+}
+
+# HRCM, the reference-based FASTA specialist, run in its own directory because
+# it writes beside its inputs. Its round-trip is reported as the doc reports it:
+# sequence, header and line layout come back, the file's final empty line does
+# not, so this compares the decompressed file against the input WITH that line
+# removed and fails if anything else differs.
+function Hrcm($target, $ref) {
+    $h = Join-Path $root 'bench-external\cue\hrcm\hrcm.exe'
+    if (-not (Test-Path $h)) { throw "HRCM is not built (bench-external/cue/hrcm) - see scripts/cue/hrcm-windows.patch" }
+    $d = Join-Path $work 'hrcm'
+    Remove-Item $d -Recurse -Force -ErrorAction SilentlyContinue
+    New-Item -ItemType Directory -Force $d | Out-Null
+    Copy-Item $target $d; Copy-Item $ref $d
+    $t = Split-Path $target -Leaf; $r = Split-Path $ref -Leaf
+    Push-Location $d
+    try {
+        & $h compress -r $r -t $t *> 'c.log'
+        $co = [IO.Path]::ChangeExtension($t, '.7z')
+        if (-not (Test-Path $co)) { throw "HRCM produced nothing; see $d/c.log" }
+        New-Item -ItemType Directory -Force 'dd' | Out-Null
+        Copy-Item $co 'dd'; Copy-Item $r 'dd'
+        Push-Location 'dd'
+        try { & $h decompress -r $r -t $co *> 'd.log' } finally { Pop-Location }
+        $back = Join-Path 'dd' ([IO.Path]::ChangeExtension($t, '.fasta'))
+        if (-not (Test-Path $back)) { throw "HRCM did not decompress; see $d/dd/d.log" }
+        $a = [IO.File]::ReadAllBytes((Resolve-Path $t)); $b = [IO.File]::ReadAllBytes((Resolve-Path $back))
+        $trim = $a.Length - $b.Length
+        if ($trim -lt 0 -or $trim -gt 1) { throw "HRCM round-trip differs by $trim bytes, not the known trailing newline" }
+        for ($i = 0; $i -lt $b.Length; $i++) { if ($a[$i] -ne $b[$i]) { throw "HRCM round-trip differs at byte $i" } }
+        (Get-Item $co).Length
+    } finally { Pop-Location }
+}
+
+function CueHuman($label, $target, $ref, $level) {
+    CueSize $label (Join-Path $cueHuman "$target") (Join-Path $cueHuman "$ref") $(if ($level) { $level } else { 3 })
+}
 
 $S = { param($n) Join-Path $root "bench-external\seq\$n" }   # plain-ACGT .seq files
 $F = { param($n) Join-Path $root $n }                        # FASTA files in the repo root
@@ -488,6 +781,780 @@ $claims = @(
      anchor='chr21 | 1.504 | **0.0227**'
      expect=0.0227
      measure={ Bpb (Size (& $F 'chr21_ind.fa') (& $F 'chr21.fa') 3) (Bases (& $F 'chr21_ind.fa')) } }
+
+  # --- v0.9.0, branch `nudge`: the cue --------------------------------------
+  # Every figure in docs/nudge.md, docs/cue*.md, docs/real-human.md,
+  # docs/competitors.md, docs/remaining.md and docs/speed.md that a machine can
+  # re-derive. Deliberately absent: every WALL-CLOCK figure in those documents,
+  # for the reason given further up -- a timing on this machine varies by 24%,
+  # and a row that cannot go red for the right reason will one day go red for
+  # the wrong one. The builds these rows compile are listed in CueDefs.
+
+  # ---- docs/cue.md
+
+  @{ id='cue-base-sub-bits'; tier='cue'; doc='docs/cue.md'; unit='bits'; tol=0.005
+     anchor='| v0.8.0 | 14.64 | 48.25 | 31.43 | — | — | — |'
+     expect=14.64
+     measure={ CuePerEvent 'base' 'sub' } }
+
+  @{ id='cue-base-ind-bits'; tier='cue'; doc='docs/cue.md'; unit='bits'; tol=0.005
+     anchor='| v0.8.0 | 14.64 | 48.25 | 31.43 | — | — | — |'
+     expect=48.25
+     measure={ CuePerEvent 'base' 'ind' } }
+
+  @{ id='cue-base-hp-bits'; tier='cue'; doc='docs/cue.md'; unit='bits'; tol=0.005
+     anchor='| v0.8.0 | 14.64 | 48.25 | 31.43 | — | — | — |'
+     expect=31.43
+     measure={ CuePerEvent 'base' 'hp' } }
+
+  @{ id='cue-sub-bits'; tier='cue'; doc='docs/cue.md'; unit='bits'; tol=0.005
+     anchor='| **P2** | substitution in [14.49, 14.79] | **held**: 14.65 (v0.8.0: 14.64) |'
+     expect=14.65
+     measure={ CuePerEvent 'cue' 'sub' } }
+
+  @{ id='cue-ind-bits'; tier='cue'; doc='docs/cue.md'; unit='bits'; tol=0.005
+     anchor='| **P3** | random indel ≤ 37.6 bits | **held**: **28.75** (−40% on v0.8.0, better than every nudge) |'
+     expect=28.75
+     measure={ CuePerEvent 'cue' 'ind' } }
+
+  @{ id='cue-hp-bits'; tier='cue'; doc='docs/cue.md'; unit='bits'; tol=0.005
+     anchor='| **P1** | homopolymer slip ≤ 10 bits | **failed**: 11.78, over the whole file. **8.63 in its second half** |'
+     expect=11.78
+     measure={ CuePerEvent 'cue' 'hp' } }
+
+  @{ id='cue-ctl-delta'; tier='cue'; doc='docs/cue.md'; unit='B'; tol=0
+     anchor='| **P4** | lossless, control < 0.1%, FASTA = state | **held**: all round-trip, control −1 B, identical |'
+     expect=-1
+     measure={ (CueTarget 'cue' 'ctl') - (CueTarget 'base' 'ctl') } }
+
+  @{ id='cue-o157-pct'; tier='cue'; doc='docs/cue.md'; unit='%'; tol=0.005
+     anchor='| **P5** | O157 ≤ +0.1% | **held**: −0.13% |'
+     expect=-0.13
+     measure={ CuePct (CueReal 'base' 'o157') (CueReal 'cue' 'o157') } }
+
+  @{ id='cue-ecoliind-pct'; tier='cue'; doc='docs/cue.md'; unit='%'; tol=0.005
+     anchor='| **cue** | **14.65** | **28.75** | 11.78 | **−0.13%** | **−3.19%** | **−8.70%** |'
+     expect=-3.19
+     measure={ CuePct (CueReal 'base' 'ecoli_ind') (CueReal 'cue' 'ecoli_ind') } }
+
+  @{ id='cue-w3110-bytes'; tier='cue'; doc='docs/cue.md'; unit='B'; tol=0
+     anchor='W3110 against MG1655: 1,927 B against 1,931 (−0.21%).'
+     expect=1927
+     measure={ CueReal 'cue' 'w3110' } }
+
+  @{ id='cue-w3110-pct'; tier='cue'; doc='docs/cue.md'; unit='%'; tol=0.005
+     anchor='W3110 against MG1655: 1,927 B against 1,931 (−0.21%).'
+     expect=-0.21
+     measure={ CuePct (CueReal 'base' 'w3110') (CueReal 'cue' 'w3110') } }
+
+  @{ id='cue-halves-base-hp-1st'; tier='cue'; doc='docs/cue.md'; unit='bits'; tol=0.005
+     anchor='| homopolymer slip | 32.90 → 30.05 | 0.913 | 14.99 → **8.63** | **0.576** |'
+     expect=32.9
+     measure={ (CueHalves 'base')['hp'].first } }
+
+  @{ id='cue-halves-base-hp-2nd'; tier='cue'; doc='docs/cue.md'; unit='bits'; tol=0.005
+     anchor='| homopolymer slip | 32.90 → 30.05 | 0.913 | 14.99 → **8.63** | **0.576** |'
+     expect=30.05
+     measure={ (CueHalves 'base')['hp'].second } }
+
+  @{ id='cue-halves-base-hp-ratio'; tier='cue'; doc='docs/cue.md'; unit=''; tol=0.001
+     anchor='| homopolymer slip | 32.90 → 30.05 | 0.913 | 14.99 → **8.63** | **0.576** |'
+     expect=0.913
+     measure={ (CueHalves 'base')['hp'].ratio } }
+
+  @{ id='cue-halves-cue-hp-1st'; tier='cue'; doc='docs/cue.md'; unit='bits'; tol=0.005
+     anchor='| homopolymer slip | 32.90 → 30.05 | 0.913 | 14.99 → **8.63** | **0.576** |'
+     expect=14.99
+     measure={ (CueHalves 'cue')['hp'].first } }
+
+  @{ id='cue-halves-cue-hp-2nd'; tier='cue'; doc='docs/cue.md'; unit='bits'; tol=0.005
+     anchor='| homopolymer slip | 32.90 → 30.05 | 0.913 | 14.99 → **8.63** | **0.576** |'
+     expect=8.63
+     measure={ (CueHalves 'cue')['hp'].second } }
+
+  @{ id='cue-halves-cue-hp-ratio'; tier='cue'; doc='docs/cue.md'; unit=''; tol=0.001
+     anchor='| homopolymer slip | 32.90 → 30.05 | 0.913 | 14.99 → **8.63** | **0.576** |'
+     expect=0.576
+     measure={ (CueHalves 'cue')['hp'].ratio } }
+
+  @{ id='cue-halves-base-ind-1st'; tier='cue'; doc='docs/cue.md'; unit='bits'; tol=0.005
+     anchor='| random indel | 49.77 → 48.19 | 0.968 | 32.20 → **26.90** | **0.835** |'
+     expect=49.77
+     measure={ (CueHalves 'base')['ind'].first } }
+
+  @{ id='cue-halves-base-ind-2nd'; tier='cue'; doc='docs/cue.md'; unit='bits'; tol=0.005
+     anchor='| random indel | 49.77 → 48.19 | 0.968 | 32.20 → **26.90** | **0.835** |'
+     expect=48.19
+     measure={ (CueHalves 'base')['ind'].second } }
+
+  @{ id='cue-halves-base-ind-ratio'; tier='cue'; doc='docs/cue.md'; unit=''; tol=0.001
+     anchor='| random indel | 49.77 → 48.19 | 0.968 | 32.20 → **26.90** | **0.835** |'
+     expect=0.968
+     measure={ (CueHalves 'base')['ind'].ratio } }
+
+  @{ id='cue-halves-cue-ind-1st'; tier='cue'; doc='docs/cue.md'; unit='bits'; tol=0.005
+     anchor='| random indel | 49.77 → 48.19 | 0.968 | 32.20 → **26.90** | **0.835** |'
+     expect=32.2
+     measure={ (CueHalves 'cue')['ind'].first } }
+
+  @{ id='cue-halves-cue-ind-2nd'; tier='cue'; doc='docs/cue.md'; unit='bits'; tol=0.005
+     anchor='| random indel | 49.77 → 48.19 | 0.968 | 32.20 → **26.90** | **0.835** |'
+     expect=26.9
+     measure={ (CueHalves 'cue')['ind'].second } }
+
+  @{ id='cue-halves-cue-ind-ratio'; tier='cue'; doc='docs/cue.md'; unit=''; tol=0.001
+     anchor='| random indel | 49.77 → 48.19 | 0.968 | 32.20 → **26.90** | **0.835** |'
+     expect=0.835
+     measure={ (CueHalves 'cue')['ind'].ratio } }
+
+  @{ id='cue-halves-sub-1st'; tier='cue'; doc='docs/cue.md'; unit='bits'; tol=0.005
+     anchor='| substitution | 15.27 → 15.48 | 1.014 | 15.27 → 15.48 | 1.014 |'
+     expect=15.27
+     measure={ (CueHalves 'cue')['sub'].first } }
+
+  @{ id='cue-halves-sub-2nd'; tier='cue'; doc='docs/cue.md'; unit='bits'; tol=0.005
+     anchor='| substitution | 15.27 → 15.48 | 1.014 | 15.27 → 15.48 | 1.014 |'
+     expect=15.48
+     measure={ (CueHalves 'cue')['sub'].second } }
+
+  @{ id='cue-halves-nudge-ratio'; tier='cue'; doc='docs/cue.md'; unit=''; tol=0.001
+     anchor='The nudge does not have this property (0.916). It jumps, so it has nothing to'
+     expect=0.916
+     measure={ (CueHalves 'L6D12')['hp'].ratio } }
+
+  @{ id='cue-chr21ind-bytes'; tier='slow'; doc='docs/cue.md'; unit='B'; tol=0
+     anchor='| | `chr21_ind` ≤ −3.0% | **held**: **−8.70%** (113,925 → 104,013 B) |'
+     expect=104013
+     measure={ CueChr21Ind 'cue' } }
+
+  @{ id='cue-base-chr21ind-bytes'; tier='slow'; doc='docs/cue.md'; unit='B'; tol=0
+     anchor='| | `chr21_ind` ≤ −3.0% | **held**: **−8.70%** (113,925 → 104,013 B) |'
+     expect=113925
+     measure={ CueChr21Ind 'base' } }
+
+  @{ id='cue-chr21ind-pct'; tier='slow'; doc='docs/cue.md'; unit='%'; tol=0.005
+     anchor='| | `chr21_ind` ≤ −3.0% | **held**: **−8.70%** (113,925 → 104,013 B) |'
+     expect=-8.7
+     measure={ CuePct (CueChr21Ind 'base') (CueChr21Ind 'cue') } }
+
+  # ---- docs/nudge.md
+
+  @{ id='nudge-sub-bits'; tier='cue'; doc='docs/nudge.md'; unit='bits'; tol=0.005
+     anchor='| **5** | **12** | 15.65 | 33.27 | 6.76 | +2.07% | −1.89% |'
+     expect=15.65
+     measure={ CuePerEvent 'nudge' 'sub' } }
+
+  @{ id='nudge-ind-bits'; tier='cue'; doc='docs/nudge.md'; unit='bits'; tol=0.005
+     anchor='| **5** | **12** | 15.65 | 33.27 | 6.76 | +2.07% | −1.89% |'
+     expect=33.27
+     measure={ CuePerEvent 'nudge' 'ind' } }
+
+  @{ id='nudge-hp-bits'; tier='cue'; doc='docs/nudge.md'; unit='bits'; tol=0.005
+     anchor='| **5** | **12** | 15.65 | 33.27 | 6.76 | +2.07% | −1.89% |'
+     expect=6.76
+     measure={ CuePerEvent 'nudge' 'hp' } }
+
+  @{ id='nudge-o157-pct'; tier='cue'; doc='docs/nudge.md'; unit='%'; tol=0.005
+     anchor='| **5** | **12** | 15.65 | 33.27 | 6.76 | +2.07% | −1.89% |'
+     expect=2.07
+     measure={ CuePct (CueReal 'base' 'o157') (CueReal 'nudge' 'o157') } }
+
+  @{ id='nudge-ecoliind-pct'; tier='cue'; doc='docs/nudge.md'; unit='%'; tol=0.005
+     anchor='| **5** | **12** | 15.65 | 33.27 | 6.76 | +2.07% | −1.89% |'
+     expect=-1.89
+     measure={ CuePct (CueReal 'base' 'ecoli_ind') (CueReal 'nudge' 'ecoli_ind') } }
+
+  @{ id='nudge-w3110-pct'; tier='cue'; doc='docs/nudge.md'; unit='%'; tol=0.005
+     anchor='| | W3110 not worse than +1% | **held**: −0.73% |'
+     expect=-0.73
+     measure={ CuePct (CueReal 'base' 'w3110') (CueReal 'nudge' 'w3110') } }
+
+  @{ id='nudge-chr21ind-pct'; tier='slow'; doc='docs/nudge.md'; unit='%'; tol=0.005
+     anchor='| **P5** | `chr21_ind`, `ecoli_ind` ≥ 5% smaller | **failed**: −1.50%, −1.89% |'
+     expect=-1.5
+     measure={ CuePct (CueChr21Ind 'base') (CueChr21Ind 'nudge') } }
+
+  @{ id='nudge-l6d12-sub-bits'; tier='cue'; doc='docs/nudge.md'; unit='bits'; tol=0.005
+     anchor='| 6 | 12 | 14.94 | 37.63 | 6.78 | +0.55% | **−2.38%** |'
+     expect=14.94
+     measure={ CuePerEvent 'L6D12' 'sub' } }
+
+  @{ id='nudge-l6d12-ind-bits'; tier='cue'; doc='docs/nudge.md'; unit='bits'; tol=0.005
+     anchor='| 6 | 12 | 14.94 | 37.63 | 6.78 | +0.55% | **−2.38%** |'
+     expect=37.63
+     measure={ CuePerEvent 'L6D12' 'ind' } }
+
+  @{ id='nudge-l6d12-hp-bits'; tier='cue'; doc='docs/nudge.md'; unit='bits'; tol=0.005
+     anchor='| 6 | 12 | 14.94 | 37.63 | 6.78 | +0.55% | **−2.38%** |'
+     expect=6.78
+     measure={ CuePerEvent 'L6D12' 'hp' } }
+
+  @{ id='nudge-l6d12-o157-pct'; tier='cue'; doc='docs/nudge.md'; unit='%'; tol=0.005
+     anchor='| 6 | 12 | 14.94 | 37.63 | 6.78 | +0.55% | **−2.38%** |'
+     expect=0.55
+     measure={ CuePct (CueReal 'base' 'o157') (CueReal 'L6D12' 'o157') } }
+
+  @{ id='nudge-l6d12-ecoliind-pct'; tier='cue'; doc='docs/nudge.md'; unit='%'; tol=0.005
+     anchor='| 6 | 12 | 14.94 | 37.63 | 6.78 | +0.55% | **−2.38%** |'
+     expect=-2.38
+     measure={ CuePct (CueReal 'base' 'ecoli_ind') (CueReal 'L6D12' 'ecoli_ind') } }
+
+  @{ id='nudge-l8d12-sub-bits'; tier='cue'; doc='docs/nudge.md'; unit='bits'; tol=0.005
+     anchor='| 8 | 12 | 14.72 | 43.80 | 12.69 | −0.12% | −1.51% |'
+     expect=14.72
+     measure={ CuePerEvent 'L8D12' 'sub' } }
+
+  @{ id='nudge-l8d12-ind-bits'; tier='cue'; doc='docs/nudge.md'; unit='bits'; tol=0.005
+     anchor='| 8 | 12 | 14.72 | 43.80 | 12.69 | −0.12% | −1.51% |'
+     expect=43.8
+     measure={ CuePerEvent 'L8D12' 'ind' } }
+
+  @{ id='nudge-l8d12-hp-bits'; tier='cue'; doc='docs/nudge.md'; unit='bits'; tol=0.005
+     anchor='| 8 | 12 | 14.72 | 43.80 | 12.69 | −0.12% | −1.51% |'
+     expect=12.69
+     measure={ CuePerEvent 'L8D12' 'hp' } }
+
+  @{ id='nudge-l8d12-o157-pct'; tier='cue'; doc='docs/nudge.md'; unit='%'; tol=0.005
+     anchor='| 8 | 12 | 14.72 | 43.80 | 12.69 | −0.12% | −1.51% |'
+     expect=-0.12
+     measure={ CuePct (CueReal 'base' 'o157') (CueReal 'L8D12' 'o157') } }
+
+  @{ id='nudge-l8d12-ecoliind-pct'; tier='cue'; doc='docs/nudge.md'; unit='%'; tol=0.005
+     anchor='| 8 | 12 | 14.72 | 43.80 | 12.69 | −0.12% | −1.51% |'
+     expect=-1.51
+     measure={ CuePct (CueReal 'base' 'ecoli_ind') (CueReal 'L8D12' 'ecoli_ind') } }
+
+  @{ id='nudge-l5d4-sub-bits'; tier='cue'; doc='docs/nudge.md'; unit='bits'; tol=0.005
+     anchor='| 5 | 4 | 15.01 | 33.09 | 6.82 | +0.50% | −0.95% |'
+     expect=15.01
+     measure={ CuePerEvent 'L5D4' 'sub' } }
+
+  @{ id='nudge-l5d4-ind-bits'; tier='cue'; doc='docs/nudge.md'; unit='bits'; tol=0.005
+     anchor='| 5 | 4 | 15.01 | 33.09 | 6.82 | +0.50% | −0.95% |'
+     expect=33.09
+     measure={ CuePerEvent 'L5D4' 'ind' } }
+
+  @{ id='nudge-l5d4-hp-bits'; tier='cue'; doc='docs/nudge.md'; unit='bits'; tol=0.005
+     anchor='| 5 | 4 | 15.01 | 33.09 | 6.82 | +0.50% | −0.95% |'
+     expect=6.82
+     measure={ CuePerEvent 'L5D4' 'hp' } }
+
+  @{ id='nudge-l5d4-o157-pct'; tier='cue'; doc='docs/nudge.md'; unit='%'; tol=0.005
+     anchor='| 5 | 4 | 15.01 | 33.09 | 6.82 | +0.50% | −0.95% |'
+     expect=0.5
+     measure={ CuePct (CueReal 'base' 'o157') (CueReal 'L5D4' 'o157') } }
+
+  @{ id='nudge-l5d4-ecoliind-pct'; tier='cue'; doc='docs/nudge.md'; unit='%'; tol=0.005
+     anchor='| 5 | 4 | 15.01 | 33.09 | 6.82 | +0.50% | −0.95% |'
+     expect=-0.95
+     measure={ CuePct (CueReal 'base' 'ecoli_ind') (CueReal 'L5D4' 'ecoli_ind') } }
+
+  @{ id='nudge-l6d4-sub-bits'; tier='cue'; doc='docs/nudge.md'; unit='bits'; tol=0.005
+     anchor='| 6 | 4 | 14.72 | 37.56 | 6.80 | +0.02% | −0.99% |'
+     expect=14.72
+     measure={ CuePerEvent 'L6D4' 'sub' } }
+
+  @{ id='nudge-l6d4-ind-bits'; tier='cue'; doc='docs/nudge.md'; unit='bits'; tol=0.005
+     anchor='| 6 | 4 | 14.72 | 37.56 | 6.80 | +0.02% | −0.99% |'
+     expect=37.56
+     measure={ CuePerEvent 'L6D4' 'ind' } }
+
+  @{ id='nudge-l6d4-hp-bits'; tier='cue'; doc='docs/nudge.md'; unit='bits'; tol=0.005
+     anchor='| 6 | 4 | 14.72 | 37.56 | 6.80 | +0.02% | −0.99% |'
+     expect=6.8
+     measure={ CuePerEvent 'L6D4' 'hp' } }
+
+  @{ id='nudge-l6d4-o157-pct'; tier='cue'; doc='docs/nudge.md'; unit='%'; tol=0.005
+     anchor='| 6 | 4 | 14.72 | 37.56 | 6.80 | +0.02% | −0.99% |'
+     expect=0.02
+     measure={ CuePct (CueReal 'base' 'o157') (CueReal 'L6D4' 'o157') } }
+
+  @{ id='nudge-l6d4-ecoliind-pct'; tier='cue'; doc='docs/nudge.md'; unit='%'; tol=0.005
+     anchor='| 6 | 4 | 14.72 | 37.56 | 6.80 | +0.02% | −0.99% |'
+     expect=-0.99
+     measure={ CuePct (CueReal 'base' 'ecoli_ind') (CueReal 'L6D4' 'ecoli_ind') } }
+
+  @{ id='nudge-l8d4-sub-bits'; tier='cue'; doc='docs/nudge.md'; unit='bits'; tol=0.005
+     anchor='| 8 | 4 | 14.71 | 43.77 | 12.66 | −0.15% | −0.50% |'
+     expect=14.71
+     measure={ CuePerEvent 'L8D4' 'sub' } }
+
+  @{ id='nudge-l8d4-ind-bits'; tier='cue'; doc='docs/nudge.md'; unit='bits'; tol=0.005
+     anchor='| 8 | 4 | 14.71 | 43.77 | 12.66 | −0.15% | −0.50% |'
+     expect=43.77
+     measure={ CuePerEvent 'L8D4' 'ind' } }
+
+  @{ id='nudge-l8d4-hp-bits'; tier='cue'; doc='docs/nudge.md'; unit='bits'; tol=0.005
+     anchor='| 8 | 4 | 14.71 | 43.77 | 12.66 | −0.15% | −0.50% |'
+     expect=12.66
+     measure={ CuePerEvent 'L8D4' 'hp' } }
+
+  @{ id='nudge-l8d4-o157-pct'; tier='cue'; doc='docs/nudge.md'; unit='%'; tol=0.005
+     anchor='| 8 | 4 | 14.71 | 43.77 | 12.66 | −0.15% | −0.50% |'
+     expect=-0.15
+     measure={ CuePct (CueReal 'base' 'o157') (CueReal 'L8D4' 'o157') } }
+
+  @{ id='nudge-l8d4-ecoliind-pct'; tier='cue'; doc='docs/nudge.md'; unit='%'; tol=0.005
+     anchor='| 8 | 4 | 14.71 | 43.77 | 12.66 | −0.15% | −0.50% |'
+     expect=-0.5
+     measure={ CuePct (CueReal 'base' 'ecoli_ind') (CueReal 'L8D4' 'ecoli_ind') } }
+
+  @{ id='nudge-l6d12-chr21ind-bytes'; tier='slow'; doc='docs/nudge.md'; unit='B'; tol=0
+     anchor='   individual this setting gives **110,508 B against 113,925 B, −3.00%**'
+     expect=110508
+     measure={ CueChr21Ind 'L6D12' } }
+
+  @{ id='nudge-l6d12-chr21ind-pct'; tier='slow'; doc='docs/nudge.md'; unit='%'; tol=0.005
+     anchor='   individual this setting gives **110,508 B against 113,925 B, −3.00%**'
+     expect=-3.0
+     measure={ CuePct (CueChr21Ind 'base') (CueChr21Ind 'L6D12') } }
+
+  # ---- docs/cue-room.md
+
+  @{ id='room-noroom-ind-bits'; tier='cue'; doc='docs/cue-room.md'; unit='bits'; tol=0.005
+     anchor='| **H1** | indel and slip ≥ 5% dearer | **failed, inverted**: indel 28.34 (−1.4%), slip 11.04 (−6.3%) |'
+     expect=28.34
+     measure={ CuePerEvent 'noroom' 'ind' } }
+
+  @{ id='room-noroom-hp-bits'; tier='cue'; doc='docs/cue-room.md'; unit='bits'; tol=0.005
+     anchor='| **H1** | indel and slip ≥ 5% dearer | **failed, inverted**: indel 28.34 (−1.4%), slip 11.04 (−6.3%) |'
+     expect=11.04
+     measure={ CuePerEvent 'noroom' 'hp' } }
+
+  @{ id='room-noroom-sub-bits'; tier='cue'; doc='docs/cue-room.md'; unit='bits'; tol=0.005
+     anchor='| **H3** | substitutions within ±1% | **held**: 14.73 (+0.5%) |'
+     expect=14.73
+     measure={ CuePerEvent 'noroom' 'sub' } }
+
+  @{ id='room-noroom-ratio'; tier='cue'; doc='docs/cue-room.md'; unit=''; tol=0.001
+     anchor='| **H2** | slip learning weaker: 2nd ÷ 1st > 0.70 | **failed**: 0.610 (with room: 0.576) |'
+     expect=0.61
+     measure={ (CueHalves 'noroom')['hp'].ratio } }
+
+  @{ id='room-noroom-hp-1st'; tier='cue'; doc='docs/cue-room.md'; unit='bits'; tol=0.005
+     anchor='fills faster. That shows as a cheaper first half (slip 13.73 against 14.99'
+     expect=13.73
+     measure={ (CueHalves 'noroom')['hp'].first } }
+
+  @{ id='room-noroom-hp-2nd'; tier='cue'; doc='docs/cue-room.md'; unit='bits'; tol=0.005
+     anchor='bits), with the second half almost the same (8.38 against 8.63).'
+     expect=8.38
+     measure={ (CueHalves 'noroom')['hp'].second } }
+
+  @{ id='room-noroom-chr21ind-bytes'; tier='slow'; doc='docs/cue-room.md'; unit='B'; tol=0
+     anchor='| **H4** | `chr21_ind` loses ≥ 1 point | **failed**: 104,125 B against 104,013 (+0.11%) |'
+     expect=104125
+     measure={ CueChr21Ind 'noroom' } }
+
+  @{ id='room-noroom-chm13-bytes'; tier='slow'; doc='docs/cue-room.md'; unit='B'; tol=0
+     anchor='CHM13 whole file: 551,753 B against 551,594 (+0.03%).'
+     expect=551753
+     measure={ CueHuman 'noroom' 'chm13_chr21.fa' 'grch38_chr21.fa' } }
+
+  @{ id='room-noroom-shared-pct'; tier='slow'; doc='docs/cue-room.md'; unit='%'; tol=0.005
+     anchor='| **H5** | CHM13 shared windows lose ≥ 1 point | **failed**: −18.14% against −18.27% |'
+     expect=-18.14
+     measure={ CueWindows 'chm13_chr21' 'grch38_chr21' 'shared' 'noroom' } }
+
+  # ---- docs/cue-back.md
+
+  @{ id='back-cue2-sub-bits'; tier='cue'; doc='docs/cue-back.md'; unit='bits'; tol=0.005
+     anchor='| **B1** | controlled targets within ±2% of the single-deck cue | **held**: substitution 14.71 (+0.4%), random indel 28.85 (+0.3%), slip 11.82 (+0.3%) |'
+     expect=14.71
+     measure={ CuePerEvent 'cue2' 'sub' } }
+
+  @{ id='back-cue2-ind-bits'; tier='cue'; doc='docs/cue-back.md'; unit='bits'; tol=0.005
+     anchor='| **B1** | controlled targets within ±2% of the single-deck cue | **held**: substitution 14.71 (+0.4%), random indel 28.85 (+0.3%), slip 11.82 (+0.3%) |'
+     expect=28.85
+     measure={ CuePerEvent 'cue2' 'ind' } }
+
+  @{ id='back-cue2-hp-bits'; tier='cue'; doc='docs/cue-back.md'; unit='bits'; tol=0.005
+     anchor='| **B1** | controlled targets within ±2% of the single-deck cue | **held**: substitution 14.71 (+0.4%), random indel 28.85 (+0.3%), slip 11.82 (+0.3%) |'
+     expect=11.82
+     measure={ CuePerEvent 'cue2' 'hp' } }
+
+  @{ id='back-cue2-chr21ind-bytes'; tier='slow'; doc='docs/cue-back.md'; unit='B'; tol=0
+     anchor='| **B2** | `chr21_ind` within ±0.5% | **held**: 104,140 B against 104,013 (+0.12%) |'
+     expect=104140
+     measure={ CueChr21Ind 'cue2' } }
+
+  @{ id='back-cue2-shared-pct'; tier='slow'; doc='docs/cue-back.md'; unit='%'; tol=0.005
+     anchor='| **B3** | real pair, shared windows ≥ 0.5% better than the single deck | **failed**: −18.38% against −18.27%, an extra 0.1% |'
+     expect=-18.38
+     measure={ CueWindows 'chm13_chr21' 'grch38_chr21' 'shared' 'cue2' } }
+
+  @{ id='back-cue2-chm13-bytes'; tier='slow'; doc='docs/cue-back.md'; unit='B'; tol=0
+     anchor='Real pair, whole file: 551,539 B against 551,594 (−0.01%).'
+     expect=551539
+     measure={ CueHuman 'cue2' 'chm13_chr21.fa' 'grch38_chr21.fa' } }
+
+  # ---- docs/real-human.md
+
+  @{ id='rh-base-bytes'; tier='slow'; doc='docs/real-human.md'; unit='B'; tol=0
+     anchor='| **R1** | whole chromosome ≥ 1.0% smaller | **held**: 586,615 → **551,594 B, −5.97%** |'
+     expect=586615
+     measure={ CueHuman 'base' 'chm13_chr21.fa' 'grch38_chr21.fa' } }
+
+  @{ id='rh-cue-bytes'; tier='slow'; doc='docs/real-human.md'; unit='B'; tol=0
+     anchor='| **R1** | whole chromosome ≥ 1.0% smaller | **held**: 586,615 → **551,594 B, −5.97%** |'
+     expect=551594
+     measure={ CueHuman 'cue' 'chm13_chr21.fa' 'grch38_chr21.fa' } }
+
+  @{ id='rh-pct'; tier='slow'; doc='docs/real-human.md'; unit='%'; tol=0.005
+     anchor='| **R1** | whole chromosome ≥ 1.0% smaller | **held**: 586,615 → **551,594 B, −5.97%** |'
+     expect=-5.97
+     measure={ CuePct (CueHuman 'base' 'chm13_chr21.fa' 'grch38_chr21.fa') (CueHuman 'cue' 'chm13_chr21.fa' 'grch38_chr21.fa') } }
+
+  @{ id='rh-shared-pct'; tier='slow'; doc='docs/real-human.md'; unit='%'; tol=0.005
+     anchor='| **R2** | shared windows ≥ 5% fewer bits | **held**: **−18.27%** |'
+     expect=-18.27
+     measure={ CueWindows 'chm13_chr21' 'grch38_chr21' 'shared' } }
+
+  @{ id='rh-novel-pct'; tier='slow'; doc='docs/real-human.md'; unit='%'; tol=0.005
+     anchor='| **R3** | novel windows within ±1% | **held**: −0.00% (1,082,312 → 1,082,291 bits) |'
+     expect=-0.0
+     measure={ CueWindows 'chm13_chr21' 'grch38_chr21' 'novel' } }
+
+  @{ id='rh-r4-first-pct'; tier='slow'; doc='docs/real-human.md'; unit='%'; tol=0.005
+     anchor='| **R4** | gain larger in the second half of the shared set | **held**: −13.26% first half, **−23.21%** second |'
+     expect=-13.26
+     measure={ CueWindows 'chm13_chr21' 'grch38_chr21' 'shared' 'cue' 'first' } }
+
+  @{ id='rh-r4-second-pct'; tier='slow'; doc='docs/real-human.md'; unit='%'; tol=0.005
+     anchor='| **R4** | gain larger in the second half of the shared set | **held**: −13.26% first half, **−23.21%** second |'
+     expect=-23.21
+     measure={ CueWindows 'chm13_chr21' 'grch38_chr21' 'shared' 'cue' 'second' } }
+
+  @{ id='rh-win-shared-count'; tier='slow'; doc='docs/real-human.md'; unit='windows'; tol=0
+     anchor='| shared (< 0.2) | 39,888 | 1,189,954 | 972,579 | **−18.27%** |'
+     expect=39888
+     measure={ (CueWindowSums 'chm13_chr21' 'grch38_chr21' 'shared').windows } }
+
+  @{ id='rh-win-shared-base-bits'; tier='slow'; doc='docs/real-human.md'; unit='bits'; tol=1
+     anchor='| shared (< 0.2) | 39,888 | 1,189,954 | 972,579 | **−18.27%** |'
+     expect=1189954
+     measure={ [math]::Round((CueWindowSums 'chm13_chr21' 'grch38_chr21' 'shared').base, 0) } }
+
+  @{ id='rh-win-shared-cue-bits'; tier='slow'; doc='docs/real-human.md'; unit='bits'; tol=1
+     anchor='| shared (< 0.2) | 39,888 | 1,189,954 | 972,579 | **−18.27%** |'
+     expect=972579
+     measure={ [math]::Round((CueWindowSums 'chm13_chr21' 'grch38_chr21' 'shared').cue, 0) } }
+
+  @{ id='rh-win-shared-pct'; tier='slow'; doc='docs/real-human.md'; unit='%'; tol=0.005
+     anchor='| shared (< 0.2) | 39,888 | 1,189,954 | 972,579 | **−18.27%** |'
+     expect=-18.27
+     measure={ CueWindows 'chm13_chr21' 'grch38_chr21' 'shared' } }
+
+  @{ id='rh-win-diverged-count'; tier='slow'; doc='docs/real-human.md'; unit='windows'; tol=0
+     anchor='| diverged (0.2 – 1.0) | 4,512 | 2,351,053 | 2,288,286 | −2.67% |'
+     expect=4512
+     measure={ (CueWindowSums 'chm13_chr21' 'grch38_chr21' 'diverged').windows } }
+
+  @{ id='rh-win-diverged-base-bits'; tier='slow'; doc='docs/real-human.md'; unit='bits'; tol=1
+     anchor='| diverged (0.2 – 1.0) | 4,512 | 2,351,053 | 2,288,286 | −2.67% |'
+     expect=2351053
+     measure={ [math]::Round((CueWindowSums 'chm13_chr21' 'grch38_chr21' 'diverged').base, 0) } }
+
+  @{ id='rh-win-diverged-cue-bits'; tier='slow'; doc='docs/real-human.md'; unit='bits'; tol=1
+     anchor='| diverged (0.2 – 1.0) | 4,512 | 2,351,053 | 2,288,286 | −2.67% |'
+     expect=2288286
+     measure={ [math]::Round((CueWindowSums 'chm13_chr21' 'grch38_chr21' 'diverged').cue, 0) } }
+
+  @{ id='rh-win-diverged-pct'; tier='slow'; doc='docs/real-human.md'; unit='%'; tol=0.005
+     anchor='| diverged (0.2 – 1.0) | 4,512 | 2,351,053 | 2,288,286 | −2.67% |'
+     expect=-2.67
+     measure={ CueWindows 'chm13_chr21' 'grch38_chr21' 'diverged' } }
+
+  @{ id='rh-win-novel-count'; tier='slow'; doc='docs/real-human.md'; unit='windows'; tol=0
+     anchor='| novel (≥ 1.0) | 691 | 1,082,312 | 1,082,291 | −0.00% |'
+     expect=691
+     measure={ (CueWindowSums 'chm13_chr21' 'grch38_chr21' 'novel').windows } }
+
+  @{ id='rh-win-novel-base-bits'; tier='slow'; doc='docs/real-human.md'; unit='bits'; tol=1
+     anchor='| novel (≥ 1.0) | 691 | 1,082,312 | 1,082,291 | −0.00% |'
+     expect=1082312
+     measure={ [math]::Round((CueWindowSums 'chm13_chr21' 'grch38_chr21' 'novel').base, 0) } }
+
+  @{ id='rh-win-novel-cue-bits'; tier='slow'; doc='docs/real-human.md'; unit='bits'; tol=1
+     anchor='| novel (≥ 1.0) | 691 | 1,082,312 | 1,082,291 | −0.00% |'
+     expect=1082291
+     measure={ [math]::Round((CueWindowSums 'chm13_chr21' 'grch38_chr21' 'novel').cue, 0) } }
+
+  @{ id='rh-win-novel-pct'; tier='slow'; doc='docs/real-human.md'; unit='%'; tol=0.005
+     anchor='| novel (≥ 1.0) | 691 | 1,082,312 | 1,082,291 | −0.00% |'
+     expect=-0.0
+     measure={ CueWindows 'chm13_chr21' 'grch38_chr21' 'novel' } }
+
+  @{ id='rh-win-all-count'; tier='slow'; doc='docs/real-human.md'; unit='windows'; tol=0
+     anchor='| all | 45,091 | 4,623,320 | 4,343,157 | −6.06% |'
+     expect=45091
+     measure={ (CueWindowSums 'chm13_chr21' 'grch38_chr21' 'all').windows } }
+
+  @{ id='rh-win-all-base-bits'; tier='slow'; doc='docs/real-human.md'; unit='bits'; tol=1
+     anchor='| all | 45,091 | 4,623,320 | 4,343,157 | −6.06% |'
+     expect=4623320
+     measure={ [math]::Round((CueWindowSums 'chm13_chr21' 'grch38_chr21' 'all').base, 0) } }
+
+  @{ id='rh-win-all-cue-bits'; tier='slow'; doc='docs/real-human.md'; unit='bits'; tol=1
+     anchor='| all | 45,091 | 4,623,320 | 4,343,157 | −6.06% |'
+     expect=4343157
+     measure={ [math]::Round((CueWindowSums 'chm13_chr21' 'grch38_chr21' 'all').cue, 0) } }
+
+  @{ id='rh-win-all-pct'; tier='slow'; doc='docs/real-human.md'; unit='%'; tol=0.005
+     anchor='| all | 45,091 | 4,623,320 | 4,343,157 | −6.06% |'
+     expect=-6.06
+     measure={ CueWindows 'chm13_chr21' 'grch38_chr21' 'all' } }
+
+  # ---- docs/remaining.md
+
+  @{ id='rem-roundtrip-base'; tier='cue'; doc='docs/remaining.md'; unit='round-trips'; tol=0
+     anchor='| **T1** | every new build passes `scripts/roundtrip.sh` | **held**: 203/203 for base, cue, cue without room, alternating cue, nudge L5D12, nudge L6D12 |'
+     expect=203
+     measure={ CueRoundtrip 'base' } }
+
+  @{ id='rem-roundtrip-cue'; tier='cue'; doc='docs/remaining.md'; unit='round-trips'; tol=0
+     anchor='| **T1** | every new build passes `scripts/roundtrip.sh` | **held**: 203/203 for base, cue, cue without room, alternating cue, nudge L5D12, nudge L6D12 |'
+     expect=203
+     measure={ CueRoundtrip 'cue' } }
+
+  @{ id='rem-roundtrip-noroom'; tier='cue'; doc='docs/remaining.md'; unit='round-trips'; tol=0
+     anchor='| **T1** | every new build passes `scripts/roundtrip.sh` | **held**: 203/203 for base, cue, cue without room, alternating cue, nudge L5D12, nudge L6D12 |'
+     expect=203
+     measure={ CueRoundtrip 'noroom' } }
+
+  @{ id='rem-roundtrip-cue2'; tier='cue'; doc='docs/remaining.md'; unit='round-trips'; tol=0
+     anchor='| **T1** | every new build passes `scripts/roundtrip.sh` | **held**: 203/203 for base, cue, cue without room, alternating cue, nudge L5D12, nudge L6D12 |'
+     expect=203
+     measure={ CueRoundtrip 'cue2' } }
+
+  @{ id='rem-roundtrip-nudge'; tier='cue'; doc='docs/remaining.md'; unit='round-trips'; tol=0
+     anchor='| **T1** | every new build passes `scripts/roundtrip.sh` | **held**: 203/203 for base, cue, cue without room, alternating cue, nudge L5D12, nudge L6D12 |'
+     expect=203
+     measure={ CueRoundtrip 'nudge' } }
+
+  @{ id='rem-roundtrip-l6d12'; tier='cue'; doc='docs/remaining.md'; unit='round-trips'; tol=0
+     anchor='| **T1** | every new build passes `scripts/roundtrip.sh` | **held**: 203/203 for base, cue, cue without room, alternating cue, nudge L5D12, nudge L6D12 |'
+     expect=203
+     measure={ CueRoundtrip 'L6D12' } }
+
+  @{ id='rem-mf-ind-bits'; tier='cue'; doc='docs/remaining.md'; unit='bits'; tol=0.005
+     anchor='| no | yes (`mf`) | 27.78 | 10.49 | 14.63 | 104,007 |'
+     expect=27.78
+     measure={ CuePerEvent 'mf' 'ind' } }
+
+  @{ id='rem-mf-hp-bits'; tier='cue'; doc='docs/remaining.md'; unit='bits'; tol=0.005
+     anchor='| no | yes (`mf`) | 27.78 | 10.49 | 14.63 | 104,007 |'
+     expect=10.49
+     measure={ CuePerEvent 'mf' 'hp' } }
+
+  @{ id='rem-mf-sub-bits'; tier='cue'; doc='docs/remaining.md'; unit='bits'; tol=0.005
+     anchor='| no | yes (`mf`) | 27.78 | 10.49 | 14.63 | 104,007 |'
+     expect=14.63
+     measure={ CuePerEvent 'mf' 'sub' } }
+
+  @{ id='rem-mf-chr21ind-bytes'; tier='slow'; doc='docs/remaining.md'; unit='B'; tol=0
+     anchor='| no | yes (`mf`) | 27.78 | 10.49 | 14.63 | 104,007 |'
+     expect=104007
+     measure={ CueChr21Ind 'mf' } }
+
+  @{ id='rem-mf_noroom-ind-bits'; tier='cue'; doc='docs/remaining.md'; unit='bits'; tol=0.005
+     anchor='| no | no (`mf_noroom`) | **27.41** | **9.78** | 14.68 | 104,082 |'
+     expect=27.41
+     measure={ CuePerEvent 'mf_noroom' 'ind' } }
+
+  @{ id='rem-mf_noroom-hp-bits'; tier='cue'; doc='docs/remaining.md'; unit='bits'; tol=0.005
+     anchor='| no | no (`mf_noroom`) | **27.41** | **9.78** | 14.68 | 104,082 |'
+     expect=9.78
+     measure={ CuePerEvent 'mf_noroom' 'hp' } }
+
+  @{ id='rem-mf_noroom-sub-bits'; tier='cue'; doc='docs/remaining.md'; unit='bits'; tol=0.005
+     anchor='| no | no (`mf_noroom`) | **27.41** | **9.78** | 14.68 | 104,082 |'
+     expect=14.68
+     measure={ CuePerEvent 'mf_noroom' 'sub' } }
+
+  @{ id='rem-mf_noroom-chr21ind-bytes'; tier='slow'; doc='docs/remaining.md'; unit='B'; tol=0
+     anchor='| no | no (`mf_noroom`) | **27.41** | **9.78** | 14.68 | 104,082 |'
+     expect=104082
+     measure={ CueChr21Ind 'mf_noroom' } }
+
+  @{ id='rem-chr22-base-bytes'; tier='slow'; doc='docs/remaining.md'; unit='B'; tol=0
+     anchor='| **file** | 794,330 B | 748,025 B | **−5.83%** |'
+     expect=794330
+     measure={ CueHuman 'base' 'chm13_chr22.fa' 'grch38_chr22.fa' } }
+
+  @{ id='rem-chr22-cue-bytes'; tier='slow'; doc='docs/remaining.md'; unit='B'; tol=0
+     anchor='| **file** | 794,330 B | 748,025 B | **−5.83%** |'
+     expect=748025
+     measure={ CueHuman 'cue' 'chm13_chr22.fa' 'grch38_chr22.fa' } }
+
+  @{ id='rem-chr22-pct'; tier='slow'; doc='docs/remaining.md'; unit='%'; tol=0.005
+     anchor='| **file** | 794,330 B | 748,025 B | **−5.83%** |'
+     expect=-5.83
+     measure={ CuePct (CueHuman 'base' 'chm13_chr22.fa' 'grch38_chr22.fa') (CueHuman 'cue' 'chm13_chr22.fa' 'grch38_chr22.fa') } }
+
+  @{ id='rem-chr22-shared-pct'; tier='slow'; doc='docs/remaining.md'; unit='%'; tol=0.005
+     anchor='| shared windows (< 0.2 b/b, 85.8% of windows, 25.3% of bits) | | | **−16.24%** |'
+     expect=-16.24
+     measure={ CueWindows 'chm13_chr22' 'grch38_chr22' 'shared' } }
+
+  @{ id='rem-chr22-shared-winpct'; tier='slow'; doc='docs/remaining.md'; unit='%'; tol=0.05
+     anchor='| shared windows (< 0.2 b/b, 85.8% of windows, 25.3% of bits) | | | **−16.24%** |'
+     expect=85.8
+     measure={ $w = CueWindowSums 'chm13_chr22' 'grch38_chr22' 'shared'; [math]::Round(100.0 * $w.windows / $w.total, 1) } }
+
+  @{ id='rem-chr22-shared-bitpct'; tier='slow'; doc='docs/remaining.md'; unit='%'; tol=0.05
+     anchor='| shared windows (< 0.2 b/b, 85.8% of windows, 25.3% of bits) | | | **−16.24%** |'
+     expect=25.3
+     measure={ $w = CueWindowSums 'chm13_chr22' 'grch38_chr22' 'shared'; $a = CueWindowSums 'chm13_chr22' 'grch38_chr22' 'all'; [math]::Round(100.0 * $w.base / $a.base, 1) } }
+
+  @{ id='rem-chr22-diverged-pct'; tier='slow'; doc='docs/remaining.md'; unit='%'; tol=0.005
+     anchor='| diverged (0.2–1.0 b/b, 51.3% of bits) | | | −3.49% |'
+     expect=-3.49
+     measure={ CueWindows 'chm13_chr22' 'grch38_chr22' 'diverged' } }
+
+  @{ id='rem-chr22-diverged-bitpct'; tier='slow'; doc='docs/remaining.md'; unit='%'; tol=0.05
+     anchor='| diverged (0.2–1.0 b/b, 51.3% of bits) | | | −3.49% |'
+     expect=51.3
+     measure={ $w = CueWindowSums 'chm13_chr22' 'grch38_chr22' 'diverged'; $a = CueWindowSums 'chm13_chr22' 'grch38_chr22' 'all'; [math]::Round(100.0 * $w.base / $a.base, 1) } }
+
+  @{ id='rem-chr22-novel-pct'; tier='slow'; doc='docs/remaining.md'; unit='%'; tol=0.005
+     anchor='| novel (≥ 1.0 b/b, 23.4% of bits) | | | −0.01% |'
+     expect=-0.01
+     measure={ CueWindows 'chm13_chr22' 'grch38_chr22' 'novel' } }
+
+  @{ id='rem-chr22-novel-bitpct'; tier='slow'; doc='docs/remaining.md'; unit='%'; tol=0.05
+     anchor='| novel (≥ 1.0 b/b, 23.4% of bits) | | | −0.01% |'
+     expect=23.4
+     measure={ $w = CueWindowSums 'chm13_chr22' 'grch38_chr22' 'novel'; $a = CueWindowSums 'chm13_chr22' 'grch38_chr22' 'all'; [math]::Round(100.0 * $w.base / $a.base, 1) } }
+
+  # ---- docs/speed.md
+
+  @{ id='speed-ecoli_ind-l3-bytes'; tier='cue'; doc='docs/speed.md'; unit='B'; tol=0
+     anchor='| `ecoli_ind` | 12,580 B, 8.86 s | −3.19%, 8.96 s | +0.23%, 4.06 s | **−2.23%, 4.12 s** |'
+     expect=12580
+     measure={ CueReal 'base' 'ecoli_ind' 3 } }
+
+  @{ id='speed-ecoli_ind-cue-l3-pct'; tier='cue'; doc='docs/speed.md'; unit='%'; tol=0.005
+     anchor='| `ecoli_ind` | 12,580 B, 8.86 s | −3.19%, 8.96 s | +0.23%, 4.06 s | **−2.23%, 4.12 s** |'
+     expect=-3.19
+     measure={ CuePct (CueReal 'base' 'ecoli_ind' 3) (CueReal 'cue' 'ecoli_ind' 3) } }
+
+  @{ id='speed-ecoli_ind-base-l1-pct'; tier='cue'; doc='docs/speed.md'; unit='%'; tol=0.005
+     anchor='| `ecoli_ind` | 12,580 B, 8.86 s | −3.19%, 8.96 s | +0.23%, 4.06 s | **−2.23%, 4.12 s** |'
+     expect=0.23
+     measure={ CuePct (CueReal 'base' 'ecoli_ind' 3) (CueReal 'base' 'ecoli_ind' 1) } }
+
+  @{ id='speed-ecoli_ind-cue-l1-pct'; tier='cue'; doc='docs/speed.md'; unit='%'; tol=0.005
+     anchor='| `ecoli_ind` | 12,580 B, 8.86 s | −3.19%, 8.96 s | +0.23%, 4.06 s | **−2.23%, 4.12 s** |'
+     expect=-2.23
+     measure={ CuePct (CueReal 'base' 'ecoli_ind' 3) (CueReal 'cue' 'ecoli_ind' 1) } }
+
+  @{ id='speed-ind_1-l3-bytes'; tier='cue'; doc='docs/speed.md'; unit='B'; tol=0
+     anchor='| `ind_1` | 53,178 B, 8.80 s | −9.18%, 8.96 s | +0.27%, 4.01 s | **−7.66%, 4.07 s** |'
+     expect=53178
+     measure={ CueTarget 'base' 'ind_1' 3 } }
+
+  @{ id='speed-ind_1-cue-l3-pct'; tier='cue'; doc='docs/speed.md'; unit='%'; tol=0.005
+     anchor='| `ind_1` | 53,178 B, 8.80 s | −9.18%, 8.96 s | +0.27%, 4.01 s | **−7.66%, 4.07 s** |'
+     expect=-9.18
+     measure={ CuePct (CueTarget 'base' 'ind_1' 3) (CueTarget 'cue' 'ind_1' 3) } }
+
+  @{ id='speed-ind_1-base-l1-pct'; tier='cue'; doc='docs/speed.md'; unit='%'; tol=0.005
+     anchor='| `ind_1` | 53,178 B, 8.80 s | −9.18%, 8.96 s | +0.27%, 4.01 s | **−7.66%, 4.07 s** |'
+     expect=0.27
+     measure={ CuePct (CueTarget 'base' 'ind_1' 3) (CueTarget 'base' 'ind_1' 1) } }
+
+  @{ id='speed-ind_1-cue-l1-pct'; tier='cue'; doc='docs/speed.md'; unit='%'; tol=0.005
+     anchor='| `ind_1` | 53,178 B, 8.80 s | −9.18%, 8.96 s | +0.27%, 4.01 s | **−7.66%, 4.07 s** |'
+     expect=-7.66
+     measure={ CuePct (CueTarget 'base' 'ind_1' 3) (CueTarget 'cue' 'ind_1' 1) } }
+
+  @{ id='speed-hp_1-l3-bytes'; tier='cue'; doc='docs/speed.md'; unit='B'; tol=0
+     anchor='| `hp_1` | 48,994 B, 8.82 s | −10.00%, 8.98 s | +0.26%, 4.08 s | **−8.54%, 4.14 s** |'
+     expect=48994
+     measure={ CueTarget 'base' 'hp_1' 3 } }
+
+  @{ id='speed-hp_1-cue-l3-pct'; tier='cue'; doc='docs/speed.md'; unit='%'; tol=0.005
+     anchor='| `hp_1` | 48,994 B, 8.82 s | −10.00%, 8.98 s | +0.26%, 4.08 s | **−8.54%, 4.14 s** |'
+     expect=-10.0
+     measure={ CuePct (CueTarget 'base' 'hp_1' 3) (CueTarget 'cue' 'hp_1' 3) } }
+
+  @{ id='speed-hp_1-base-l1-pct'; tier='cue'; doc='docs/speed.md'; unit='%'; tol=0.005
+     anchor='| `hp_1` | 48,994 B, 8.82 s | −10.00%, 8.98 s | +0.26%, 4.08 s | **−8.54%, 4.14 s** |'
+     expect=0.26
+     measure={ CuePct (CueTarget 'base' 'hp_1' 3) (CueTarget 'base' 'hp_1' 1) } }
+
+  @{ id='speed-hp_1-cue-l1-pct'; tier='cue'; doc='docs/speed.md'; unit='%'; tol=0.005
+     anchor='| `hp_1` | 48,994 B, 8.82 s | −10.00%, 8.98 s | +0.26%, 4.08 s | **−8.54%, 4.14 s** |'
+     expect=-8.54
+     measure={ CuePct (CueTarget 'base' 'hp_1' 3) (CueTarget 'cue' 'hp_1' 1) } }
+
+  @{ id='speed-rh-base-bytes'; tier='slow'; doc='docs/speed.md'; unit='B'; tol=0
+     anchor='| v0.8.0 level 3 (today''s default) | 586,615 B | 206.9 s |'
+     expect=586615
+     measure={ CueHuman 'base' 'chm13_chr21.fa' 'grch38_chr21.fa' } }
+
+  @{ id='speed-rh-cue-bytes'; tier='slow'; doc='docs/speed.md'; unit='B'; tol=0
+     anchor='| cue level 3 | 551,594 B (−5.97%) | ~193 s |'
+     expect=551594
+     measure={ CueHuman 'cue' 'chm13_chr21.fa' 'grch38_chr21.fa' } }
+
+  @{ id='speed-rh-cue-l1-bytes'; tier='slow'; doc='docs/speed.md'; unit='B'; tol=0
+     anchor='| **cue level 1** | **568,133 B (−3.15%)** | **85.8 s (2.4x faster)** |'
+     expect=568133
+     measure={ CueHuman 'cue' 'chm13_chr21.fa' 'grch38_chr21.fa' 1 } }
+
+  @{ id='speed-rh-cue-l1-pct'; tier='slow'; doc='docs/speed.md'; unit='%'; tol=0.005
+     anchor='| **cue level 1** | **568,133 B (−3.15%)** | **85.8 s (2.4x faster)** |'
+     expect=-3.15
+     measure={ CuePct (CueHuman 'base' 'chm13_chr21.fa' 'grch38_chr21.fa') (CueHuman 'cue' 'chm13_chr21.fa' 'grch38_chr21.fa' 1) } }
+
+  # ---- docs/competitors.md
+
+  @{ id='comp-zstd-fa-bytes'; tier='extern'; doc='docs/competitors.md'; unit='B'; tol=0
+     anchor='| zstd -19 --long=27 --patch-from | 3,143,939 | 5.70x larger | yes |'
+     expect=3143939
+     measure={ ZstdPatch (Join-Path $cueHuman 'chm13_chr21.fa') (Join-Path $cueHuman 'grch38_chr21.fa') } }
+
+  @{ id='comp-hrcm-fa-bytes'; tier='extern'; doc='docs/competitors.md'; unit='B'; tol=0
+     anchor='| HRCM | 1,438,137 | 2.61x larger | sequence, header and line layout yes; drops the file''s final empty line |'
+     expect=1438137
+     measure={ Hrcm (Join-Path $cueHuman 'chm13_chr21.fa') (Join-Path $cueHuman 'grch38_chr21.fa') } }
+
+  @{ id='comp-dnac-base-fa-bytes'; tier='slow'; doc='docs/competitors.md'; unit='B'; tol=0
+     anchor='| dnac v0.8.0 | 586,615 | 1.06x | yes |'
+     expect=586615
+     measure={ CueHuman 'base' 'chm13_chr21.fa' 'grch38_chr21.fa' } }
+
+  @{ id='comp-dnac-cue-fa-bytes'; tier='slow'; doc='docs/competitors.md'; unit='B'; tol=0
+     anchor='| **dnac + cue** | **551,594** | — | yes |'
+     expect=551594
+     measure={ CueHuman 'cue' 'chm13_chr21.fa' 'grch38_chr21.fa' } }
+
+  @{ id='comp-zstd-seq-bytes'; tier='extern'; doc='docs/competitors.md'; unit='B'; tol=0
+     anchor='| zstd -19 --long=27 --patch-from | 882,586 | 1.62x larger | yes |'
+     expect=882586
+     measure={ ZstdPatch (Join-Path $cueHuman 'chm13_chr21.seq') (Join-Path $cueHuman 'grch38_chr21.seq') } }
+
+  @{ id='comp-geco-ref-bytes'; tier='extern'; doc='docs/competitors.md'; unit='B'; tol=0
+     anchor='| GeCo3, reference template (`$PARAMR`) | 1,243,961 | 2.28x larger | **unverified** (GeDe3 broken on this machine) |'
+     expect=1243961
+     measure={ Geco (Join-Path $cueHuman 'chm13_chr21.seq') "$PARAMR -r ref.seq" (Join-Path $cueHuman 'grch38_chr21.seq') } }
+
+  @{ id='comp-geco-hybrid-bytes'; tier='extern'; doc='docs/competitors.md'; unit='B'; tol=0
+     anchor='| GeCo3, hybrid template (`$PARAMH`) | 877,373 | 1.61x larger | **unverified** |'
+     expect=877373
+     measure={ Geco (Join-Path $cueHuman 'chm13_chr21.seq') "$PARAMH -r ref.seq" (Join-Path $cueHuman 'grch38_chr21.seq') } }
+
+  @{ id='comp-dnac-base-seq-bytes'; tier='slow'; doc='docs/competitors.md'; unit='B'; tol=0
+     anchor='| dnac v0.8.0 | 581,022 | 1.06x | yes |'
+     expect=581022
+     measure={ CueHuman 'base' 'chm13_chr21.seq' 'grch38_chr21.seq' } }
+
+  @{ id='comp-dnac-cue-seq-bytes'; tier='slow'; doc='docs/competitors.md'; unit='B'; tol=0
+     anchor='| **dnac + cue** | **545,982** | — | yes |'
+     expect=545982
+     measure={ CueHuman 'cue' 'chm13_chr21.seq' 'grch38_chr21.seq' } }
 )
 
 # --- runner -------------------------------------------------------------------
@@ -540,6 +1607,70 @@ if ($SelfTest) {
     if ($r3.status -ne 'ERROR') { throw "SELF-TEST FAILED: a failing recipe was not detected (got '$($r3.status)')" }
 
     Write-Host "self-test: ANCHOR, DRIFT and ERROR all detected (3/3)`n" -ForegroundColor Green
+    # The cue rows brought four new ways to be wrong that the three detectors
+    # above cannot see, because all three assume the MEASUREMENT is of what it
+    # says it is. Each is broken here on purpose. Only when a cue tier is
+    # actually going to run: these compile and compress, unlike the three above.
+    if ($Tier -in @('cue','slow','all')) {
+        Write-Host "self-test: the cue machinery" -ForegroundColor Cyan
+
+        # 1. An unknown build label must stop the run, not quietly measure the
+        #    default build and report its number against someone else's claim.
+        $r4 = Run-Claim @{ id='selftest-cue-label'; tier='cue'; doc='README.md'; unit='B'; tol=0
+                           anchor='# dnac'; expect=1; measure={ CueExe 'no-such-build' } }
+        if ($r4.status -ne 'ERROR') { throw "SELF-TEST FAILED: an unknown build label was accepted (got '$($r4.status)')" }
+
+        # 2. THE ONE THAT MATTERS. Every figure on this branch is a comparison
+        #    between two builds of one source file. If the flag never reaches the
+        #    compiler -- a typo in CueDefs, a Makefile that ignores it, a cached
+        #    binary -- both sides are the same build, every difference is zero,
+        #    and nothing else here would notice: the anchors still match, the
+        #    recipes still run, and the numbers are all "unchanged", which is
+        #    exactly what a failed experiment also looks like.
+        $ctlBase = CueTarget 'base' 'ctl'
+        $ctlCue  = CueTarget 'cue'  'ctl'
+        if ($ctlBase -eq $ctlCue) {
+            throw "SELF-TEST FAILED: -DDNAC_CUE produced the same archive as the unflagged build ($ctlBase B). The flag is not reaching the compiler, so every cue figure below is a build compared with itself."
+        }
+        Write-Host "  the cue flag changes the output ($ctlBase -> $ctlCue B on the control)" -ForegroundColor Gray
+
+        # 3. A wrong value on a REAL cue measurement (free: both sizes are memoised).
+        $r5 = Run-Claim @{ id='selftest-cue-value'; tier='cue'; doc='README.md'; unit='B'; tol=0
+                           anchor='# dnac'; expect=1; measure={ CueTarget 'base' 'ctl' } }
+        if ($r5.status -ne 'DRIFT') { throw "SELF-TEST FAILED: a wrong cue value was not detected (got '$($r5.status)')" }
+
+        # 4. The round-trip rows report a COUNT parsed out of another script's
+        #    output. A parser that returns 203 whatever happened would make the
+        #    one claim that must never be wrong unfalsifiable, so it is fed
+        #    something that is not a codec at all.
+        $notACodec = Join-Path $cueWork 'not-a-codec.exe'
+        New-Item -ItemType Directory -Force $cueWork | Out-Null
+        Set-Content -Path $notACodec -Value 'this is not a program' -Encoding ascii
+        $r6 = Run-Claim @{ id='selftest-cue-roundtrip'; tier='cue'; doc='README.md'; unit='round-trips'; tol=0
+                           anchor='# dnac'; expect=203; measure={ CueRoundtripExe $notACodec }.GetNewClosure() }
+        Remove-Item $notACodec -Force -ErrorAction SilentlyContinue
+        if ($r6.status -eq 'OK') { throw "SELF-TEST FAILED: roundtrip.sh reported 203/203 for a file that is not a codec" }
+
+        # 5. The build-flag table exists twice -- here (CueDefs) and in
+        #    scripts/cue/common.sh, which the shell scripts use. Two copies that
+        #    quietly disagree would mean the published figures and the scripts
+        #    that produced them measured different builds. They are compared.
+        $sh = Resolve-Sh
+        if (-not $sh) {
+            Write-Host "  NOTE: no POSIX sh found, so CueDefs was NOT compared against scripts/cue/common.sh" -ForegroundColor Yellow
+        } else {
+            foreach ($lbl in @('base','cue','noroom','mf','mf_noroom','cue2','nudge','L6D12','L8D4')) {
+                $mine  = ((CueDefs $lbl) -join ' ').Trim()
+                $their = (& $sh (Join-Path $root 'scripts/cue/defines.sh') $lbl 2>&1 | Out-String).Trim()
+                if ($mine -ne $their) {
+                    throw "SELF-TEST FAILED: build '$lbl' is '$mine' here and '$their' in scripts/cue/common.sh"
+                }
+            }
+            Write-Host "  the build-flag table agrees with scripts/cue/common.sh (9 labels)" -ForegroundColor Gray
+        }
+
+        Write-Host "self-test: unknown build, silent flag, wrong value, a fake codec and a drifting flag table all detected (5/5)`n" -ForegroundColor Green
+    }
 }
 
 # @() is load-bearing: a single hashtable's .Count is its KEY count, so an

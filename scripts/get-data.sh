@@ -6,6 +6,8 @@
 #   sh scripts/get-data.sh          # bacteria only (~15 MB, seconds)
 #   sh scripts/get-data.sh --human  # also human chr21 (~12 MB gz -> 47 MB)
 #   sh scripts/get-data.sh --meta   # the metagenome for "Where this loses" (~300 MB)
+#   sh scripts/get-data.sh --cue    # the real human pairs the cue was measured on
+#                                   # (~190 MB) -- CHM13 chr21/chr22 + GRCh38 chr22
 set -eu
 cd "$(dirname "$0")/.."
 mkdir -p data
@@ -54,6 +56,56 @@ if [ "${1:-}" = "--meta" ]; then
     rm -f gut.part.gz
   fi
   echo "  meta.seq: $(wc -c < meta.seq) bytes"
+fi
+
+if [ "${1:-}" = "--cue" ]; then
+  # The real human pairs behind docs/real-human.md, docs/competitors.md and
+  # docs/remaining.md: a second person's chromosome against the reference one.
+  # These land in bench-external/cue/human/ rather than data/, because that is
+  # where verify-claims.ps1 reads them -- the same arrangement as meta.seq.
+  #
+  # CHM13 comes from NCBI by accession, GRCh38 chr22 from Ensembl release 110
+  # (pinned: "current" moves, and a different assembly release is a different
+  # measurement). Run --human first: chr21's reference side is the repository's
+  # own chr21.fa, so that pair is the one the README already benchmarks.
+  H=../bench-external/cue/human
+  mkdir -p "$H"
+  echo "Real human pair (CHM13 vs GRCh38):"
+  fetch_ncbi CP068257.2 "$H/chm13_chr21.fa" "T2T-CHM13v2.0 chr21 — the target of docs/real-human.md"
+  fetch_ncbi CP068256.2 "$H/chm13_chr22.fa" "T2T-CHM13v2.0 chr22 — the held-out replication"
+  if [ -s "$H/grch38_chr22.fa" ]; then echo "  have grch38_chr22.fa"; else
+    echo "  fetching GRCh38 chr22 (Ensembl release 110)"
+    curl -fsSL -o "$H/grch38_chr22.fa.gz"       "https://ftp.ensembl.org/pub/release-110/fasta/homo_sapiens/dna/Homo_sapiens.GRCh38.dna.chromosome.22.fa.gz"
+    gzip -dc "$H/grch38_chr22.fa.gz" > "$H/grch38_chr22.fa" && rm -f "$H/grch38_chr22.fa.gz"
+  fi
+  # chr21's reference side is the repository's own chr21.fa, under the name the
+  # cue documents and scripts use for it. A copy, not a symlink: this has to work
+  # on a Windows checkout too.
+  if [ ! -s "$H/grch38_chr21.fa" ]; then
+    if   [ -s ../chr21.fa ]; then cp ../chr21.fa "$H/grch38_chr21.fa"
+    elif [ -s chr21.fa ];    then cp chr21.fa    "$H/grch38_chr21.fa"
+    else echo "  (chr21.fa missing: run --human first for grch38_chr21.fa)"; fi
+  fi
+  # the plain-ACGT side of the same pair (the fair table for zstd and GeCo3)
+  [ -s "$H/chm13_chr21.seq" ] || sh ../scripts/mkseq.sh "$H/chm13_chr21.fa" "$H/chm13_chr21.seq"
+  if [ ! -s "$H/grch38_chr21.seq" ]; then
+    if   [ -s ../chr21.fa ]; then sh ../scripts/mkseq.sh ../chr21.fa "$H/grch38_chr21.seq"
+    elif [ -s chr21.fa ];    then sh ../scripts/mkseq.sh chr21.fa    "$H/grch38_chr21.seq"
+    else echo "  (chr21.fa missing: run --human first for grch38_chr21.seq)"; fi
+  fi
+  # Identical bytes or the figures do not apply. A defline or a release that
+  # moved is a different measurement, not a worse download.
+  if [ -s ../scripts/cue/data.sha256 ]; then
+    echo "  checking against scripts/cue/data.sha256"
+    ( cd "$H" && sha256sum -c ../../../scripts/cue/data.sha256 ) || {
+      echo "  FETCHED DATA DIFFERS from what docs/real-human.md was measured on." >&2
+      echo "  The figures do not apply to these bytes until that is understood." >&2
+      exit 1; }
+  fi
+  # The ten controlled E. coli targets are built, not downloaded (6 s). The
+  # script finds its own reference, and checks what it rebuilt against
+  # scripts/cue/targets.sha256.
+  sh ../scripts/cue/make-targets.sh
 fi
 
 echo

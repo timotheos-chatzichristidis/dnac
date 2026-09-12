@@ -40,6 +40,10 @@ dnac_dnc9_backup.c
 # --- byte-level side branch (separate experiment, not part of this codec) ---
 text-offshoot/
 
+# --- python bytecode (scripts/cue) ---
+__pycache__/
+*.pyc
+
 # --- OS ---
 Thumbs.db
 .DS_Store

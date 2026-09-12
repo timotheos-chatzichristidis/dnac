@@ -31,6 +31,15 @@ nothing to catch. The part of the method that carries the gain is the other
 part: the headphone ear heard *through* what the room ear hears, and a cue that
 never leaves the mix (`docs/cue.md`).
 
+**Corrected 2026-09-12.** That last sentence was half wrong when it was
+written, and the branch's own next experiment is what shows it. The 2x2 in
+`docs/remaining.md` (T3) removed the room from the cue's table and from the
+mixer's context, and the result did not get worse: **the gain comes from the
+cue existing and staying, not from hearing it through the room.** So the part
+of the method that carries the gain is the permanence alone. Left in place
+rather than rewritten, because a document that quietly becomes right is a
+document nobody can check.
+
 ## The test this points to (not yet run)
 
 Timotheos's sharper claim is that taking the headphones off and listening with

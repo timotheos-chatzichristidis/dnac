@@ -133,6 +133,36 @@ jobs:
           cmp tgt.fa from_gcc.fa
           cmp tgt.fa from_clang.fa
 
+      # The cue adds a probability table and a mixer input to the float path
+      # that this job exists to police, and v0.9.0 ships it. There is no clang
+      # on the measurement machine, so this is the only place the cross-COMPILER
+      # half of docs/reference-free.md's P7 can run; the float-variant half runs
+      # locally (scripts/cue/fpident.sh).
+      - name: The cue must be identical across compilers too
+        run: |
+          gcc   -O2 -Wall -Wextra -DDNAC_CUE -o cue_gcc   dnac.c -lm -pthread
+          clang -O2 -Wall -Wextra -DDNAC_CUE -o cue_clang dnac.c -lm -pthread
+          ./dnac_gcc gen cue_s.fa 400000 13
+          ./dnac_gcc mut cue_s.fa cue_t.fa 8 21
+          for lvl in 1 3; do
+            ./cue_gcc   c cue_s.fa cg$lvl.dnac 22 $lvl
+            ./cue_clang c cue_s.fa cc$lvl.dnac 22 $lvl
+            cmp cg$lvl.dnac cc$lvl.dnac
+            ./cue_clang d cg$lvl.dnac from_cue_gcc$lvl.fa
+            ./cue_gcc   d cc$lvl.dnac from_cue_clang$lvl.fa
+            cmp cue_s.fa from_cue_gcc$lvl.fa
+            cmp cue_s.fa from_cue_clang$lvl.fa
+          done
+          # reference mode is where the cue actually speaks, so it is the case
+          # that would show a float disagreement first
+          ./cue_gcc   cr cue_t.fa rg.dnac cue_s.fa 22 3
+          ./cue_clang cr cue_t.fa rc.dnac cue_s.fa 22 3
+          cmp rg.dnac rc.dnac
+          ./cue_clang dr rg.dnac from_rg.fa cue_s.fa
+          ./cue_gcc   dr rc.dnac from_rc.fa cue_s.fa
+          cmp cue_t.fa from_rg.fa
+          cmp cue_t.fa from_rc.fa
+
       - name: Threads must not change a single byte
         run: |
           # -j N is a FORMAT decision (how many blocks); threading is only who

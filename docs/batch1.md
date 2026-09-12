@@ -46,7 +46,7 @@ that re-measures the number now. They are spread over three tiers:
 | `slow` | 55 / 69 | the real human pairs, the window splits, `chr21_ind` |
 | `extern` | 5 / 15 | zstd `--patch-from`, HRCM, GeCo3 on the real pair |
 
-The registry went from 51 rows to 201.
+The registry went from 51 rows to 201. (Batch 2 took it to 231.)
 
 Those rows **compile the build they defend** — the cue exists only behind
 `-DDNAC_CUE`, and every ablation behind another flag — so twelve builds are

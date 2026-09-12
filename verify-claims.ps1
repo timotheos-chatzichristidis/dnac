@@ -45,6 +45,8 @@
 #
 # Usage:  ./verify-claims.ps1 [-Tier fast|slow|extern|meta|cue|all] [-SelfTest] [-Only <id>]
 #         ./verify-claims.ps1 -Tier meta              # ~25 min, the losing columns
+#         ./verify-claims.ps1 -Tier all -Only 'rf-*'  # one batch's rows, wherever
+#           they live: -Only is a wildcard, and one process shares its measurements.
 #         ./verify-claims.ps1 -AnchorsOnly -Tier all     # seconds: after editing a doc,
 #           checks every claim's sentence is still there without re-measuring anything.
 #           Catches a hand-edited figure immediately; it does NOT prove the value.
@@ -489,6 +491,15 @@ function Hrcm($target, $ref) {
         for ($i = 0; $i -lt $b.Length; $i++) { if ($a[$i] -ne $b[$i]) { throw "HRCM round-trip differs at byte $i" } }
         (Get-Item $co).Length
     } finally { Pop-Location }
+}
+
+# Plain mode, no reference: the mode docs/reference-free.md measures, and the
+# one the README's headline lives in. Nothing to prime, so these are the
+# cheapest cue measurements here -- and the ones that decide whether the cue is
+# safe to leave on when there is no reference at all.
+function CuePlain($label, $seq, $level) {
+    if (-not $level) { $level = 3 }
+    CueSize $label (& $S "$seq.seq") $null $level
 }
 
 function CueHuman($label, $target, $ref, $level) {
@@ -1555,6 +1566,161 @@ $claims = @(
      anchor='| **dnac + cue** | **545,982** | — | yes |'
      expect=545982
      measure={ CueHuman 'cue' 'chm13_chr21.seq' 'grch38_chr21.seq' } }
+
+  # ---- docs/reference-free.md (Batch 2: the cue where the README's headline
+  # lives). Plain mode, so these rows need no reference and no primed state --
+  # the cheapest cue rows here, and the ones that say the mechanism is safe in
+  # the mode it was never measured in.
+
+  @{ id='rf-ecoli-l3-base'; tier='cue'; doc='docs/reference-free.md'; unit='B'; tol=0
+     anchor='| E. coli | 4,641,652 | 3 | 1,092,692 | 1,092,606 | **−0.008%** |'
+     expect=1092692
+     measure={ CuePlain 'base' 'ecoli' 3 } }
+
+  @{ id='rf-ecoli-l3-cue'; tier='cue'; doc='docs/reference-free.md'; unit='B'; tol=0
+     anchor='| E. coli | 4,641,652 | 3 | 1,092,692 | 1,092,606 | **−0.008%** |'
+     expect=1092606
+     measure={ CuePlain 'cue' 'ecoli' 3 } }
+
+  @{ id='rf-ecoli-l3-pct'; tier='cue'; doc='docs/reference-free.md'; unit='%'; tol=0.0005
+     anchor='| E. coli | 4,641,652 | 3 | 1,092,692 | 1,092,606 | **−0.008%** |'
+     expect=-0.008
+     measure={ [math]::Round(100.0 * ((CuePlain 'cue' 'ecoli' 3) / (CuePlain 'base' 'ecoli' 3) - 1.0), 3) } }
+
+  @{ id='rf-ecoli-l1-base'; tier='cue'; doc='docs/reference-free.md'; unit='B'; tol=0
+     anchor='| | | 1 | 1,093,749 | 1,093,906 | +0.014% |'
+     expect=1093749
+     measure={ CuePlain 'base' 'ecoli' 1 } }
+
+  @{ id='rf-ecoli-l1-cue'; tier='cue'; doc='docs/reference-free.md'; unit='B'; tol=0
+     anchor='| | | 1 | 1,093,749 | 1,093,906 | +0.014% |'
+     expect=1093906
+     measure={ CuePlain 'cue' 'ecoli' 1 } }
+
+  @{ id='rf-ecoli-l1-pct'; tier='cue'; doc='docs/reference-free.md'; unit='%'; tol=0.0005
+     anchor='| | | 1 | 1,093,749 | 1,093,906 | +0.014% |'
+     expect=0.014
+     measure={ [math]::Round(100.0 * ((CuePlain 'cue' 'ecoli' 1) / (CuePlain 'base' 'ecoli' 1) - 1.0), 3) } }
+
+  @{ id='rf-chr21slice-l3-base'; tier='slow'; doc='docs/reference-free.md'; unit='B'; tol=0
+     anchor='| chr21 slice | 9,836,065 | 3 | 2,104,223 | 2,104,040 | −0.009% |'
+     expect=2104223
+     measure={ CuePlain 'base' 'chr21slice' 3 } }
+
+  @{ id='rf-chr21slice-l3-cue'; tier='slow'; doc='docs/reference-free.md'; unit='B'; tol=0
+     anchor='| chr21 slice | 9,836,065 | 3 | 2,104,223 | 2,104,040 | −0.009% |'
+     expect=2104040
+     measure={ CuePlain 'cue' 'chr21slice' 3 } }
+
+  @{ id='rf-chr21slice-l3-pct'; tier='slow'; doc='docs/reference-free.md'; unit='%'; tol=0.0005
+     anchor='| chr21 slice | 9,836,065 | 3 | 2,104,223 | 2,104,040 | −0.009% |'
+     expect=-0.009
+     measure={ [math]::Round(100.0 * ((CuePlain 'cue' 'chr21slice' 3) / (CuePlain 'base' 'chr21slice' 3) - 1.0), 3) } }
+
+  @{ id='rf-chr21slice-l1-base'; tier='slow'; doc='docs/reference-free.md'; unit='B'; tol=0
+     anchor='| | | 1 | 2,112,100 | 2,112,092 | −0.000% |'
+     expect=2112100
+     measure={ CuePlain 'base' 'chr21slice' 1 } }
+
+  @{ id='rf-chr21slice-l1-cue'; tier='slow'; doc='docs/reference-free.md'; unit='B'; tol=0
+     anchor='| | | 1 | 2,112,100 | 2,112,092 | −0.000% |'
+     expect=2112092
+     measure={ CuePlain 'cue' 'chr21slice' 1 } }
+
+  @{ id='rf-chr21slice-l1-pct'; tier='slow'; doc='docs/reference-free.md'; unit='%'; tol=0.0005
+     anchor='| | | 1 | 2,112,100 | 2,112,092 | −0.000% |'
+     expect=-0.0
+     measure={ [math]::Round(100.0 * ((CuePlain 'cue' 'chr21slice' 1) / (CuePlain 'base' 'chr21slice' 1) - 1.0), 3) } }
+
+  @{ id='rf-chr21-l3-base'; tier='slow'; doc='docs/reference-free.md'; unit='B'; tol=0
+     anchor='| **chr21** | 40,088,619 | **3** | **7,506,264** | **7,502,884** | **−0.045%** |'
+     expect=7506264
+     measure={ CuePlain 'base' 'chr21' 3 } }
+
+  @{ id='rf-chr21-l3-cue'; tier='slow'; doc='docs/reference-free.md'; unit='B'; tol=0
+     anchor='| **chr21** | 40,088,619 | **3** | **7,506,264** | **7,502,884** | **−0.045%** |'
+     expect=7502884
+     measure={ CuePlain 'cue' 'chr21' 3 } }
+
+  @{ id='rf-chr21-l3-pct'; tier='slow'; doc='docs/reference-free.md'; unit='%'; tol=0.0005
+     anchor='| **chr21** | 40,088,619 | **3** | **7,506,264** | **7,502,884** | **−0.045%** |'
+     expect=-0.045
+     measure={ [math]::Round(100.0 * ((CuePlain 'cue' 'chr21' 3) / (CuePlain 'base' 'chr21' 3) - 1.0), 3) } }
+
+  @{ id='rf-chr21-l1-base'; tier='slow'; doc='docs/reference-free.md'; unit='B'; tol=0
+     anchor='| | | 1 | 7,549,315 | 7,546,232 | −0.041% |'
+     expect=7549315
+     measure={ CuePlain 'base' 'chr21' 1 } }
+
+  @{ id='rf-chr21-l1-cue'; tier='slow'; doc='docs/reference-free.md'; unit='B'; tol=0
+     anchor='| | | 1 | 7,549,315 | 7,546,232 | −0.041% |'
+     expect=7546232
+     measure={ CuePlain 'cue' 'chr21' 1 } }
+
+  @{ id='rf-chr21-l1-pct'; tier='slow'; doc='docs/reference-free.md'; unit='%'; tol=0.0005
+     anchor='| | | 1 | 7,549,315 | 7,546,232 | −0.041% |'
+     expect=-0.041
+     measure={ [math]::Round(100.0 * ((CuePlain 'cue' 'chr21' 1) / (CuePlain 'base' 'chr21' 1) - 1.0), 3) } }
+
+  @{ id='rf-meta-l3-base'; tier='meta'; doc='docs/reference-free.md'; unit='B'; tol=0
+     anchor='| metagenome | 200,000,000 | 3 | 17,323,036 | 17,318,948 | −0.024% |'
+     expect=17323036
+     measure={ CuePlain 'base' 'meta' 3 } }
+
+  @{ id='rf-meta-l3-cue'; tier='meta'; doc='docs/reference-free.md'; unit='B'; tol=0
+     anchor='| metagenome | 200,000,000 | 3 | 17,323,036 | 17,318,948 | −0.024% |'
+     expect=17318948
+     measure={ CuePlain 'cue' 'meta' 3 } }
+
+  @{ id='rf-meta-l3-pct'; tier='meta'; doc='docs/reference-free.md'; unit='%'; tol=0.0005
+     anchor='| metagenome | 200,000,000 | 3 | 17,323,036 | 17,318,948 | −0.024% |'
+     expect=-0.024
+     measure={ [math]::Round(100.0 * ((CuePlain 'cue' 'meta' 3) / (CuePlain 'base' 'meta' 3) - 1.0), 3) } }
+
+  @{ id='rf-meta-l1-base'; tier='meta'; doc='docs/reference-free.md'; unit='B'; tol=0
+     anchor='| | | 1 | 17,653,816 | 17,650,900 | −0.017% |'
+     expect=17653816
+     measure={ CuePlain 'base' 'meta' 1 } }
+
+  @{ id='rf-meta-l1-cue'; tier='meta'; doc='docs/reference-free.md'; unit='B'; tol=0
+     anchor='| | | 1 | 17,653,816 | 17,650,900 | −0.017% |'
+     expect=17650900
+     measure={ CuePlain 'cue' 'meta' 1 } }
+
+  @{ id='rf-meta-l1-pct'; tier='meta'; doc='docs/reference-free.md'; unit='%'; tol=0.0005
+     anchor='| | | 1 | 17,653,816 | 17,650,900 | −0.017% |'
+     expect=-0.017
+     measure={ [math]::Round(100.0 * ((CuePlain 'cue' 'meta' 1) / (CuePlain 'base' 'meta' 1) - 1.0), 3) } }
+
+  @{ id='rf-ecoli-l1cue-vs-l3'; tier='cue'; doc='docs/reference-free.md'; unit='%'; tol=0.0005
+     anchor='| E. coli | +0.111% |'
+     expect=0.111
+     measure={ [math]::Round(100.0 * ((CuePlain 'cue' 'ecoli' 1) / (CuePlain 'base' 'ecoli' 3) - 1.0), 3) } }
+
+  @{ id='rf-chr21slice-l1cue-vs-l3'; tier='slow'; doc='docs/reference-free.md'; unit='%'; tol=0.0005
+     anchor='| chr21 slice | +0.374% |'
+     expect=0.374
+     measure={ [math]::Round(100.0 * ((CuePlain 'cue' 'chr21slice' 1) / (CuePlain 'base' 'chr21slice' 3) - 1.0), 3) } }
+
+  @{ id='rf-chr21-l1cue-vs-l3'; tier='slow'; doc='docs/reference-free.md'; unit='%'; tol=0.0005
+     anchor='| chr21 | +0.532% |'
+     expect=0.532
+     measure={ [math]::Round(100.0 * ((CuePlain 'cue' 'chr21' 1) / (CuePlain 'base' 'chr21' 3) - 1.0), 3) } }
+
+  @{ id='rf-meta-l1cue-vs-l3'; tier='meta'; doc='docs/reference-free.md'; unit='%'; tol=0.0005
+     anchor='| metagenome | +1.893% |'
+     expect=1.893
+     measure={ [math]::Round(100.0 * ((CuePlain 'cue' 'meta' 1) / (CuePlain 'base' 'meta' 3) - 1.0), 3) } }
+
+  @{ id='rf-chr21-l3-cue-bpb'; tier='slow'; doc='docs/reference-free.md'; unit='bpb'; tol=6e-05
+     anchor='In bits/base: chr21 1.4979 → 1.4973, E. coli 1.8833 → 1.8831, the metagenome'
+     expect=1.4973
+     measure={ Bpb (CuePlain 'cue' 'chr21' 3) (Bases (& $S 'chr21.seq')) } }
+
+  @{ id='rf-ecoli-l3-cue-bpb'; tier='cue'; doc='docs/reference-free.md'; unit='bpb'; tol=6e-05
+     anchor='In bits/base: chr21 1.4979 → 1.4973, E. coli 1.8833 → 1.8831, the metagenome'
+     expect=1.8831
+     measure={ Bpb (CuePlain 'cue' 'ecoli' 3) (Bases (& $S 'ecoli.seq')) } }
 )
 
 # --- runner -------------------------------------------------------------------
@@ -1675,7 +1841,11 @@ if ($SelfTest) {
 
 # @() is load-bearing: a single hashtable's .Count is its KEY count, so an
 # unwrapped one-claim selection reported "verifying 8 claim(s)".
-$sel = @($claims | Where-Object { ($Tier -eq 'all' -or $_.tier -eq $Tier) -and (-not $Only -or $_.id -eq $Only) })
+# -Only takes a wildcard, so a batch's own rows can be run in ONE process --
+# which matters because sizes are memoised per run: "-Only rf-*" measures each
+# file once and lets ten rows read it, where ten separate -Only runs would
+# measure it ten times.
+$sel = @($claims | Where-Object { ($Tier -eq 'all' -or $_.tier -eq $Tier) -and (-not $Only -or $_.id -like $Only) })
 if (-not $sel) { throw "no claims selected (tier=$Tier, only=$Only)" }
 Write-Host "verifying $($sel.Count) claim(s), tier=$Tier`n" -ForegroundColor Cyan
 

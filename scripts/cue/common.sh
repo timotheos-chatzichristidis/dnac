@@ -46,6 +46,22 @@ defines_for() { # the flags each label in the docs was measured with
     mf)         echo "-DDNAC_CUE -DCUE_MIXFREE=1" ;;
     mf_noroom)  echo "-DDNAC_CUE -DCUE_ROOM=0 -DCUE_MIXFREE=1" ;;
     cue2)       echo "-DDNAC_CUE -DCUE_BACK=1" ;;
+    # Batch 3's neighbourhood sweep: one parameter moved off the centre
+    # (CUE_L=3, CUE_D=12, CUE_SWITCH=12, CUE_MINLEN=16), which is `cue`.
+    cue_L2)     echo "-DDNAC_CUE -DCUE_L=2" ;;
+    cue_L4)     echo "-DDNAC_CUE -DCUE_L=4" ;;
+    cue_D6)     echo "-DDNAC_CUE -DCUE_D=6" ;;
+    cue_D20)    echo "-DDNAC_CUE -DCUE_D=20" ;;
+    cue_S8)     echo "-DDNAC_CUE -DCUE_SWITCH=8" ;;
+    cue_S16)    echo "-DDNAC_CUE -DCUE_SWITCH=16" ;;
+    cue_M8)     echo "-DDNAC_CUE -DCUE_MINLEN=8" ;;
+    cue_M24)    echo "-DDNAC_CUE -DCUE_MINLEN=24" ;;
+    # Batch 3's add-back: level 1 + cue, plus ONE thing level 3 has.
+    cue_x4)     echo "-DDNAC_CUE -DL1_NMIX=4" ;;
+    cue_ir)     echo "-DDNAC_CUE -DL1_IR=1" ;;
+    cue_stcm)   echo "-DDNAC_CUE -DL1_STCM=1" ;;
+    cue_ord)    echo "-DDNAC_CUE -DL1_ORDERS=1" ;;
+    base_x4)    echo "-DL1_NMIX=4" ;;
     nudge)      echo "-DDNAC_NUDGE -DNUDGE_L=5 -DNUDGE_D=12" ;;
     L*D*)       l=${1#L}; l=${l%%D*}; d=${1##*D}
                 echo "-DDNAC_NUDGE -DNUDGE_L=$l -DNUDGE_D=$d" ;;

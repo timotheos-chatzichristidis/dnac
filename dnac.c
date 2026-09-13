@@ -439,7 +439,12 @@ static TLS double    g_apm2[APM_MAXCTX][APM_BINS]; /* SSE stage 2 (order-2 conte
 #ifndef CUE_SWITCH
 #define CUE_SWITCH   12         /* cue confidence needed to mix it in             */
 #endif
+/* Guarded like the rest: an unguarded #define here makes -DCUE_MINLEN=8 a
+   redefinition warning whose value the compiler then IGNORES, so a sweep point
+   would have silently measured 16 again (docs/batch3-prediction.md). */
+#ifndef CUE_MINLEN
 #define CUE_MINLEN   16         /* only a miss after an established match loads it */
+#endif
 #define NCUE 1
 #else
 #define NCUE 0
@@ -948,6 +953,25 @@ static void geometry_for(size_t sizing_n, int *hb, int *mhb) {
     if (*mhb > MHBITS_MAX) *mhb = MHBITS_MAX;
 }
 
+/* Batch 3's add-back knobs (docs/batch3-prediction.md). Each one gives level
+   1 back ONE thing level 3 has, so the question "does this part still earn
+   its time on top of level 1 + cue" can be asked one part at a time. All
+   four default to level 1 as it ships, so an unflagged build is unchanged --
+   checked byte for byte. They are DIAGNOSTIC, not a format: the model set a
+   level names is format (see the level-4 note above), so anything adopted
+   from them becomes a new level number, never a redefinition of level 1. */
+#ifndef L1_NMIX
+#define L1_NMIX 2               /* experts at level 1 (level 3 has NMIX = 4)      */
+#endif
+#ifndef L1_IR
+#define L1_IR 0                 /* 1 = other-strand training at level 1           */
+#endif
+#ifndef L1_STCM
+#define L1_STCM 0               /* 1 = substitution-tolerant models at level 1    */
+#endif
+#ifndef L1_ORDERS
+#define L1_ORDERS 0             /* 1 = the master order set at level 1            */
+#endif
 static int mix_setup(int maxorder, size_t sizing_n, size_t seq_alloc, int hb, int mhb) {
 
     stretch_tab_init();
@@ -965,9 +989,12 @@ static int mix_setup(int maxorder, size_t sizing_n, size_t seq_alloc, int hb, in
     } else {
         orders = MASTER_ORDERS; norders = sizeof(MASTER_ORDERS) / sizeof(MASTER_ORDERS[0]);
     }
-    g_nmix       = (g_level <= 1) ? 2 : NMIX;
-    int use_ir   = (g_level >= 3);   /* levels 3 and 4 */
-    int use_stcm = (g_level == 3);   /* level 3 only -- level 4 drops them */
+#if L1_ORDERS
+    if (g_level <= 1) { orders = MASTER_ORDERS; norders = sizeof(MASTER_ORDERS)/sizeof(MASTER_ORDERS[0]); }
+#endif
+    g_nmix       = (g_level <= 1) ? L1_NMIX : NMIX;
+    int use_ir   = (g_level >= 3) || (L1_IR   && g_level <= 1);  /* levels 3 and 4 */
+    int use_stcm = (g_level == 3) || (L1_STCM && g_level <= 1);  /* level 3 only -- level 4 drops them */
 
     g_nmodels = 0;
     for (size_t m = 0; m < norders; m++) {

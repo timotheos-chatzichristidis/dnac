@@ -38,12 +38,18 @@
 #           (the states are 616 MB each, one per build and level).
 #           Get the data with `sh scripts/get-data.sh --cue` and
 #           `sh scripts/cue/make-targets.sh`.
+#         cue3  (needs a compiler and the cue data, ~90 min) -- docs/batch3.md:
+#           the parameter sweep, the add-back and the held-out chromosome, all at
+#           LEVEL 1 in reference mode, which is where Batch 2 put the cue's
+#           default. Like `cue` these rows compile the builds they defend (nine
+#           of them touch the real human pair), so run them alone. The timings in
+#           that document have no rows, deliberately: 24% noise.
 #         extern(needs GeCo3 built, ~10 min) -- the COMPETITOR's columns. Until
 #           2026-08-20 nothing re-ran these, which meant the only figures in the
 #           README nobody checked were the comparative claims -- the ones a reader
 #           is most entitled to distrust. Run before touching a head-to-head claim.
 #
-# Usage:  ./verify-claims.ps1 [-Tier fast|slow|extern|meta|cue|all] [-SelfTest] [-Only <id>]
+# Usage:  ./verify-claims.ps1 [-Tier fast|slow|extern|meta|cue|cue3|all] [-SelfTest] [-Only <id>]
 #         ./verify-claims.ps1 -Tier meta              # ~25 min, the losing columns
 #         ./verify-claims.ps1 -Tier all -Only 'rf-*'  # one batch's rows, wherever
 #           they live: -Only is a wildcard, and one process shares its measurements.
@@ -56,7 +62,7 @@
 # in benchmark.ps1.
 
 param(
-    [ValidateSet('fast','slow','extern','meta','cue','all')][string]$Tier = 'fast',
+    [ValidateSet('fast','slow','extern','meta','cue','cue3','all')][string]$Tier = 'fast',
     [switch]$SelfTest,
     [switch]$AnchorsOnly,
     [string]$Only
@@ -257,6 +263,23 @@ function CueDefs($label) {
         'mf'        { @('-DDNAC_CUE','-DCUE_MIXFREE=1') }
         'mf_noroom' { @('-DDNAC_CUE','-DCUE_ROOM=0','-DCUE_MIXFREE=1') }
         'cue2'      { @('-DDNAC_CUE','-DCUE_BACK=1') }
+        'cue_L2'    { @('-DDNAC_CUE','-DCUE_L=2') }
+        'cue_L4'    { @('-DDNAC_CUE','-DCUE_L=4') }
+        'cue_D6'    { @('-DDNAC_CUE','-DCUE_D=6') }
+        'cue_D20'   { @('-DDNAC_CUE','-DCUE_D=20') }
+        'cue_S8'    { @('-DDNAC_CUE','-DCUE_SWITCH=8') }
+        'cue_S16'   { @('-DDNAC_CUE','-DCUE_SWITCH=16') }
+        'cue_M8'    { @('-DDNAC_CUE','-DCUE_MINLEN=8') }
+        'cue_M24'   { @('-DDNAC_CUE','-DCUE_MINLEN=24') }
+        'cue_M4'    { @('-DDNAC_CUE','-DCUE_MINLEN=4') }
+        'cue_M2'    { @('-DDNAC_CUE','-DCUE_MINLEN=2') }
+        'cue_M4x4'  { @('-DDNAC_CUE','-DCUE_MINLEN=4','-DL1_NMIX=4') }
+        'cue_M4stcm'{ @('-DDNAC_CUE','-DCUE_MINLEN=4','-DL1_STCM=1') }
+        'cue_x4'    { @('-DDNAC_CUE','-DL1_NMIX=4') }
+        'cue_ir'    { @('-DDNAC_CUE','-DL1_IR=1') }
+        'cue_stcm'  { @('-DDNAC_CUE','-DL1_STCM=1') }
+        'cue_ord'   { @('-DDNAC_CUE','-DL1_ORDERS=1') }
+        'base_x4'   { @('-DL1_NMIX=4') }
         'nudge'     { @('-DDNAC_NUDGE','-DNUDGE_L=5','-DNUDGE_D=12') }
         default {
             if ($label -match '^L(\d+)D(\d+)$') { @('-DDNAC_NUDGE', "-DNUDGE_L=$($Matches[1])", "-DNUDGE_D=$($Matches[2])") }
@@ -315,7 +338,9 @@ function CueReal($label, $name, $level) {
 }
 
 # The simulated human individual, against chr21 itself (no state: one target).
-function CueChr21Ind($label) { CueSize $label (& $F 'chr21_ind.fa') (& $F 'chr21.fa') 3 }
+function CueChr21Ind($label, $level) {
+    CueSize $label (& $F 'chr21_ind.fa') (& $F 'chr21.fa') $(if ($level) { $level } else { 3 })
+}
 
 # Cost per event in bits: (target - zero-event control) x 8 / 2,000 events,
 # meaned over the three seeds. The control is what makes this a cost per event
@@ -1721,6 +1746,272 @@ $claims = @(
      anchor='In bits/base: chr21 1.4979 → 1.4973, E. coli 1.8833 → 1.8831, the metagenome'
      expect=1.8831
      measure={ Bpb (CuePlain 'cue' 'ecoli' 3) (Bases (& $S 'ecoli.seq')) } }
+  # ---- docs/batch3.md (Batch 3: the sweep, the add-back, the held-out
+  # chromosome). Everything here is LEVEL 1 in REFERENCE mode unless the id says
+  # plain, because that is the default Batch 2 chose for a reference and the
+  # regime the sweep was run in. The timings in that document get no rows.
+
+  # the screen: cost per event on the ten controlled E. coli targets, level 1
+  @{ id='b3-screen-base-ind'; tier='cue3'; doc='docs/batch3.md'; unit='bits'; tol=0.005
+     anchor='| v0.8.0 | 14.75 | 48.85 | 31.97 | +2.51% | +0.13% |'
+     expect=48.85
+     measure={ CuePerEvent 'base' 'ind' 1 } }
+
+  @{ id='b3-screen-base-sub'; tier='cue3'; doc='docs/batch3.md'; unit='bits'; tol=0.005
+     anchor='| v0.8.0 | 14.75 | 48.85 | 31.97 | +2.51% | +0.13% |'
+     expect=14.75
+     measure={ CuePerEvent 'base' 'sub' 1 } }
+
+  @{ id='b3-screen-cue-ind'; tier='cue3'; doc='docs/batch3.md'; unit='bits'; tol=0.005
+     anchor='| **`cue` (centre)** | **14.65** | **31.99** | **14.70** | — | — |'
+     expect=31.99
+     measure={ CuePerEvent 'cue' 'ind' 1 } }
+
+  @{ id='b3-screen-cue-sub'; tier='cue3'; doc='docs/batch3.md'; unit='bits'; tol=0.005
+     anchor='| **`cue` (centre)** | **14.65** | **31.99** | **14.70** | — | — |'
+     expect=14.65
+     measure={ CuePerEvent 'cue' 'sub' 1 } }
+
+  @{ id='b3-screen-cue-hp'; tier='cue3'; doc='docs/batch3.md'; unit='bits'; tol=0.005
+     anchor='| **`cue` (centre)** | **14.65** | **31.99** | **14.70** | — | — |'
+     expect=14.70
+     measure={ CuePerEvent 'cue' 'hp' 1 } }
+
+  @{ id='b3-screen-m8-ind'; tier='cue3'; doc='docs/batch3.md'; unit='bits'; tol=0.005
+     anchor='| `cue_M8` | 14.74 | 30.43 | 14.61 | −0.44% | −0.05% |'
+     expect=30.43
+     measure={ CuePerEvent 'cue_M8' 'ind' 1 } }
+
+  @{ id='b3-screen-m24-ind'; tier='cue3'; doc='docs/batch3.md'; unit='bits'; tol=0.005
+     anchor='| `cue_M24` | 14.70 | 35.74 | 14.88 | +0.40% | +0.03% |'
+     expect=35.74
+     measure={ CuePerEvent 'cue_M24' 'ind' 1 } }
+
+  @{ id='b3-screen-s8-ind'; tier='cue3'; doc='docs/batch3.md'; unit='bits'; tol=0.005
+     anchor='| `cue_S8` | 14.71 | 30.63 | 13.28 | **−1.99%** | −0.11% |'
+     expect=30.63
+     measure={ CuePerEvent 'cue_S8' 'ind' 1 } }
+
+  @{ id='b3-screen-s8-ecoliind-pct'; tier='cue3'; doc='docs/batch3.md'; unit='%'; tol=0.005
+     anchor='| `cue_S8` | 14.71 | 30.63 | 13.28 | **−1.99%** | −0.11% |'
+     expect=-1.99
+     measure={ CuePct (CueReal 'cue' 'ecoli_ind' 1) (CueReal 'cue_S8' 'ecoli_ind' 1) } }
+
+  @{ id='b3-screen-d6-ind'; tier='cue3'; doc='docs/batch3.md'; unit='bits'; tol=0.005
+     anchor='| `cue_D6` | 14.70 | 31.08 | 14.62 | +1.16% | +0.01% |'
+     expect=31.08
+     measure={ CuePerEvent 'cue_D6' 'ind' 1 } }
+
+  @{ id='b3-screen-l2-ind'; tier='cue3'; doc='docs/batch3.md'; unit='bits'; tol=0.005
+     anchor='| `cue_L2` | 14.79 | 29.95 | 14.23 | +0.55% | +0.03% |'
+     expect=29.95
+     measure={ CuePerEvent 'cue_L2' 'ind' 1 } }
+
+  @{ id='b3-screen-mfnoroom-ind'; tier='cue3'; doc='docs/batch3.md'; unit='bits'; tol=0.005
+     anchor='| `mf_noroom` | 14.70 | **28.31** | **10.80** | −1.04% | −0.01% |'
+     expect=28.31
+     measure={ CuePerEvent 'mf_noroom' 'ind' 1 } }
+
+  @{ id='b3-screen-mfnoroom-hp'; tier='cue3'; doc='docs/batch3.md'; unit='bits'; tol=0.005
+     anchor='| `mf_noroom` | 14.70 | **28.31** | **10.80** | −1.04% | −0.01% |'
+     expect=10.80
+     measure={ CuePerEvent 'mf_noroom' 'hp' 1 } }
+
+  # the real human pair at level 1: the centre, the sweep down CUE_MINLEN, and
+  # the four add-backs. One measurement per build, memoised.
+  @{ id='b3-chm13-base-l1'; tier='cue3'; doc='docs/batch3.md'; unit='B'; tol=0
+     anchor='| v0.8.0 level 1 | 602,170 | 813,961 |'
+     expect=602170
+     measure={ CueHuman 'base' 'chm13_chr21.fa' 'grch38_chr21.fa' 1 } }
+
+  @{ id='b3-chm13-cue-l1'; tier='cue3'; doc='docs/batch3.md'; unit='B'; tol=0
+     anchor='| **16 (centre)** | **568,133** | — | **104,784** | — |'
+     expect=568133
+     measure={ CueHuman 'cue' 'chm13_chr21.fa' 'grch38_chr21.fa' 1 } }
+
+  @{ id='b3-chm13-m8'; tier='cue3'; doc='docs/batch3.md'; unit='B'; tol=0
+     anchor='| 8 | 564,805 | −0.586% | 102,969 | −1.732% |'
+     expect=564805
+     measure={ CueHuman 'cue_M8' 'chm13_chr21.fa' 'grch38_chr21.fa' 1 } }
+
+  @{ id='b3-chm13-m4'; tier='cue3'; doc='docs/batch3.md'; unit='B'; tol=0
+     anchor='| **4** | **563,031** | **−0.898%** | 101,517 | −3.118% |'
+     expect=563031
+     measure={ CueHuman 'cue_M4' 'chm13_chr21.fa' 'grch38_chr21.fa' 1 } }
+
+  @{ id='b3-chm13-m4-pct'; tier='cue3'; doc='docs/batch3.md'; unit='%'; tol=0.0005
+     anchor='| **4** | **563,031** | **−0.898%** | 101,517 | −3.118% |'
+     expect=-0.898
+     measure={ [math]::Round(100.0 * ((CueHuman 'cue_M4' 'chm13_chr21.fa' 'grch38_chr21.fa' 1) / (CueHuman 'cue' 'chm13_chr21.fa' 'grch38_chr21.fa' 1) - 1.0), 3) } }
+
+  @{ id='b3-chm13-m2'; tier='cue3'; doc='docs/batch3.md'; unit='B'; tol=0
+     anchor='| 2 | 563,188 | −0.870% | **99,594** | **−4.953%** |'
+     expect=563188
+     measure={ CueHuman 'cue_M2' 'chm13_chr21.fa' 'grch38_chr21.fa' 1 } }
+
+  @{ id='b3-chr21ind-cue-l1'; tier='cue3'; doc='docs/batch3.md'; unit='B'; tol=0
+     anchor='| **16 (centre)** | **568,133** | — | **104,784** | — |'
+     expect=104784
+     measure={ CueChr21Ind 'cue' 1 } }
+
+  @{ id='b3-chr21ind-m4'; tier='cue3'; doc='docs/batch3.md'; unit='B'; tol=0
+     anchor='| **4** | **563,031** | **−0.898%** | 101,517 | −3.118% |'
+     expect=101517
+     measure={ CueChr21Ind 'cue_M4' 1 } }
+
+  @{ id='b3-chr21ind-m2'; tier='cue3'; doc='docs/batch3.md'; unit='B'; tol=0
+     anchor='| 2 | 563,188 | −0.870% | **99,594** | **−4.953%** |'
+     expect=99594
+     measure={ CueChr21Ind 'cue_M2' 1 } }
+
+  @{ id='b3-addback-stcm'; tier='cue3'; doc='docs/batch3.md'; unit='B'; tol=0
+     anchor='| `cue_stcm` (tolerant models) | 122.87 s | 561,172 | −1.225% | +29.0% | **no** |'
+     expect=561172
+     measure={ CueHuman 'cue_stcm' 'chm13_chr21.fa' 'grch38_chr21.fa' 1 } }
+
+  @{ id='b3-addback-ir'; tier='cue3'; doc='docs/batch3.md'; unit='B'; tol=0
+     anchor='| `cue_ir` (other-strand training) | 108.51 s | 564,985 | −0.554% | +13.9% | **no** |'
+     expect=564985
+     measure={ CueHuman 'cue_ir' 'chm13_chr21.fa' 'grch38_chr21.fa' 1 } }
+
+  @{ id='b3-addback-x4'; tier='cue3'; doc='docs/batch3.md'; unit='B'; tol=0
+     anchor='| `cue_x4` (four mixer experts) | 115.32 s | 565,162 | −0.523% | +21.1% | **no** |'
+     expect=565162
+     measure={ CueHuman 'cue_x4' 'chm13_chr21.fa' 'grch38_chr21.fa' 1 } }
+
+  @{ id='b3-addback-ord'; tier='cue3'; doc='docs/batch3.md'; unit='B'; tol=0
+     anchor='| `cue_ord` (master order set) | 110.34 s | 565,530 | −0.458% | +15.8% | **no** |'
+     expect=565530
+     measure={ CueHuman 'cue_ord' 'chm13_chr21.fa' 'grch38_chr21.fa' 1 } }
+
+  # the held-out chromosome, used once
+  @{ id='b3-chr22-base-l1'; tier='cue3'; doc='docs/batch3.md'; unit='B'; tol=0
+     anchor='| v0.8.0 level 1 | 602,170 | 813,961 |'
+     expect=813961
+     measure={ CueHuman 'base' 'chm13_chr22.fa' 'grch38_chr22.fa' 1 } }
+
+  @{ id='b3-chr22-cue-l1'; tier='cue3'; doc='docs/batch3.md'; unit='B'; tol=0
+     anchor='| `cue` (centre) | 568,133 (−5.65%) | 768,104 (−5.63%) |'
+     expect=768104
+     measure={ CueHuman 'cue' 'chm13_chr22.fa' 'grch38_chr22.fa' 1 } }
+
+  @{ id='b3-chr22-m4-pct'; tier='cue3'; doc='docs/batch3.md'; unit='%'; tol=0.0005
+     anchor='| **`cue_M4`** | **−0.898% vs centre** | **−0.839% vs centre** |'
+     expect=-0.839
+     measure={ [math]::Round(100.0 * ((CueHuman 'cue_M4' 'chm13_chr22.fa' 'grch38_chr22.fa' 1) / (CueHuman 'cue' 'chm13_chr22.fa' 'grch38_chr22.fa' 1) - 1.0), 3) } }
+
+  @{ id='b3-chr22-m8-pct'; tier='cue3'; doc='docs/batch3.md'; unit='%'; tol=0.0005
+     anchor='| `cue_M8` | −0.586% vs centre | −0.579% vs centre |'
+     expect=-0.579
+     measure={ [math]::Round(100.0 * ((CueHuman 'cue_M8' 'chm13_chr22.fa' 'grch38_chr22.fa' 1) / (CueHuman 'cue' 'chm13_chr22.fa' 'grch38_chr22.fa' 1) - 1.0), 3) } }
+
+  # plain mode: the winner where the mechanism is quiet (D1's second gate)
+  @{ id='b3-plain-m4-chr21-l3'; tier='cue3'; doc='docs/batch3.md'; unit='%'; tol=0.0005
+     anchor='| 3 | **`cue_M4`** | −0.0052% | **−0.1056%** |'
+     expect=-0.1056
+     measure={ [math]::Round(100.0 * ((CuePlain 'cue_M4' 'chr21' 3) / (CuePlain 'base' 'chr21' 3) - 1.0), 4) } }
+
+  @{ id='b3-plain-m4-ecoli-l3'; tier='cue3'; doc='docs/batch3.md'; unit='%'; tol=0.0005
+     anchor='| 3 | **`cue_M4`** | −0.0052% | **−0.1056%** |'
+     expect=-0.0052
+     measure={ [math]::Round(100.0 * ((CuePlain 'cue_M4' 'ecoli' 3) / (CuePlain 'base' 'ecoli' 3) - 1.0), 4) } }
+
+  @{ id='b3-plain-m8-chr21-l3'; tier='cue3'; doc='docs/batch3.md'; unit='%'; tol=0.0005
+     anchor='| 3 | `cue_M8` | −0.0081% | −0.0745% |'
+     expect=-0.0745
+     measure={ [math]::Round(100.0 * ((CuePlain 'cue_M8' 'chr21' 3) / (CuePlain 'base' 'chr21' 3) - 1.0), 4) } }
+
+  @{ id='b3-plain-m4-chr21-l1'; tier='cue3'; doc='docs/batch3.md'; unit='%'; tol=0.0005
+     anchor='| 1 | **`cue_M4`** | +0.0096% | **−0.1131%** |'
+     expect=-0.1131
+     measure={ [math]::Round(100.0 * ((CuePlain 'cue_M4' 'chr21' 1) / (CuePlain 'base' 'chr21' 1) - 1.0), 4) } }
+
+  @{ id='b3-plain-m4-l1-vs-l3'; tier='cue3'; doc='docs/batch3.md'; unit='%'; tol=0.0005
+     anchor='+0.460% against level 3 reference-free on chr21 (the centre was +0.532%), so'
+     expect=0.460
+     measure={ [math]::Round(100.0 * ((CuePlain 'cue_M4' 'chr21' 1) / (CuePlain 'base' 'chr21' 3) - 1.0), 3) } }
+
+  # P13: the cue's gain at level 1 reference-free, two experts against four
+  @{ id='b3-p13-chr21-2x'; tier='cue3'; doc='docs/batch3.md'; unit='%'; tol=0.00005
+     anchor='| chr21 | −0.0408% | −0.0404% |'
+     expect=-0.0408
+     measure={ [math]::Round(100.0 * ((CuePlain 'cue' 'chr21' 1) / (CuePlain 'base' 'chr21' 1) - 1.0), 4) } }
+
+  @{ id='b3-p13-chr21-4x'; tier='cue3'; doc='docs/batch3.md'; unit='%'; tol=0.00005
+     anchor='| chr21 | −0.0408% | −0.0404% |'
+     expect=-0.0404
+     measure={ [math]::Round(100.0 * ((CuePlain 'cue_x4' 'chr21' 1) / (CuePlain 'base_x4' 'chr21' 1) - 1.0), 4) } }
+
+  @{ id='b3-p13-ecoli-2x'; tier='cue3'; doc='docs/batch3.md'; unit='%'; tol=0.00005
+     anchor='| E. coli | **+0.0144%** (a loss) | **−0.0048%** (a gain) |'
+     expect=0.0144
+     measure={ [math]::Round(100.0 * ((CuePlain 'cue' 'ecoli' 1) / (CuePlain 'base' 'ecoli' 1) - 1.0), 4) } }
+
+  @{ id='b3-p13-ecoli-4x'; tier='cue3'; doc='docs/batch3.md'; unit='%'; tol=0.00005
+     anchor='| E. coli | **+0.0144%** (a loss) | **−0.0048%** (a gain) |'
+     expect=-0.0048
+     measure={ [math]::Round(100.0 * ((CuePlain 'cue_x4' 'ecoli' 1) / (CuePlain 'base_x4' 'ecoli' 1) - 1.0), 4) } }
+
+  @{ id='b3-p13-basex4-chr21-l1'; tier='cue3'; doc='docs/batch3.md'; unit='%'; tol=0.0005
+     anchor='— a real but tiny effect, for +21% time.'
+     expect=-0.025
+     measure={ [math]::Round(100.0 * ((CuePlain 'base_x4' 'chr21' 1) / (CuePlain 'base' 'chr21' 1) - 1.0), 3) } }
+
+  # P14: every build of this batch round-trips
+  @{ id='b3-roundtrip-m4'; tier='cue3'; doc='docs/batch3.md'; unit='round-trips'; tol=0
+     anchor='**held**: 203/203 on ten builds (`cue_M8`, `cue_M4`, `cue_M2`, `cue_x4`, `cue_ir`, `cue_stcm`, `cue_ord`, `base_x4`, `cue_S8`, `mf_noroom`)'
+     expect=203
+     measure={ CueRoundtrip 'cue_M4' } }
+
+  @{ id='b3-roundtrip-stcm'; tier='cue3'; doc='docs/batch3.md'; unit='round-trips'; tol=0
+     anchor='**held**: 203/203 on ten builds (`cue_M8`, `cue_M4`, `cue_M2`, `cue_x4`, `cue_ir`, `cue_stcm`, `cue_ord`, `base_x4`, `cue_S8`, `mf_noroom`)'
+     expect=203
+     measure={ CueRoundtrip 'cue_stcm' } }
+
+  @{ id='b3-roundtrip-ord'; tier='cue3'; doc='docs/batch3.md'; unit='round-trips'; tol=0
+     anchor='**held**: 203/203 on ten builds (`cue_M8`, `cue_M4`, `cue_M2`, `cue_x4`, `cue_ir`, `cue_stcm`, `cue_ord`, `base_x4`, `cue_S8`, `mf_noroom`)'
+     expect=203
+     measure={ CueRoundtrip 'cue_ord' } }
+  # the adopted value, per event, and the substitution invariant at the bottom
+  # of the axis: lowering CUE_MINLEN must not make substitutions dearer.
+  @{ id='b3-screen-m4-sub'; tier='cue3'; doc='docs/batch3.md'; unit='bits'; tol=0.005
+     anchor='| `cue_M4` | **14.58** | 30.02 | 14.46 | −0.78% | −0.06% |'
+     expect=14.58
+     measure={ CuePerEvent 'cue_M4' 'sub' 1 } }
+
+  @{ id='b3-screen-m4-ind'; tier='cue3'; doc='docs/batch3.md'; unit='bits'; tol=0.005
+     anchor='| `cue_M4` | **14.58** | 30.02 | 14.46 | −0.78% | −0.06% |'
+     expect=30.02
+     measure={ CuePerEvent 'cue_M4' 'ind' 1 } }
+
+  @{ id='b3-screen-m2-ind'; tier='cue3'; doc='docs/batch3.md'; unit='bits'; tol=0.005
+     anchor='| `cue_M2` | 14.68 | 29.87 | 14.42 | −1.89% | −0.07% |'
+     expect=29.87
+     measure={ CuePerEvent 'cue_M2' 'ind' 1 } }
+
+  # the fourth corner on the real pair, which is what completes P7
+  @{ id='b3-noroom-chm13-pct'; tier='cue3'; doc='docs/batch3.md'; unit='%'; tol=0.0005
+     anchor='`mf_noroom` −0.070%, `noroom` −0.007% |'
+     expect=-0.007
+     measure={ [math]::Round(100.0 * ((CueHuman 'noroom' 'chm13_chr21.fa' 'grch38_chr21.fa' 1) / (CueHuman 'cue' 'chm13_chr21.fa' 'grch38_chr21.fa' 1) - 1.0), 3) } }
+
+  # the negative control: E. coli against ITSELF. The cue is not silent there
+  # (that expectation was wrong) -- it is 0.7% smaller, and these rows are what
+  # will notice if that ever turns into a cost.
+  @{ id='b3-negctl-base'; tier='cue3'; doc='docs/batch3.md'; unit='B'; tol=0
+     anchor='| v0.8.0 | 1,456 |'
+     expect=1456
+     measure={ CueSize 'base' (& $F 'ecoli.fa') (& $F 'ecoli.fa') 1 } }
+
+  @{ id='b3-negctl-cue'; tier='cue3'; doc='docs/batch3.md'; unit='B'; tol=0
+     anchor='| `cue` | 1,454 |'
+     expect=1454
+     measure={ CueSize 'cue' (& $F 'ecoli.fa') (& $F 'ecoli.fa') 1 } }
+
+  @{ id='b3-negctl-m4'; tier='cue3'; doc='docs/batch3.md'; unit='B'; tol=0
+     anchor='| `cue_M4` | **1,446** |'
+     expect=1446
+     measure={ CueSize 'cue_M4' (& $F 'ecoli.fa') (& $F 'ecoli.fa') 1 } }
 )
 
 # --- runner -------------------------------------------------------------------
@@ -1777,7 +2068,7 @@ if ($SelfTest) {
     # above cannot see, because all three assume the MEASUREMENT is of what it
     # says it is. Each is broken here on purpose. Only when a cue tier is
     # actually going to run: these compile and compress, unlike the three above.
-    if ($Tier -in @('cue','slow','all')) {
+    if ($Tier -in @('cue','cue3','slow','all')) {
         Write-Host "self-test: the cue machinery" -ForegroundColor Cyan
 
         # 1. An unknown build label must stop the run, not quietly measure the
@@ -1825,14 +2116,16 @@ if ($SelfTest) {
         if (-not $sh) {
             Write-Host "  NOTE: no POSIX sh found, so CueDefs was NOT compared against scripts/cue/common.sh" -ForegroundColor Yellow
         } else {
-            foreach ($lbl in @('base','cue','noroom','mf','mf_noroom','cue2','nudge','L6D12','L8D4')) {
+            foreach ($lbl in @('base','cue','noroom','mf','mf_noroom','cue2','nudge','L6D12','L8D4',
+                               'cue_L2','cue_D6','cue_S8','cue_M8','cue_M4','cue_M2','cue_M24',
+                               'cue_x4','cue_ir','cue_stcm','cue_ord','base_x4')) {
                 $mine  = ((CueDefs $lbl) -join ' ').Trim()
                 $their = (& $sh (Join-Path $root 'scripts/cue/defines.sh') $lbl 2>&1 | Out-String).Trim()
                 if ($mine -ne $their) {
                     throw "SELF-TEST FAILED: build '$lbl' is '$mine' here and '$their' in scripts/cue/common.sh"
                 }
             }
-            Write-Host "  the build-flag table agrees with scripts/cue/common.sh (9 labels)" -ForegroundColor Gray
+            Write-Host "  the build-flag table agrees with scripts/cue/common.sh (21 labels)" -ForegroundColor Gray
         }
 
         Write-Host "self-test: unknown build, silent flag, wrong value, a fake codec and a drifting flag table all detected (5/5)`n" -ForegroundColor Green

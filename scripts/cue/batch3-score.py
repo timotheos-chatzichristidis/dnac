@@ -28,7 +28,7 @@ for lv in levels:
     for r in ('ecoli_ind', 'o157', 'chr21_ind', 'chm13_chr21', 'chm13_chr22',
               'ecoli_plain', 'chr21_plain'):
         if any(r in S[(lb, lv)] for lb in labs):
-            hdr += f"{r:>22}"
+            hdr += f"  {r:>26}"
     print(hdr)
     for lb in order:
         d = S[(lb, lv)]
@@ -42,11 +42,11 @@ for lv in levels:
             if not any(r in S[(x, lv)] for x in labs):
                 continue
             if r not in d:
-                row += f"{'':>22}"
+                row += f"  {'':>26}"
                 continue
             txt = f"{d[r]}"
             for ref, tag in (('base', 'b'), ('cue', 'c')):
                 if r in S.get((ref, lv), {}) and lb != ref:
                     txt += f" {tag}{100 * (d[r] / S[(ref, lv)][r] - 1):+.3f}%"
-            row += f"{txt:>22}"
+            row += f"  {txt:>26}"
         print(row)

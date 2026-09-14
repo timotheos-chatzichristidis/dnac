@@ -36,10 +36,17 @@ deterministic: the same reference and seed give the same bytes.
 | `score.py` | per-event cost in bits: (target − zero-event control) × 8 / 2000 |
 | `halves.sh`, `halves.py` | `-map` per-event cost in the first and second half of each target (the osmosis measure) |
 | `sweep.sh` | the nudge's labelled L × D sweep |
+| `batch3.sh <stage> <level> <label>...` | Batch 3's sweep and add-back, at a chosen level: stages `screen` (the ten targets + `ecoli_ind` + `o157`), `human` (`chr21_ind`, CHM13 chr21), `heldout` (CHM13 chr22), `plain` (no reference), to `batch3.tsv` |
+| `batch3-time.sh <level> <rounds> <label>...` | paired encode timings of CHM13 chr21, labels alternating inside each round, to `batch3-time.tsv` |
+| `batch3-score.py` | Batch 3's tables: per-event bits, and every file as a percentage against the same level's `base` and `cue` |
 | `competitors.sh` | zstd, dnac, HRCM and GeCo3 on CHM13 against GRCh38 chr21 |
 | `hrcm-windows.patch` | the changes that let HRCM run on Windows: `getopt` skips the mode word, binary file I/O, a larger command buffer, 7-Zip's `7za.exe` for the PPMd step, and its intermediate files kept instead of `rm`-ed. None of them touches its algorithm |
 
 Everything is written to `bench-external/work/cue/`, which is scratch.
+**Run one of these at a time.** They all build to `$WORK/dnac_<label>.exe`, and
+Windows will not let a link overwrite a running binary: two stages at once fail
+at the linker (seen once, 2026-09-13). Set `WORK=` to a different directory if
+two really must run together.
 
 ## Where the figures are defended
 

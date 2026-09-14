@@ -267,6 +267,17 @@ the cached cue-off state would have kept green. None of this batch's figures is
 affected (`dnac.c` did not change after those files were written), and the
 working-tree labels now rebuild their states and maps once per run.
 
+**A check on this disk cannot see what a clean checkout lacks.** The first
+commit (`5b2594e`) carried `tests/v080/make.sh` and `inputs.sha256` but not the
+seven streams: `.gitignore`'s `*.dnac` rule dropped them silently under
+`git add -A`, and all 229 local round-trips passed because the files were here.
+A fresh checkout — CI included — would have failed seven cases. It was caught by
+reading the staged file list after committing, fixed in `ea24979` (an exception
+for `tests/v080/*.dnac`), and then proved the only way it can be: a clean clone of
+`ea24979`, built there, **229/229**. The standing rule this adds: a change that
+commits a data file the tests read is checked from a clone, not from the working
+copy.
+
 **Every new detector was watched red.** The self-test gained one check: the
 release build and the cue-off build must write different archives, and the
 cue-off build must equal v0.8.0. A scratch copy of `verify-claims.ps1` in which

@@ -4,6 +4,10 @@
 `c86c22b`), with one size seen before writing, disclosed there. Build:
 `-DDNAC_CUE -DCUE_BACK=1`, other parameters as in `docs/cue.md`.
 
+**Parameter set, added 2026-09-14 (Batch 4):** measured with `CUE_MINLEN = 16`.
+`CUE_BACK` was removed from `dnac.c` in v0.9.0, having failed here, so these
+rows re-derive from `4932ffe`'s source, which `verify-claims.ps1` pins.
+
 ## Scoreline
 
 | | prediction | outcome |

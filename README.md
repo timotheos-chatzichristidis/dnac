@@ -640,7 +640,7 @@ exact/diverged/inverted repeats), across many values of `k`.
 
 ```sh
 make                              # cc -O2 -Wall -Wextra -o dnac dnac.c -lm
-make test                         # 203 SHA-256 round-trips (plain, reference, level, state, blocks)
+make test                         # 229 SHA-256 round-trips (plain, reference, level, state, blocks, the cue, v0.8.0 streams)
 sh scripts/get-data.sh --human    # fetch the exact genomes benchmarked below
 make bench                        # bits/base on whatever is in ./data
 ```
@@ -654,14 +654,14 @@ make bench                        # bits/base on whatever is in ./data
 # manual use
 ./dnac.exe gen sample.fa 2000000        # make a structured sample
 ./dnac.exe c  sample.fa  out.dnac 22    # compress (k = max model order, default 22)
-./dnac.exe c  sample.fa  out.dnac 22 1  # ...at level 1 (fast); 3 = max, the default
+./dnac.exe c  sample.fa  out.dnac 22 1  # ...at level 1 (fast); 3 = max, the default without a reference
 ./dnac.exe c  sample.fa  out.dnac 22 -j 8   # 8 independent blocks (see below)
 ./dnac.exe d  out.dnac   back.fa        # decompress (the level travels in the header)
 
 # reference-based (the same reference is required to decompress)
-./dnac.exe cr target.fa out.dnac reference.fa 22      # add a level: ... 22 1
+./dnac.exe cr target.fa out.dnac reference.fa 22      # level 1 by default here; add one: ... 22 3
 ./dnac.exe dr out.dnac  back.fa   reference.fa
-./dnac.exe prime reference.fa reference.state 22  # pay the priming pass once
+./dnac.exe prime reference.fa reference.state 22  # pay the priming pass once (level 1 by default too)
 ./dnac.exe cr target.fa out.dnac reference.state  # ...then reuse it
 ./dnac.exe mut genome.fa individual.fa 1.0 42     # simulate a resequenced genome
 
@@ -696,7 +696,10 @@ Try a **real** genome: download a `.fa` from NCBI/Ensembl and
   `-map` leaves the compressed bytes byte-identical.
   `scripts/roundtrip.sh` is the POSIX port CI runs; it covers the same ground
   plus an out-of-range level, the reference path at every level, a state/stream
-  level mismatch and the block modes, for 203.
+  level mismatch, the block modes, the cue's own cases (indel- and
+  homopolymer-dense pairs, target = reference, the default levels, the stream
+  families of streams and states) and the stored v0.8.0 streams in `tests/v080`,
+  for 229.
 - `ablate.ps1` — what each of the 15 prediction inputs is worth
   (`-Mode loo|diag|mask`). Drives `-DDNAC_ABLATE` / `-DDNAC_DIAG` in `dnac.c`:
   the first zeroes an input inside the mixer without touching table geometry, so
@@ -721,8 +724,10 @@ Try a **real** genome: download a `.fa` from NCBI/Ensembl and
   knowing where a technique *stops* working is worth as much as knowing where it
   starts.
 - `.github/workflows/ci.yml` — every push builds on gcc and clang, Linux and
-  macOS, and must pass all 203 round-trips, plus a cross-build portability check
-  that compresses with one table geometry and decodes with another.
+  macOS, and must pass all 229 round-trips on the release build, the cue
+  switched off and an experimental build, plus a cross-build portability check
+  that compresses with one table geometry and decodes with another, and a check
+  that the cue switched off writes the v0.8.0 tag's bytes.
 - `README.md` — this file.
 
 ## Where the remaining (small, hard) gains are

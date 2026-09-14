@@ -7,6 +7,13 @@ no sweep. Without the flag the build is byte-identical to v0.8.0, and the nudge
 build is byte-identical to what `docs/nudge.md` measured (both checked on
 `ind_1`). FASTA and state references give byte-identical archives.
 
+**Parameter set, added 2026-09-14 (Batch 4):** every figure here was measured
+with `CUE_MINLEN = 16`, the value registered before the cue existed. v0.9.0
+ships 4 (`docs/batch3.md`) and makes the cue a run-time feature, so this
+document is the record of that build, not of the release. Its rows re-derive
+from `4932ffe`'s source, which `verify-claims.ps1` pins; the release figures
+are in `docs/batch4.md`.
+
 ## Scoreline
 
 | | prediction | outcome |

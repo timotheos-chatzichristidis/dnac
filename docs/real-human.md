@@ -6,6 +6,12 @@ the pair. Target: T2T-CHM13 chr21 (`CP068257.2`). Reference: GRCh38 chr21. The
 cue build is `-DDNAC_CUE` with the parameters of `docs/cue.md`, unchanged. Both
 archives round-trip byte-identically.
 
+**Parameter set, added 2026-09-14 (Batch 4):** measured with `CUE_MINLEN = 16`
+at level 3. v0.9.0 ships `CUE_MINLEN = 4` and level 1 by default in reference
+mode, so this is the record of that build, not of the release; its rows
+re-derive from `4932ffe`'s source, which `verify-claims.ps1` pins. The same pair
+at the release settings is in `docs/batch4.md`.
+
 ## Scoreline
 
 | | prediction | outcome |

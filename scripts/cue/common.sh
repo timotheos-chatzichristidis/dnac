@@ -28,18 +28,37 @@ REF=${REF:-$ROOT/ecoli.fa}
 
 need() { [ -s "$1" ] || { echo "missing: $1${2:+  ($2)}" >&2; exit 1; }; }
 
-# Build one labelled experiment binary. `base` is the unflagged build, which is
-# byte-identical to v0.8.0 -- that is the whole point of keeping the cue behind
-# a flag, and every "against v0.8.0" number here is against this build.
+# Build one labelled experiment binary, FROM THE SOURCE THAT MEASURED IT. Every
+# label below is a record of an experiment run before v0.9.0 made the cue a
+# run-time feature (docs/batch4-prediction.md F6): `-DDNAC_CUE`, the nudge and
+# the alternating deck no longer exist in dnac.c, and CUE_MINLEN's default moved.
+# So these labels compile 4932ffe's dnac.c, the last source that measured
+# anything on the branch, with exactly the flags in defines_for. `base` there is
+# the unflagged build, byte-identical to v0.8.0. What links these records to the
+# shipping code is scripts/cue/batch4.sh, which checks byte identity.
+PIN=4932ffe
+# The two labels that are NOT records: v0.9.0's own builds, from the working
+# tree. `rel` is the release (the cue on, CUE_MINLEN 4, level 1 by default with
+# a reference); `v08` is the same source with the cue off and v0.8.0's default
+# level, byte-identical to the v0.8.0 tag (docs/batch4-prediction.md P2).
+TREE_LABELS="rel v08 exp"          # exp: an experimental build, for its refusals
 build() { # build <label> [defines...]
   lbl=$1; shift
   exe=$WORK/dnac_$lbl.exe
-  $CC -O3 -o "$exe" "$ROOT/dnac.c" -lm "$@" || { echo "build failed: $lbl" >&2; exit 1; }
+  case " $TREE_LABELS " in
+    *" $lbl "*) src=$ROOT/dnac.c ;;
+    *) src=$WORK/src_$PIN.c
+       [ -s "$src" ] || git -C "$ROOT" show "$PIN:dnac.c" > "$src" || { echo "git show $PIN:dnac.c failed" >&2; exit 1; } ;;
+  esac
+  $CC -O3 -o "$exe" "$src" -lm -pthread "$@" || { echo "build failed: $lbl" >&2; exit 1; }
   echo "$exe"
 }
 
 defines_for() { # the flags each label in the docs was measured with
   case $1 in
+    rel)        ;;                                   # working tree, see TREE_LABELS
+    v08)        echo "-DCUE_DEFAULT=0 -DREF_LEVEL_DEFAULT=3" ;;
+    exp)        echo "-DCUE_MINLEN=16" ;;
     base)       ;;
     cue)        echo "-DDNAC_CUE" ;;
     noroom)     echo "-DDNAC_CUE -DCUE_ROOM=0" ;;

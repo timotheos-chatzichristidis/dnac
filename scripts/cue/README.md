@@ -42,6 +42,20 @@ deterministic: the same reference and seed give the same bytes.
 | `competitors.sh` | zstd, dnac, HRCM and GeCo3 on CHM13 against GRCh38 chr21 |
 | `hrcm-windows.patch` | the changes that let HRCM run on Windows: `getopt` skips the mode word, binary file I/O, a larger command buffer, 7-Zip's `7za.exe` for the PPMd step, and its intermediate files kept instead of `rm`-ed. None of them touches its algorithm |
 
+| `batch4.sh` | Batch 4's identity checks: the pinned `4932ffe` hazard (P0), the run-time cue against the compiled one (P1), the cue switched off against the v0.8.0 tag (P2), E. coli against itself (P7). Builds from three sources, prints PASS/FAIL, exits non-zero on any failure |
+| `batch4-release.sh [section...]` | the cue documents' claims re-measured at the release settings, `rel` against `v08`, at levels 3 and 1: the ten targets and their halves, the E. coli pairs, `chr21_ind`, CHM13 chr21/chr22 with maps and the window split, and the `.seq` pair; to `rel/sizes.tsv` |
+
+**Since v0.9.0 (Batch 4) the labels are records, pinned to their source.** The
+cue became a run-time feature, `-DDNAC_CUE`, the nudge and `CUE_BACK` left
+`dnac.c`, and `CUE_MINLEN`'s default moved from 16 to 4. So `build` in
+`common.sh` compiles every label from `4932ffe`'s `dnac.c` -- the last source
+that measured anything here -- with exactly the flags in `defines_for`. Only
+`rel` (the release) and `v08` (the cue switched off, byte-identical to the
+v0.8.0 tag) compile the working tree. `batch4.sh` is what ties the two worlds
+together: the working tree with `-DCUE_MINLEN=16` writes `4932ffe -DDNAC_CUE`'s
+bytes, but the magic. Timing Batch 4 uses `batch3-time.sh` with
+`OUT=$WORK/batch4-time.tsv` and the labels `cue_M4 rel v08@3`.
+
 Everything is written to `bench-external/work/cue/`, which is scratch.
 **Run one of these at a time.** They all build to `$WORK/dnac_<label>.exe`, and
 Windows will not let a link overwrite a running binary: two stages at once fail

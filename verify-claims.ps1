@@ -32,12 +32,17 @@
 #           docs/nudge.md, docs/cue*.md, docs/remaining.md and docs/speed.md that
 #           is E. coli-scale. It is its own tier rather than part of `fast`
 #           because `fast` is a pre-commit gate and a gate nobody can afford to
-#           run stops being run. These rows COMPILE the build they defend (the
-#           cue lives behind -DDNAC_CUE), and they leave primed states and -map
+#           run stops being run. These rows COMPILE the build they defend, from
+#           4932ffe's source (see PinnedFile), and they leave primed states and -map
 #           files in bench-external/work/cue -- 7.9 GB measured, all disposable
 #           (the states are 616 MB each, one per build and level).
 #           Get the data with `sh scripts/get-data.sh --cue` and
 #           `sh scripts/cue/make-targets.sh`.
+#         b4    (needs a compiler, git, a POSIX sh and the cue data) -- docs/batch4.md:
+#           the v0.9.0 format change (the run-time cue against the compiled one,
+#           the cue switched off against the v0.8.0 tag, the stream families)
+#           and the cue documents' claims re-measured at the release settings,
+#           with the `rel` and `v08` builds of the working tree.
 #         cue3  (needs a compiler and the cue data, ~90 min) -- docs/batch3.md:
 #           the parameter sweep, the add-back and the held-out chromosome, all at
 #           LEVEL 1 in reference mode, which is where Batch 2 put the cue's
@@ -62,17 +67,29 @@
 # in benchmark.ps1.
 
 param(
-    [ValidateSet('fast','slow','extern','meta','cue','cue3','all')][string]$Tier = 'fast',
+    [ValidateSet('fast','slow','extern','meta','cue','cue3','b4','all')][string]$Tier = 'fast',
     [switch]$SelfTest,
     [switch]$AnchorsOnly,
     [string]$Only
 )
 $ErrorActionPreference = 'Stop'
 $root = $PSScriptRoot
-$dnac = Join-Path $root 'dnac.exe'
 $work = Join-Path $root 'bench-external\work'
 New-Item -ItemType Directory -Force $work | Out-Null
-if (-not (Test-Path $dnac)) { throw "dnac.exe not found - run ./build.ps1 first" }
+# The rows that defend README.md defend v0.8.0's figures, and README.md describes
+# v0.8.0 until Batch 5 rewrites it. Since v0.9.0 the unflagged build has the cue
+# on and picks level 1 in reference mode, so those rows run dnac.c built as
+# v0.8.0 instead: the cue off, level 3 by default everywhere. That build is
+# byte-identical to the v0.8.0 tag's (docs/batch4-prediction.md P2, checked by
+# scripts/cue/batch4.sh), with build.ps1's flags, so every figure it re-derives
+# is the figure the README printed. It is compiled from THIS checkout, so a
+# change to dnac.c still reaches every row.
+$dnac = Join-Path $work 'dnac_v08.exe'
+if (-not $AnchorsOnly) {
+    $cc  = if ($env:DNAC_CC) { $env:DNAC_CC } else { 'gcc' }
+    $log = & $cc -O3 -Wall -o $dnac (Join-Path $root 'dnac.c') -lm '-DCUE_DEFAULT=0' '-DREF_LEVEL_DEFAULT=3' 2>&1
+    if ($LASTEXITCODE -ne 0 -or -not (Test-Path $dnac)) { throw "$cc failed building the v0.8.0-configured dnac (set DNAC_CC):`n$log" }
+}
 
 # --- measurement helpers ------------------------------------------------------
 
@@ -228,9 +245,11 @@ function State($ref) {
 # --- the cue (v0.9.0, branch `nudge`) -----------------------------------------
 # The figures in docs/nudge.md, docs/cue*.md, docs/real-human.md,
 # docs/competitors.md, docs/remaining.md and docs/speed.md were measured with
-# builds that do not exist until someone compiles them: the cue lives behind
-# -DDNAC_CUE, and every ablation behind another flag. So these rows COMPILE the
-# build they are defending, exactly as ./ablate.ps1 does, and measure it here.
+# builds that do not exist until someone compiles them: the cue lived behind
+# -DDNAC_CUE until v0.9.0, and every ablation behind another flag. So these rows
+# COMPILE the build they are defending -- from the source that measured it,
+# 4932ffe, since that flag is gone -- exactly as ./ablate.ps1 does, and measure
+# it here.
 #
 # Three things make that affordable. A build is compiled once per run; the
 # E. coli reference is primed once per build (a state and its FASTA give
@@ -257,6 +276,9 @@ $script:CueMapMemo   = @{}
 # scripts/cue/common.sh, which is the shell-side copy of the same table.
 function CueDefs($label) {
     switch ($label) {
+        'rel'       { @() }                                   # working tree: see $TreeLabels
+        'v08'       { @('-DCUE_DEFAULT=0','-DREF_LEVEL_DEFAULT=3') }
+        'exp'       { @('-DCUE_MINLEN=16') }
         'base'      { @() }
         'cue'       { @('-DDNAC_CUE') }
         'noroom'    { @('-DDNAC_CUE','-DCUE_ROOM=0') }
@@ -288,12 +310,37 @@ function CueDefs($label) {
     }
 }
 
+# The labels above are RECORDS: experiments run before v0.9.0 made the cue a
+# run-time feature. `-DDNAC_CUE`, the nudge and the alternating deck no longer
+# exist in dnac.c, and CUE_MINLEN's default moved, so every label compiles the
+# source that measured it -- 4932ffe, the last one that measured anything on the
+# branch -- and the rows that defend them never see a later change to dnac.c
+# (docs/batch4-prediction.md F6). scripts/cue/common.sh pins the same revision.
+# The link from these records to the shipping code is a byte-identity check
+# (scripts/cue/batch4.sh), not a relabel.
+$script:PinnedRev = '4932ffe'
+# ...except these two, which are v0.9.0's own builds from the working tree: `rel`
+# the release, `v08` the cue switched off (byte-identical to the v0.8.0 tag).
+# scripts/cue/common.sh has the same list in TREE_LABELS.
+$script:TreeLabels = @('rel', 'v08', 'exp')   # exp: an experimental build, for its refusals
+function PinnedFile($path) {
+    New-Item -ItemType Directory -Force $cueWork | Out-Null
+    $dst = Join-Path $cueWork ("pin_$($script:PinnedRev)_" + ($path -replace '[\\/]', '_'))
+    if (-not (Test-Path $dst) -or (Get-Item $dst).Length -eq 0) {
+        # cmd's redirection, not PowerShell's: the pipeline would re-encode the bytes
+        cmd /c "git -C `"$root`" show $($script:PinnedRev):$path > `"$dst`""
+        if ($LASTEXITCODE -ne 0 -or (Get-Item $dst).Length -eq 0) { throw "git show $($script:PinnedRev):$path failed" }
+    }
+    $dst
+}
+
 function CueExe($label) {
     if ($script:CueExeMemo.ContainsKey($label)) { return $script:CueExeMemo[$label] }
     New-Item -ItemType Directory -Force $cueWork | Out-Null
     $cc  = if ($env:DNAC_CC) { $env:DNAC_CC } else { 'gcc' }
     $exe = Join-Path $cueWork "dnac_$label.exe"
-    $log = & $cc @('-O3','-o',$exe,(Join-Path $root 'dnac.c'),'-lm') @(CueDefs $label) 2>&1
+    $src = if ($label -in $script:TreeLabels) { Join-Path $root 'dnac.c' } else { PinnedFile 'dnac.c' }
+    $log = & $cc @('-O3','-o',$exe,$src,'-lm') @(CueDefs $label) 2>&1
     if ($LASTEXITCODE -ne 0) { throw "$cc failed for '$label' (set DNAC_CC if gcc is elsewhere):`n$log" }
     $script:CueExeMemo[$label] = $exe
     $exe
@@ -307,6 +354,9 @@ function CueState($label, $level) {
     $key = "$label|$level"
     if ($script:CueStateMemo.ContainsKey($key)) { return $script:CueStateMemo[$key] }
     $st = Join-Path $cueWork "ref_$label.l$level.state"
+    # A record's source is pinned, so its state on disk is still its own. A
+    # working-tree label's is not: dnac.c may have changed since it was primed.
+    if ($label -in $script:TreeLabels) { Remove-Item $st -Force -ErrorAction SilentlyContinue }
     if (-not (Test-Path $st)) {
         & (CueExe $label) prime (& $F 'ecoli.fa') $st 22 "$level" | Out-Null
         if ($LASTEXITCODE -ne 0 -or -not (Test-Path $st)) { throw "prime failed for '$label' at level $level" }
@@ -359,14 +409,18 @@ function CuePct($a, $b) { [math]::Round(100.0 * ($b / $a - 1.0), 2) }   # b agai
 # so the archive is byte-identical with and without it (both round-trip suites
 # assert exactly that) and the paired size rows below are the losslessness check
 # for these runs.
-function CueMap($label, $target, $ref) {
-    $key = "$label|$target"
+function CueMap($label, $target, $ref, $level) {
+    if (-not $level) { $level = 3 }
+    $key = "$label|$target|$level"
     if ($script:CueMapMemo.ContainsKey($key)) { return $script:CueMapMemo[$key] }
     New-Item -ItemType Directory -Force $cueWork | Out-Null
-    $map = Join-Path $cueWork "$target.$label.map.tsv"
+    # level 3 keeps the name every earlier run cached under
+    $sfx = if ($level -eq 3) { '' } else { ".l$level" }
+    $map = Join-Path $cueWork "$target.$label$sfx.map.tsv"
+    if ($label -in $script:TreeLabels) { Remove-Item $map -Force -ErrorAction SilentlyContinue }   # see CueState
     if (-not (Test-Path $map)) {
         $tmp = Join-Path $cueWork 'map.dnac'
-        & (CueExe $label) cr (Join-Path $cueHuman "$target.fa") $tmp (Join-Path $cueHuman "$ref.fa") 22 3 -map $map -mapw 1000 | Out-Null
+        & (CueExe $label) cr (Join-Path $cueHuman "$target.fa") $tmp (Join-Path $cueHuman "$ref.fa") 22 $level -map $map -mapw 1000 | Out-Null
         if ($LASTEXITCODE -ne 0 -or -not (Test-Path $map)) { throw "-map run failed: $target ($label)" }
         Remove-Item $tmp -Force -ErrorAction SilentlyContinue
     }
@@ -383,17 +437,22 @@ function CueMap($label, $target, $ref) {
 # v0.8.0 paid for them (shared < 0.2 bits/base, diverged 0.2-1.0, novel >= 1.0),
 # and the same windows are then summed for both builds. Classing each build on
 # its own numbers would move the goalposts with the result.
-function CueWindowSums($target, $ref, $klass, $label, $half) {
+# $level (Batch 4): the two builds' level. The CLASSES stay v0.8.0's at level 3
+# whatever it is, so a level-1 split sums the same windows as the level-3 one,
+# compared against v0.8.0 at level 1 (`v08`, which is v0.8.0's bytes, P2).
+function CueWindowSums($target, $ref, $klass, $label, $half, $level) {
     if (-not $label) { $label = 'cue' }
-    $b = CueMap 'base'  $target $ref
-    $c = CueMap $label  $target $ref
-    if ($b.Count -ne $c.Count) { throw "map lengths differ for $target ($($b.Count) vs $($c.Count))" }
+    if (-not $level) { $level = 3 }
+    $k = CueMap 'base' $target $ref 3
+    $b = if ($level -eq 3) { $k } else { CueMap 'v08' $target $ref $level }
+    $c = CueMap $label  $target $ref $level
+    if ($b.Count -ne $c.Count -or $k.Count -ne $c.Count) { throw "map lengths differ for $target ($($k.Count) / $($b.Count) / $($c.Count))" }
     $sb = 0.0; $sc = 0.0; $n = 0
     $lo = 0; $hi = $b.Count
     if ($half -eq 'first')  { $hi = [int]($b.Count / 2) }
     if ($half -eq 'second') { $lo = [int]($b.Count / 2) }
     for ($i = $lo; $i -lt $hi; $i++) {
-        $bpb = $b[$i].bpb
+        $bpb = $k[$i].bpb        # the CLASS is v0.8.0's at level 3, whatever level is summed
         $in = switch ($klass) {
             'shared'   { $bpb -lt 0.2 }
             'diverged' { $bpb -ge 0.2 -and $bpb -lt 1.0 }
@@ -405,8 +464,8 @@ function CueWindowSums($target, $ref, $klass, $label, $half) {
     @{ base = $sb; cue = $sc; windows = $n; total = $b.Count }
 }
 
-function CueWindows($target, $ref, $klass, $label, $half) {
-    $w = CueWindowSums $target $ref $klass $label $half
+function CueWindows($target, $ref, $klass, $label, $half, $level) {
+    $w = CueWindowSums $target $ref $klass $label $half $level
     [math]::Round(100.0 * ($w.cue / $w.base - 1.0), 2)
 }
 
@@ -422,6 +481,7 @@ function CueHalves($label) {
     $exe = CueExe $label; $st = CueState $label 3
     foreach ($t in @('ctl','hp_1','hp_2','hp_3','ind_1','ind_2','ind_3','sub_1','sub_2','sub_3')) {
         $map = Join-Path $cueWork "$t.$label.map.tsv"
+        if ($label -in $script:TreeLabels) { Remove-Item $map -Force -ErrorAction SilentlyContinue }   # see CueState
         if (Test-Path $map) { continue }
         $tmp = Join-Path $cueWork 'm.dnac'
         & $exe cr (Join-Path $cueTargets "$t.fa") $tmp $st 22 3 -map $map -mapw 1000 | Out-Null
@@ -442,9 +502,10 @@ function CueHalves($label) {
     $h
 }
 
-# Losslessness of an experiment build, run through the same 203-case suite CI
-# runs on the default build. Returns the number of round-trips that passed, so
-# a claim of "203/203" is a number this can be wrong about, not a promise.
+# Losslessness of an experiment build, run through the round-trip suite CI runs
+# on the default build -- 4932ffe's 203-case copy for a record's build, the
+# current one for v0.9.0's. Returns the number of round-trips that passed, so a
+# claim of "203/203" is a number this can be wrong about, not a promise.
 function Resolve-Sh {
     if ($env:DNAC_SH) { return $env:DNAC_SH }
     $cands = @('C:/Program Files/Git/bin/sh.exe', 'C:/Program Files/Git/usr/bin/sh.exe',
@@ -460,15 +521,19 @@ function Resolve-Sh {
     $null
 }
 
-function CueRoundtripExe($exe) {
+# $suite: the suite to run. A record's build runs the suite of its own revision,
+# because the current one asserts v0.9.0 behaviour (per-mode default level, the
+# stream families, stored v0.8.0 streams) that a pre-v0.9.0 build rightly fails.
+function CueRoundtripExe($exe, $suite) {
     $sh = Resolve-Sh
     if (-not $sh) { throw "no POSIX sh with /dev/urandom found - set DNAC_SH" }
-    $out = & $sh (Join-Path $root 'scripts/roundtrip.sh') $exe 2>&1 | Out-String
+    if (-not $suite) { $suite = Join-Path $root 'scripts/roundtrip.sh' }
+    $out = & $sh $suite $exe 2>&1 | Out-String
     if ($out -match '(\d+)/(\d+) adversarial round-trips lossless') { return [int]$Matches[1] }
     throw "roundtrip.sh did not report a clean count for '$exe':`n$out"
 }
 
-function CueRoundtrip($label) { CueRoundtripExe (CueExe $label) }
+function CueRoundtrip($label) { CueRoundtripExe (CueExe $label) (PinnedFile 'scripts/roundtrip.sh') }
 
 # zstd's --patch-from: the trivial diff, and the answer to "what does the most
 # ordinary tool do with the same two files?" Round-tripped like everything else.
@@ -529,6 +594,36 @@ function CuePlain($label, $seq, $level) {
 
 function CueHuman($label, $target, $ref, $level) {
     CueSize $label (Join-Path $cueHuman "$target") (Join-Path $cueHuman "$ref") $(if ($level) { $level } else { 3 })
+}
+
+# Batch 4's identity checks (scripts/cue/batch4.sh), run once per process. The
+# script builds from three sources -- the v0.8.0 tag, the pinned 4932ffe and the
+# working tree -- and prints one PASS/FAIL line per check, so each row below reads
+# one count out of it. A lossless failure anywhere stops the run instead of
+# lowering a count, because a count can go down for a reason a row would accept.
+$script:B4Memo = $null
+function B4Identity {
+    if ($script:B4Memo) { return $script:B4Memo }
+    $sh = Resolve-Sh
+    if (-not $sh) { throw "no POSIX sh with /dev/urandom found - set DNAC_SH" }
+    $env:CC = $(if ($env:DNAC_CC) { $env:DNAC_CC } else { 'gcc' }) -replace '\\', '/'
+    $out = & $sh (Join-Path $root 'scripts/cue/batch4.sh') 2>&1 | Out-String
+    $code = $LASTEXITCODE
+    if ($out -match 'FAIL lossless') { throw "NOT LOSSLESS in scripts/cue/batch4.sh - stop everything else and fix this:`n$out" }
+    $r = @{
+        code  = $code
+        p1    = ([regex]::Matches($out, '(?m)^PASS identical but the magic ')).Count
+        p2    = ([regex]::Matches($out, '(?m)^PASS identical \S+ v080 = v08')).Count
+        fails = ([regex]::Matches($out, '(?m)^FAIL ')).Count
+        p5    = ([regex]::Matches($out, '(?m)^PASS refused: (v0\.8\.0 decoder|release decoder|experimental decoder), ')).Count
+        p6    = ([regex]::Matches($out, '(?m)^PASS (P6 release \+ v0\.8\.0 state reads|refused: a v0\.8\.0 state against)')).Count
+    }
+    if ($out -match 'P0 decoder exit=(\d+) output=(\w+)') { $r.p0exit = [int]$Matches[1]; $r.p0out = $Matches[2] }
+    else { throw "batch4.sh printed no P0 line:`n$out" }
+    if ($out -match 'P7 v0\.8\.0 (\d+) B, release (\d+) B') { $r.p7old = [int]$Matches[1]; $r.p7new = [int]$Matches[2] }
+    else { throw "batch4.sh printed no P7 line:`n$out" }
+    $script:B4Memo = $r
+    $r
 }
 
 $S = { param($n) Join-Path $root "bench-external\seq\$n" }   # plain-ACGT .seq files
@@ -2012,6 +2107,193 @@ $claims = @(
      anchor='| `cue_M4` | **1,446** |'
      expect=1446
      measure={ CueSize 'cue_M4' (& $F 'ecoli.fa') (& $F 'ecoli.fa') 1 } }
+
+  # --- Batch 4: integration and format (docs/batch4.md). The identity rows read
+  # scripts/cue/batch4.sh, which builds from the v0.8.0 tag, the pinned 4932ffe
+  # and the working tree; the size rows use `rel` and `v08`, the two labels that
+  # compile the working tree.
+
+  # P0: before v0.9.0 a cue archive carried v0.8.0's magic, and the unflagged
+  # build decoded it to wrong bytes at exit 0. The row is 0 only if BOTH halves
+  # of that still reproduce on 4932ffe: exit 0, and output that is not the input.
+  @{ id='b4-p0-hazard'; tier='b4'; doc='docs/batch4.md'; unit='exit'; tol=0
+     anchor='**the decoder exits 0 and writes wrong'
+     expect=0
+     measure={ $b = B4Identity; if ($b.p0out -eq 'wrong') { $b.p0exit } else { 99 } } }
+
+  # P1: the run-time cue writes the compiled cue's bytes, but the magic, on five
+  # cases for two parameter sets.
+  @{ id='b4-p1-identity'; tier='b4'; doc='docs/batch4.md'; unit='pairs'; tol=0
+     anchor='**all ten pairs identical but the magic**'
+     expect=10
+     measure={ (B4Identity).p1 } }
+
+  # P2: the cue switched off writes the v0.8.0 tag's bytes, on seven cases.
+  @{ id='b4-p2-v080'; tier='b4'; doc='docs/batch4.md'; unit='cases'; tol=0
+     anchor='**all seven archives identical, byte for byte.**'
+     expect=7
+     measure={ (B4Identity).p2 } }
+
+  # P7: E. coli against itself, both sides round-tripped by batch4.sh.
+  @{ id='b4-p7-v080'; tier='b4'; doc='docs/batch4.md'; unit='B'; tol=0
+     anchor='**v0.8.0 1,456 B, release 1,446 B**'
+     expect=1456
+     measure={ (B4Identity).p7old } }
+
+  @{ id='b4-p7-rel'; tier='b4'; doc='docs/batch4.md'; unit='B'; tol=0
+     anchor='**v0.8.0 1,456 B, release 1,446 B**'
+     expect=1446
+     measure={ (B4Identity).p7new } }
+
+  # P5, P6: which decoder accepts which stream, and a state primed by v0.8.0
+  @{ id='b4-p5-refusals'; tier='b4'; doc='docs/batch4.md'; unit='refusals'; tol=0
+     anchor='**P5 held: all six refusals.**'
+     expect=6
+     measure={ (B4Identity).p5 } }
+
+  @{ id='b4-p6-v080-state'; tier='b4'; doc='docs/batch4.md'; unit='checks'; tol=0
+     anchor='**P6 held, both halves.** A state primed by v0.8.0 itself (`DNACST02`) decodes a'
+     expect=2
+     measure={ (B4Identity).p6 } }
+
+  # P8: the CURRENT suite, on the three families (each asserts its own rules)
+  @{ id='b4-p8-rt-rel'; tier='b4'; doc='docs/batch4.md'; unit='round-trips'; tol=0
+     anchor='**229/229 on the release build, 229/229 on the cue switched off,'
+     expect=229
+     measure={ CueRoundtripExe (CueExe 'rel') } }
+
+  @{ id='b4-p8-rt-v08'; tier='b4'; doc='docs/batch4.md'; unit='round-trips'; tol=0
+     anchor='**229/229 on the release build, 229/229 on the cue switched off,'
+     expect=229
+     measure={ CueRoundtripExe (CueExe 'v08') } }
+
+  @{ id='b4-p8-rt-exp'; tier='b4'; doc='docs/batch4.md'; unit='round-trips'; tol=0
+     anchor='229/229 on an experimental build (`-DCUE_MINLEN=16`).**'
+     expect=229
+     measure={ CueRoundtripExe (CueExe 'exp') } }
+
+  # P3: the release's size on the real pair at its default level
+  @{ id='b4-p3-chm13-l1'; tier='b4'; doc='docs/batch4.md'; unit='B'; tol=0
+     anchor='CHM13 chr21 against GRCh38 chr21 at level 1, the release build: **563,031 B**,'
+     expect=563031
+     measure={ CueHuman 'rel' 'chm13_chr21.fa' 'grch38_chr21.fa' 1 } }
+
+  # R1: per event at the release settings, level 3 (the records' level) and 1
+  @{ id='b4-r1-v08-ind-l3'; tier='b4'; doc='docs/batch4.md'; unit='bits'; tol=0.005
+     anchor='| 3 | v0.8.0 | 14.64 | **48.25** | 31.43 |'
+     expect=48.25
+     measure={ CuePerEvent 'v08' 'ind' 3 } }
+
+  @{ id='b4-r1-v08-sub-l3'; tier='b4'; doc='docs/batch4.md'; unit='bits'; tol=0.005
+     anchor='| 3 | v0.8.0 | 14.64 | **48.25** | 31.43 |'
+     expect=14.64
+     measure={ CuePerEvent 'v08' 'sub' 3 } }
+
+  @{ id='b4-r1-rel-sub-l3'; tier='b4'; doc='docs/batch4.md'; unit='bits'; tol=0.005
+     anchor='| 3 | release | 14.75 | **26.90** | **11.60** |'
+     expect=14.75
+     measure={ CuePerEvent 'rel' 'sub' 3 } }
+
+  @{ id='b4-r1-rel-ind-l3'; tier='b4'; doc='docs/batch4.md'; unit='bits'; tol=0.005
+     anchor='| 3 | release | 14.75 | **26.90** | **11.60** |'
+     expect=26.90
+     measure={ CuePerEvent 'rel' 'ind' 3 } }
+
+  @{ id='b4-r1-rel-hp-l3'; tier='b4'; doc='docs/batch4.md'; unit='bits'; tol=0.005
+     anchor='| 3 | release | 14.75 | **26.90** | **11.60** |'
+     expect=11.60
+     measure={ CuePerEvent 'rel' 'hp' 3 } }
+
+  @{ id='b4-r1-rel-ind-l1'; tier='b4'; doc='docs/batch4.md'; unit='bits'; tol=0.005
+     anchor='| 1 | release | 14.58 | 30.02 | 14.46 |'
+     expect=30.02
+     measure={ CuePerEvent 'rel' 'ind' 1 } }
+
+  @{ id='b4-r1-osmosis-rel'; tier='b4'; doc='docs/batch4.md'; unit='ratio'; tol=0.0005
+     anchor='43%** (ratio 0.571), against 9% without the cue (ratio 0.913)'
+     expect=0.571
+     measure={ (CueHalves 'rel').hp.ratio } }
+
+  @{ id='b4-r1-osmosis-v08'; tier='b4'; doc='docs/batch4.md'; unit='ratio'; tol=0.0005
+     anchor='against 9% without the cue (ratio 0.913)'
+     expect=0.913
+     measure={ (CueHalves 'v08').hp.ratio } }
+
+  # R2, R3, and the level-1 default against v0.8.0's level 3
+  @{ id='b4-r2-chr21ind-l3'; tier='b4'; doc='docs/batch4.md'; unit='%'; tol=0.005
+     anchor='| `chr21_ind` | 3 | 113,925 | 100,806 | **−11.52%** | −11.52% |'
+     expect=-11.52
+     measure={ CuePct (CueChr21Ind 'v08' 3) (CueChr21Ind 'rel' 3) } }
+
+  @{ id='b4-r3-chm13-l3'; tier='b4'; doc='docs/batch4.md'; unit='%'; tol=0.005
+     anchor='| CHM13 chr21 | 3 | 586,615 | 547,019 | **−6.75%** | −6.75% |'
+     expect=-6.75
+     measure={ CuePct (CueHuman 'v08' 'chm13_chr21.fa' 'grch38_chr21.fa' 3) (CueHuman 'rel' 'chm13_chr21.fa' 'grch38_chr21.fa' 3) } }
+
+  @{ id='b4-r7-chm13-l1-vs-l3'; tier='b4'; doc='docs/batch4.md'; unit='%'; tol=0.005
+     anchor='| CHM13 chr21 | 1 | 602,170 | 563,031 | −6.50% | **−4.02%** |'
+     expect=-4.02
+     measure={ CuePct (CueHuman 'v08' 'chm13_chr21.fa' 'grch38_chr21.fa' 3) (CueHuman 'rel' 'chm13_chr21.fa' 'grch38_chr21.fa' 1) } }
+
+  # the loss: the level-1 default on the near-identical bacterial pair
+  @{ id='b4-w3110-default-loss'; tier='b4'; doc='docs/batch4.md'; unit='%'; tol=0.005
+     anchor='| W3110 | 1 | 2,130 | 2,121 | −0.42% | **+9.84%** |'
+     expect=9.84
+     measure={ CuePct (CueReal 'v08' 'w3110' 3) (CueReal 'rel' 'w3110' 1) } }
+
+  # R4, R5: the window split at the release settings (classes fixed by v0.8.0
+  # at level 3), and the chr22 file
+  @{ id='b4-r4-chr21-shared-l3'; tier='b4'; doc='docs/batch4.md'; unit='%'; tol=0.005
+     anchor='| chr21 | 3 | **−19.36%** | −3.55% | **−0.26%** | −6.85% | −6.75% |'
+     expect=-19.36
+     measure={ CueWindows 'chm13_chr21' 'grch38_chr21' 'shared' 'rel' $null 3 } }
+
+  @{ id='b4-r4-chr21-novel-l3'; tier='b4'; doc='docs/batch4.md'; unit='%'; tol=0.005
+     anchor='| chr21 | 3 | **−19.36%** | −3.55% | **−0.26%** | −6.85% | −6.75% |'
+     expect=-0.26
+     measure={ CueWindows 'chm13_chr21' 'grch38_chr21' 'novel' 'rel' $null 3 } }
+
+  @{ id='b4-r4-chr21-shared-l1'; tier='b4'; doc='docs/batch4.md'; unit='%'; tol=0.005
+     anchor='| chr21 | 1 | −18.46% | −3.60% | −0.34% | −6.60% | −6.50% |'
+     expect=-18.46
+     measure={ CueWindows 'chm13_chr21' 'grch38_chr21' 'shared' 'rel' $null 1 } }
+
+  @{ id='b4-r5-chr22-shared-l3'; tier='b4'; doc='docs/batch4.md'; unit='%'; tol=0.005
+     anchor='| chr22 | 3 | **−16.90%** | −4.51% | **−0.23%** | −6.64% | **−6.57%** |'
+     expect=-16.90
+     measure={ CueWindows 'chm13_chr22' 'grch38_chr22' 'shared' 'rel' $null 3 } }
+
+  @{ id='b4-r5-chr22-novel-l3'; tier='b4'; doc='docs/batch4.md'; unit='%'; tol=0.005
+     anchor='| chr22 | 3 | **−16.90%** | −4.51% | **−0.23%** | −6.64% | **−6.57%** |'
+     expect=-0.23
+     measure={ CueWindows 'chm13_chr22' 'grch38_chr22' 'novel' 'rel' $null 3 } }
+
+  @{ id='b4-r5-chr22-file-l3'; tier='b4'; doc='docs/batch4.md'; unit='%'; tol=0.005
+     anchor='| chr22 | 3 | **−16.90%** | −4.51% | **−0.23%** | −6.64% | **−6.57%** |'
+     expect=-6.57
+     measure={ CuePct (CueHuman 'v08' 'chm13_chr22.fa' 'grch38_chr22.fa' 3) (CueHuman 'rel' 'chm13_chr22.fa' 'grch38_chr22.fa' 3) } }
+
+  # R6: the release against the competitor table's plain-ACGT pair, both levels
+  # (the FASTA sizes are b4-p3 and b4-r3's; the competitors' own bytes are extern rows)
+  @{ id='b4-r6-seq-l3'; tier='b4'; doc='docs/batch4.md'; unit='B'; tol=0
+     anchor='| **541,353 B, 1.621x** | **557,497 B, 1.574x** |'
+     expect=541353
+     measure={ CueHuman 'rel' 'chm13_chr21.seq' 'grch38_chr21.seq' 3 } }
+
+  @{ id='b4-r6-seq-l1'; tier='b4'; doc='docs/batch4.md'; unit='B'; tol=0
+     anchor='| **541,353 B, 1.621x** | **557,497 B, 1.574x** |'
+     expect=557497
+     measure={ CueHuman 'rel' 'chm13_chr21.seq' 'grch38_chr21.seq' 1 } }
+
+  @{ id='b4-r6-fa-l3'; tier='b4'; doc='docs/batch4.md'; unit='B'; tol=0
+     anchor='| **547,019 B, 2.629x** | **563,031 B, 2.554x** |'
+     expect=547019
+     measure={ CueHuman 'rel' 'chm13_chr21.fa' 'grch38_chr21.fa' 3 } }
+
+  @{ id='b4-o157-default'; tier='b4'; doc='docs/batch4.md'; unit='%'; tol=0.005
+     anchor='| O157 | 1 | 363,532 | 362,862 | −0.18% | **+0.05%** |'
+     expect=0.05
+     measure={ CuePct (CueReal 'v08' 'o157' 3) (CueReal 'rel' 'o157' 1) } }
 )
 
 # --- runner -------------------------------------------------------------------
@@ -2068,7 +2350,7 @@ if ($SelfTest) {
     # above cannot see, because all three assume the MEASUREMENT is of what it
     # says it is. Each is broken here on purpose. Only when a cue tier is
     # actually going to run: these compile and compress, unlike the three above.
-    if ($Tier -in @('cue','cue3','slow','all')) {
+    if ($Tier -in @('cue','cue3','b4','slow','all')) {
         Write-Host "self-test: the cue machinery" -ForegroundColor Cyan
 
         # 1. An unknown build label must stop the run, not quietly measure the
@@ -2084,12 +2366,26 @@ if ($SelfTest) {
         #    and nothing else here would notice: the anchors still match, the
         #    recipes still run, and the numbers are all "unchanged", which is
         #    exactly what a failed experiment also looks like.
+        #    Since v0.9.0 this is also what guards the PIN: the working tree has
+        #    no -DDNAC_CUE, so if the records' labels ever compiled it instead of
+        #    4932ffe, `base` and `cue` would both be the release build and this
+        #    would go red. The same question for v0.9.0's own two labels: the
+        #    run-time switch must actually switch.
         $ctlBase = CueTarget 'base' 'ctl'
         $ctlCue  = CueTarget 'cue'  'ctl'
         if ($ctlBase -eq $ctlCue) {
-            throw "SELF-TEST FAILED: -DDNAC_CUE produced the same archive as the unflagged build ($ctlBase B). The flag is not reaching the compiler, so every cue figure below is a build compared with itself."
+            throw "SELF-TEST FAILED: -DDNAC_CUE produced the same archive as the unflagged build ($ctlBase B). Either the flag is not reaching the compiler or the records are no longer compiled from $($script:PinnedRev), so every cue figure below is a build compared with itself."
         }
         Write-Host "  the cue flag changes the output ($ctlBase -> $ctlCue B on the control)" -ForegroundColor Gray
+        $ctlV08 = CueTarget 'v08' 'ctl'
+        $ctlRel = CueTarget 'rel' 'ctl'
+        if ($ctlV08 -eq $ctlRel) {
+            throw "SELF-TEST FAILED: the release build and the cue-off build wrote the same archive ($ctlRel B): the run-time switch is not switching."
+        }
+        if ($ctlV08 -ne $ctlBase) {
+            throw "SELF-TEST FAILED: the cue-off build of the working tree ($ctlV08 B) is not v0.8.0 ($ctlBase B, from $($script:PinnedRev))."
+        }
+        Write-Host "  the run-time switch changes the output ($ctlV08 -> $ctlRel B), and off it is v0.8.0" -ForegroundColor Gray
 
         # 3. A wrong value on a REAL cue measurement (free: both sizes are memoised).
         $r5 = Run-Claim @{ id='selftest-cue-value'; tier='cue'; doc='README.md'; unit='B'; tol=0
@@ -2116,7 +2412,7 @@ if ($SelfTest) {
         if (-not $sh) {
             Write-Host "  NOTE: no POSIX sh found, so CueDefs was NOT compared against scripts/cue/common.sh" -ForegroundColor Yellow
         } else {
-            foreach ($lbl in @('base','cue','noroom','mf','mf_noroom','cue2','nudge','L6D12','L8D4',
+            foreach ($lbl in @('rel','v08','exp','base','cue','noroom','mf','mf_noroom','cue2','nudge','L6D12','L8D4',
                                'cue_L2','cue_D6','cue_S8','cue_M8','cue_M4','cue_M2','cue_M24',
                                'cue_x4','cue_ir','cue_stcm','cue_ord','base_x4')) {
                 $mine  = ((CueDefs $lbl) -join ' ').Trim()
@@ -2125,7 +2421,7 @@ if ($SelfTest) {
                     throw "SELF-TEST FAILED: build '$lbl' is '$mine' here and '$their' in scripts/cue/common.sh"
                 }
             }
-            Write-Host "  the build-flag table agrees with scripts/cue/common.sh (21 labels)" -ForegroundColor Gray
+            Write-Host "  the build-flag table agrees with scripts/cue/common.sh (24 labels)" -ForegroundColor Gray
         }
 
         Write-Host "self-test: unknown build, silent flag, wrong value, a fake codec and a drifting flag table all detected (5/5)`n" -ForegroundColor Green

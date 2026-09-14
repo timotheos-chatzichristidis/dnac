@@ -381,7 +381,22 @@ static TLS uint16_t *g_tab[MAXIN];              /* order-model probability table
 #define LEVEL_MIN     1
 #define LEVEL_MAX     4
 #define LEVEL_DEFAULT 3
+/* With a reference the default is level 1: there the cue carries it, and level
+   1 + cue is 2.12x faster than level 3 and smaller than v0.8.0's level 3
+   (docs/speed.md, docs/batch3.md). Without one it is not -- level 1 + cue costs
+   +0.46% on chr21 there -- so plain mode keeps 3 (docs/reference-free.md). The
+   level travels in the header, so this is a default, not a format change. */
+#ifndef REF_LEVEL_DEFAULT
+#define REF_LEVEL_DEFAULT 1
+#endif
 static int g_level = LEVEL_DEFAULT;
+/* Is the cue on? Shared configuration like g_level: set before any table is
+   built -- from CUE_DEFAULT when encoding, from the magic when decoding, from
+   the state file when one is given -- and only read while blocks are coded. */
+#ifndef CUE_DEFAULT
+#define CUE_DEFAULT 1
+#endif
+static int g_cue = CUE_DEFAULT;
 static TLS int g_nmix  = NMIX;     /* experts actually used this run (<= NMIX) */
 #ifndef MIX_LR2
 #define MIX_LR2 0.0005                           /* second-layer learning rate        */
@@ -418,18 +433,13 @@ static TLS double    g_apm2[APM_MAXCTX][APM_BINS]; /* SSE stage 2 (order-2 conte
 #define MWAY_EXTRA 0            /* extra bucket-bits (memory) when MWAYS > 1       */
 #endif
 #define MLENCAP   63            /* cap on match length used as confidence bucket  */
-#ifdef DNAC_NUDGE                  /* see match_after() and docs/nudge-prediction.md */
-#ifndef NUDGE_L
-#define NUDGE_L      5          /* bases that must agree at the shifted phase     */
-#endif
-#ifndef NUDGE_D
-#define NUDGE_D      12         /* largest shift tried, either way                */
-#endif
-#ifndef NUDGE_MINLEN
-#define NUDGE_MINLEN 16         /* only nudge a match that was established        */
-#endif
-#endif
-#ifdef DNAC_CUE                    /* see match_after() and docs/cue-prediction.md   */
+/* The cue's parameters (see match_after() and docs/cue-prediction.md). The cue
+   is compiled into every build and switched at run time (g_cue). These values
+   are FORMAT, like the model set a level names: a build that overrides any of
+   them is an experimental build and marks its files as such (DNAC_EXPERIMENTAL
+   below). The nudge (docs/nudge.md) and the alternating deck (docs/cue-back.md)
+   were removed in v0.9.0; they are reproduced from the source that measured
+   them, 4932ffe, not from this one. */
 #ifndef CUE_L
 #define CUE_L        3          /* bases that must agree to load the cue          */
 #endif
@@ -441,14 +451,23 @@ static TLS double    g_apm2[APM_MAXCTX][APM_BINS]; /* SSE stage 2 (order-2 conte
 #endif
 /* Guarded like the rest: an unguarded #define here makes -DCUE_MINLEN=8 a
    redefinition warning whose value the compiler then IGNORES, so a sweep point
-   would have silently measured 16 again (docs/batch3-prediction.md). */
+   would have silently measured 16 again (docs/batch3-prediction.md). 16 until
+   v0.9.0; 4 since, adopted in docs/batch3.md. */
 #ifndef CUE_MINLEN
-#define CUE_MINLEN   16         /* only a miss after an established match loads it */
+#define CUE_MINLEN   4          /* only a miss after an established match loads it */
 #endif
-#define NCUE 1
-#else
-#define NCUE 0
+/* CUE_ROOM=0 is "taking the headphones off": the cue is heard on its own, not
+   through what the room ear hears. Timotheos's claim is that this spoils the
+   osmosis. docs/cue-room-prediction.md. */
+#ifndef CUE_ROOM
+#define CUE_ROOM 1
 #endif
+/* CUE_MIXFREE=1: the mixer also stops hearing the cue through the match state
+   (see mix_predict). With CUE_ROOM it makes the 2x2 of docs/cue-mix-prediction.md */
+#ifndef CUE_MIXFREE
+#define CUE_MIXFREE 0
+#endif
+#define NCUE 1                  /* the most cue inputs a build can have          */
 #define MISS_MAX  8             /* abandon a match after this many consecutive misses */
 #define MATCH_EMPTY 0xFFFFFFFFu
 
@@ -481,9 +500,7 @@ typedef struct {
     uint32_t *hash;                         /* context -> last end position        */
     uint32_t  mp, mlen;                     /* follow position + confidence        */
     int       active, miss;
-#if defined(DNAC_NUDGE) || defined(DNAC_CUE)
     uint32_t  mlen_pre;                     /* confidence when this miss run began */
-#endif
     /* adaptive probs, indexed by (node, just-missed flag, conf bucket, pred bit)  */
     uint16_t  pr[NNODES * 2 * (MLENCAP + 1) * 2];
 } MatchModel;
@@ -500,10 +517,10 @@ static TLS int       g_ractive = 0;
 static TLS int       g_rmiss   = 0;
 static TLS uint16_t  g_rc_pr[NNODES * 2 * (MLENCAP + 1) * 2];
 
-/* inputs after the order models: forward matches, the RC match, and the cue */
+/* inputs after the order models: forward matches, the RC match, and the cue --
+   at most; with the cue off the last one does not exist (g_nin says how many) */
 #define NEXTRA (NMATCH + 1 + NCUE)
 
-#ifdef DNAC_CUE
 /* THE CUE -- Timotheos's way of mixing: one ear PERMANENTLY on the incoming track,
    the other PERMANENTLY on the room, never taking the headphones off. The room
    ear is the master match model, unchanged. The headphone ear is this second
@@ -516,20 +533,11 @@ static TLS uint32_t  g_cmp     = 0;
 static TLS uint32_t  g_clen    = 0;
 static TLS int       g_cactive = 0;
 static TLS int       g_cmiss   = 0;
-/* CUE_BACK=1 adds the second half of the method: the cue ALTERNATES decks. After
-   B is mixed in, the headphones go to A while it fades out (role 1), and if B is
-   the one going wrong, A comes back by the same rule. The ear knows which deck it
-   is hearing, so role is part of the table index. CUE_BACK=0 is docs/cue.md. */
-#ifndef CUE_BACK
-#define CUE_BACK 0
-#endif
-static TLS int       g_crole   = 0;         /* 0 = incoming deck, 1 = outgoing deck */
-static TLS uint16_t  g_c_pr[NNODES * 2 * (CUE_BACK ? 2 : 1) * (MLENCAP + 1) * 2];
+static TLS uint16_t  g_c_pr[NNODES * 2 * (MLENCAP + 1) * 2];
 static void cue_reset(void) {
-    g_cmp = 0; g_clen = 0; g_cactive = 0; g_cmiss = 0; g_crole = 0;
+    g_cmp = 0; g_clen = 0; g_cactive = 0; g_cmiss = 0;
     for (size_t j = 0; j < sizeof(g_c_pr) / sizeof(g_c_pr[0]); j++) g_c_pr[j] = CTR_INIT;
 }
-#endif
 
 static double stretchd(double p) { return log(p / (1.0 - p)); }
 static double squashd(double x)  { return 1.0 / (1.0 + exp(-x)); }
@@ -660,21 +668,9 @@ static uint16_t *rc_slot(int node, int b1) {
     return &g_rc_pr[(((node * 2 + mflag) * (MLENCAP + 1)) + bucket) * 2 + pbit];
 }
 
-#ifdef DNAC_CUE
 /* The cue's slot. Same shape as a match model's, but the flag is the ROOM's
    state, not the cue's own: the cue is always heard in the context of whether
-   the master is missing right now. */
-/* CUE_ROOM=0 is "taking the headphones off": the cue is heard on its own, not
-   through what the room ear hears. Timotheos's claim is that this spoils the
-   osmosis. docs/cue-room-prediction.md. */
-#ifndef CUE_ROOM
-#define CUE_ROOM 1
-#endif
-/* CUE_MIXFREE=1: the mixer also stops hearing the cue through the match state
-   (see mix_predict). With CUE_ROOM it makes the 2x2 of docs/cue-mix-prediction.md */
-#ifndef CUE_MIXFREE
-#define CUE_MIXFREE 0
-#endif
+   the master is missing right now (CUE_ROOM, defined with the parameters). */
 static uint16_t *cue_slot(int node, int b1) {
     int bucket = 0, pbit = 0;
     int room = (CUE_ROOM && g_mm[0].miss > 0) ? 1 : 0;
@@ -688,12 +684,8 @@ static uint16_t *cue_slot(int node, int b1) {
             bucket = (g_clen < MLENCAP) ? (int)g_clen : MLENCAP;
         }
     }
-#if CUE_BACK
-    room = room * 2 + g_crole;              /* which deck the headphone ear is on */
-#endif
-    return &g_c_pr[(((node * (CUE_BACK ? 4 : 2) + room) * (MLENCAP + 1)) + bucket) * 2 + pbit];
+    return &g_c_pr[(((node * 2 + room) * (MLENCAP + 1)) + bucket) * 2 + pbit];
 }
-#endif
 
 /* How many bases agree, walking backwards from two end positions. Used to pick
    between the candidates in an anchor bucket: a hash hit only proves the last
@@ -765,8 +757,9 @@ static void match_after(int s, uint64_t newhist) {
     g_seq[np] = (uint8_t)s;
     g_npos = np + 1;
 
-#ifdef DNAC_CUE
-    /* the headphone ear follows its own phase, exactly as a match model does */
+    /* the headphone ear follows its own phase, exactly as a match model does.
+       With the cue off g_cactive is never set, so this and the mix-in below
+       touch nothing -- only the load needs to ask g_cue. */
     if (g_cactive && g_cmp < np) {
         if (g_seq[g_cmp] == (uint8_t)s) { if (g_clen < MLENCAP) g_clen++; g_cmiss = 0; }
         else { g_clen >>= 1; if (++g_cmiss > MISS_MAX) g_cactive = 0; }
@@ -775,7 +768,6 @@ static void match_after(int s, uint64_t newhist) {
     } else {
         g_cactive = 0;
     }
-#endif
 
     uint32_t hidx[NMATCH];
     for (int mi = 0; mi < NMATCH; mi++) {
@@ -786,55 +778,24 @@ static void match_after(int s, uint64_t newhist) {
                 m->miss = 0;
                 m->mp++;
             } else {                                /* miss: tolerate, drop confidence */
-#if defined(DNAC_NUDGE) || defined(DNAC_CUE)
                 if (m->miss == 0) m->mlen_pre = m->mlen;
-#endif
                 m->mlen >>= 1;
                 m->miss++;
                 m->mp++;
-#ifdef DNAC_CUE
                 /* the room ear just lost the beat: put a candidate shifted phase in
                    the headphones (if they are free or the one there is failing). It
                    only SPEAKS through the mixer; it takes nothing over. */
-                if (mi == 0 && m->mlen_pre >= CUE_MINLEN && (!g_cactive || g_cmiss > 0)) {
+                if (g_cue && mi == 0 && m->mlen_pre >= CUE_MINLEN && (!g_cactive || g_cmiss > 0)) {
                     for (int a = 1, done = 0; a <= CUE_D && !done; a++)
                         for (int sg = -1; sg <= 1 && !done; sg += 2) {
                             int64_t q = (int64_t)m->mp + sg * a;
                             if (q < CUE_L || q > (int64_t)np) continue;
                             if (back_agree((uint32_t)(q - 1), np, CUE_L) == CUE_L) {
                                 g_cmp = (uint32_t)q; g_clen = CUE_L;
-                                g_cactive = 1; g_cmiss = 0; g_crole = 0; done = 1;
+                                g_cactive = 1; g_cmiss = 0; done = 1;
                             }
                         }
                 }
-#endif
-#ifdef DNAC_NUDGE
-                /* THE NUDGE (a DJ's move when the second deck slips a beat): the
-                   step above assumed a substitution, i.e. the same phase. After an
-                   insertion or deletion the phase is wrong and every later base
-                   misses until the hash re-anchors ~MMIN clean bases on. Instead,
-                   push the pointer a few bases forward or back and keep the first
-                   shift under which the last NUDGE_L coded bases agree with the
-                   earlier copy. Only for a match that was established, and only
-                   from bases both sides already have, so the decoder follows. */
-                if (m->mlen_pre >= NUDGE_MINLEN) {
-                    for (int a = 1; a <= NUDGE_D; a++) {
-                        int done = 0;
-                        for (int sg = -1; sg <= 1; sg += 2) {
-                            int64_t q = (int64_t)m->mp + sg * a;   /* next base to predict */
-                            if (q < NUDGE_L || q > (int64_t)np) continue;
-                            if (back_agree((uint32_t)(q - 1), np, NUDGE_L) == NUDGE_L) {
-                                m->mp = (uint32_t)q;
-                                m->mlen = m->mlen_pre >> 1;
-                                m->miss = 0;
-                                done = 1;
-                                break;
-                            }
-                        }
-                        if (done) break;
-                    }
-                }
-#endif
                 if (m->miss > MISS_MAX) m->active = 0;
             }
             if (m->mp >= g_npos) m->active = 0;
@@ -860,14 +821,10 @@ static void match_after(int s, uint64_t newhist) {
         }
     }
 
-#ifdef DNAC_CUE
     /* MIX IT IN: the cue has kept agreeing long enough, so every forward master
        that is still missing, and is less sure than the cue, takes its phase. */
     if (g_cactive && g_cmiss == 0 && g_clen >= CUE_SWITCH) {
         int mixed = 0;
-        /* deck A: the phase master 0 was on, if it still had one */
-        uint32_t a_mp = g_mm[0].mp, a_len = g_mm[0].mlen;
-        int a_live = g_mm[0].active && g_mm[0].miss > 0 && g_mm[0].mlen < g_clen;
         for (int mi = 0; mi < NMATCH; mi++) {
             MatchModel *m = &g_mm[mi];
             if (m->miss > 0 && m->mlen < g_clen) {
@@ -876,17 +833,7 @@ static void match_after(int s, uint64_t newhist) {
             }
         }
         if (mixed) g_cactive = 0;
-#if CUE_BACK
-        /* B is on the speakers now, so the outer ear has it; the headphones go
-           to A while it fades, in case it is B that turns out wrong */
-        if (mixed && a_live && a_mp < g_npos) {
-            g_cmp = a_mp; g_clen = a_len; g_cmiss = 0; g_cactive = 1; g_crole = 1;
-        }
-#else
-        (void)a_mp; (void)a_len; (void)a_live;
-#endif
     }
-#endif
 
     /* reverse-complement follow: predict complement(seq[rmp]), walk backward */
     if (g_ractive && g_rmp < np) {
@@ -957,9 +904,11 @@ static void geometry_for(size_t sizing_n, int *hb, int *mhb) {
    1 back ONE thing level 3 has, so the question "does this part still earn
    its time on top of level 1 + cue" can be asked one part at a time. All
    four default to level 1 as it ships, so an unflagged build is unchanged --
-   checked byte for byte. They are DIAGNOSTIC, not a format: the model set a
-   level names is format (see the level-4 note above), so anything adopted
-   from them becomes a new level number, never a redefinition of level 1. */
+   checked byte for byte. They were first called "diagnostic, not a format",
+   and that was wrong: they change the model set level 1 names, which IS format
+   (see the level-4 note above). A build that sets one is therefore an
+   experimental build (DNAC_EXPERIMENTAL), and anything ever adopted from them
+   becomes a new level number, never a redefinition of level 1. */
 #ifndef L1_NMIX
 #define L1_NMIX 2               /* experts at level 1 (level 3 has NMIX = 4)      */
 #endif
@@ -972,6 +921,40 @@ static void geometry_for(size_t sizing_n, int *hb, int *mhb) {
 #ifndef L1_ORDERS
 #define L1_ORDERS 0             /* 1 = the master order set at level 1            */
 #endif
+
+/* A build that moves a cue parameter or a level-1 knob codes with models no
+   release build has. Its files must say so, or a release decoder would rebuild
+   the wrong models and write wrong bytes at exit 0 -- v0.3.0's geometry bug in
+   a new place: a compile-time value that selects behaviour and does not travel
+   with the file. Two experimental builds with DIFFERENT overrides still cannot
+   tell each other apart; experiments are compared by the scripts that built
+   them (scripts/cue/), never by a decoder. */
+#define DNAC_EXPERIMENTAL (CUE_L != 3 || CUE_D != 12 || CUE_SWITCH != 12 || CUE_MINLEN != 4 \
+                           || CUE_ROOM != 1 || CUE_MIXFREE != 0                             \
+                           || L1_NMIX != 2 || L1_IR || L1_STCM || L1_ORDERS)
+
+/* The fourth byte of a stream's magic says which family wrote it. The header
+   after it is the same in every family, so no size moves with the letter.
+   v0.8.0 knew only row 0 and says "not a dnac file" to the others. */
+static const char STREAM_LETTER[4][3] = {       /* plain, reference, blocks (-j) */
+    { 'C', 'U', 'P' },                          /* no cue: v0.8.0's streams      */
+    { 'E', 'V', 'Q' },                          /* the cue (v0.9.0)              */
+    { 'c', 'u', 'p' },                          /* experimental build, no cue    */
+    { 'e', 'v', 'q' },                          /* experimental build, the cue   */
+};
+static int stream_letter(int ref, int blocked) {
+    return STREAM_LETTER[(DNAC_EXPERIMENTAL ? 2 : 0) + (g_cue ? 1 : 0)][ref ? 1 : (blocked ? 2 : 0)];
+}
+/* 0 and the four properties for a letter this build knows, -1 otherwise */
+static int stream_family(int m3, int *exper, int *cue, int *ref, int *blocked) {
+    for (int f = 0; f < 4; f++)
+        for (int j = 0; j < 3; j++)
+            if (STREAM_LETTER[f][j] == m3) {
+                *exper = f >= 2; *cue = f & 1; *ref = (j == 1); *blocked = (j == 2);
+                return 0;
+            }
+    return -1;
+}
 static int mix_setup(int maxorder, size_t sizing_n, size_t seq_alloc, int hb, int mhb) {
 
     stretch_tab_init();
@@ -1037,7 +1020,7 @@ static int mix_setup(int maxorder, size_t sizing_n, size_t seq_alloc, int hb, in
         memset(g_tab[i], 0, g_size[i] * sizeof(uint16_t));
         g_nmodels++; g_nstcm++;
     }
-    g_nin = g_nmodels + NEXTRA;      /* + forward matches + reverse-complement match (+ cue) */
+    g_nin = g_nmodels + NMATCH + 1 + (g_cue ? NCUE : 0);  /* + forward matches + RC match (+ cue) */
     if (g_nin > MAXIN) { fprintf(stderr, "too many mixer inputs\n"); return -1; }
     /* every expert slot is initialised, including ones this level will not use,
        so a saved state is byte-deterministic for a given level */
@@ -1087,9 +1070,7 @@ static int mix_setup(int maxorder, size_t sizing_n, size_t seq_alloc, int hb, in
     }
     g_rmp = 0; g_rlen = 0; g_ractive = 0; g_rmiss = 0;
     for (size_t j = 0; j < sizeof(g_rc_pr) / sizeof(g_rc_pr[0]); j++) g_rc_pr[j] = CTR_INIT;
-#ifdef DNAC_CUE
     cue_reset();
-#endif
     g_seq =(uint8_t *)malloc(seq_alloc ? seq_alloc : 1);
     if (!g_seq) { fprintf(stderr, "out of memory for match model\n"); return -1; }
     return 0;
@@ -1153,9 +1134,7 @@ static void stcm_after(int s, uint64_t truehist) {
 static void extra_slots(int node, int b1, uint16_t **ex) {
     for (int mi = 0; mi < NMATCH; mi++) ex[mi] = match_slot_of(&g_mm[mi], node, b1);
     ex[NMATCH] = rc_slot(node, b1);
-#ifdef DNAC_CUE
-    ex[NMATCH + 1] = cue_slot(node, b1);
-#endif
+    if (g_cue) ex[NMATCH + 1] = cue_slot(node, b1);
 }
 
 /* TWO-LAYER MIXING. One mixer has to pick a single context to specialise on.
@@ -1218,7 +1197,7 @@ static uint32_t mix_predict(int node, const int *mc, const uint64_t *ctxv, uint1
         slot[i] = sp;
         st[i] = CTR_STRETCH(*sp);
     });
-    for (int e = 0; e < NEXTRA; e++) {              /* forward matches, RC match, cue */
+    for (int e = 0; e < g_nin - g_nmodels; e++) {   /* forward matches, RC match, cue */
         int i = g_nmodels + e;
         slot[i] = extra[e];
         st[i] = CTR_STRETCH(*extra[e]);
@@ -1238,10 +1217,10 @@ static uint32_t mix_predict(int node, const int *mc, const uint64_t *ctxv, uint1
         double x = 0.0;
         const double *w = g_w[k][node][mc[k]];
         for (int i = 0; i < g_nin; i++) x += w[i] * st[i];
-#if defined(DNAC_CUE) && CUE_MIXFREE
+#if CUE_MIXFREE
         /* ablation: the two experts keyed on the match state weigh the cue with
            ONE context-free weight, so the mixer cannot hear it through the room */
-        if (k == 0 || k == 2) {
+        if (g_cue && (k == 0 || k == 2)) {
             int ci = g_nin - 1;
             x += (g_w[k][node][0][ci] - w[ci]) * st[ci];
         }
@@ -1268,8 +1247,8 @@ static void mix_update(int node, const int *mc, const double *st, uint16_t *cons
     for (int k = 0; k < g_nmix; k++) {
         double errk = (double)bit - ms->p[k];
         double *w = g_w[k][node][mc[k]];
-#if defined(DNAC_CUE) && CUE_MIXFREE
-        if (k == 0 || k == 2) {
+#if CUE_MIXFREE
+        if (g_cue && (k == 0 || k == 2)) {
             int ci = g_nin - 1;
             for (int i = 0; i < ci; i++) w[i] += MIX_LR * errk * st[i];
             g_w[k][node][0][ci] += MIX_LR * errk * st[ci];
@@ -1374,14 +1353,10 @@ static void prime_with_reference(const uint8_t *ref, size_t n) {
             stcm_after(s, hist);
             ir_train(hist, g_thist);
     }
-#if defined(DNAC_NUDGE) || defined(DNAC_CUE)
     /* not in the state file, so a FASTA reference must end priming exactly as a
        loaded state starts: without it, the two ways in would stop being identical */
     for (int mi = 0; mi < NMATCH; mi++) g_mm[mi].mlen_pre = 0;
-#endif
-#ifdef DNAC_CUE
     cue_reset();                            /* same reason: the cue is not saved */
-#endif
 }
 
 
@@ -1577,9 +1552,17 @@ static uint64_t get64(FILE *f) {
    and refused by name -- if it matched the full magic instead, an old state
    would fall through to ref_load() and be scraped for ACGT bytes as though it
    were a FASTA, priming the models on garbage without a word of complaint. */
-#define STATE_MAGIC  "DNACST02"
 #define STATE_PREFIX "DNACST"
 #define STATE_PREFIX_LEN 6
+/* Priming runs the cue (it moves master anchors when it mixes in), so a state
+   primed with it is a different model: "02" is a state without the cue (every
+   v0.8.0 state, still readable), "03" one with it, and 'x' in place of '0'
+   marks an experimental build's. */
+static void state_magic(char *m) {
+    memcpy(m, STATE_PREFIX, STATE_PREFIX_LEN);
+    m[6] = DNAC_EXPERIMENTAL ? 'x' : '0';
+    m[7] = g_cue ? '3' : '2';
+}
 
 static int wr(const void *p, size_t sz, size_t n, FILE *f) { return fwrite(p, sz, n, f) == n; }
 static int rd(void *p, size_t sz, size_t n, FILE *f)       { return fread(p, sz, n, f)  == n; }
@@ -1588,7 +1571,8 @@ static int state_save(const char *path, int k, uint64_t refn, uint64_t reffp) {
     FILE *f = fopen(path, "wb");
     if (!f) { perror("open state"); return 1; }
     int ok = 1;
-    ok &= wr(STATE_MAGIC, 1, 8, f);
+    char sm[8]; state_magic(sm);
+    ok &= wr(sm, 1, 8, f);
     put64(f, (uint64_t)k);
     put64(f, (uint64_t)g_level);   /* the state IS the models: level must match */
     put64(f, (uint64_t)g_hashbits);
@@ -1622,7 +1606,7 @@ static int state_save(const char *path, int k, uint64_t refn, uint64_t reffp) {
 }
 
 /* Is this file a primed state rather than a FASTA reference? Deliberately the
-   PREFIX and not the full magic: see the note at STATE_MAGIC. A state of the
+   PREFIX and not the full magic: see the note at STATE_PREFIX. A state of the
    wrong version must reach state_load, which refuses it explicitly. */
 static int is_state_file(const char *path) {
     FILE *f = fopen(path, "rb");
@@ -1642,16 +1626,25 @@ static int state_load(const char *path, size_t extra, int *k_out,
     if (!rd(m, 1, 8, f)) {
         fprintf(stderr, "not a dnac state file: %s\n", path); fclose(f); return 1;
     }
-    if (memcmp(m, STATE_MAGIC, 8) != 0) {
-        if (memcmp(m, STATE_PREFIX, STATE_PREFIX_LEN) == 0)
-            fprintf(stderr, "state file %s was written by an incompatible dnac"
-                            " (version %.2s; this build needs %.2s);\n"
-                            " rebuild it with:  dnac prime <ref.fa> %s\n",
-                    path, m + STATE_PREFIX_LEN, STATE_MAGIC + STATE_PREFIX_LEN, path);
-        else
-            fprintf(stderr, "not a dnac state file: %s\n", path);
+    if (memcmp(m, STATE_PREFIX, STATE_PREFIX_LEN) != 0) {
+        fprintf(stderr, "not a dnac state file: %s\n", path); fclose(f); return 1;
+    }
+    if ((m[6] != '0' && m[6] != 'x') || (m[7] != '2' && m[7] != '3')) {
+        fprintf(stderr, "state file %s was written by an incompatible dnac"
+                        " (version %.2s; this build reads 02 and 03);\n"
+                        " rebuild it with:  dnac prime <ref.fa> %s\n",
+                path, m + STATE_PREFIX_LEN, path);
         fclose(f); return 1;
     }
+    if ((m[6] == 'x') != (DNAC_EXPERIMENTAL != 0)) {
+        fprintf(stderr, m[6] == 'x'
+                ? "state file %s was primed by an experimental dnac build (non-default"
+                  " cue or level-1 parameters); only that build can use it\n"
+                : "state file %s was primed by a release build, and this build is"
+                  " experimental (non-default cue or level-1 parameters)\n", path);
+        fclose(f); return 1;
+    }
+    g_cue = (m[7] == '3');         /* before mix_setup: it decides the mixer's inputs */
     int k          = (int)get64(f);
     int lvl        = (int)get64(f);
     if (lvl < LEVEL_MIN || lvl > LEVEL_MAX) {
@@ -1688,9 +1681,7 @@ static int state_load(const char *path, size_t extra, int *k_out,
         MatchModel *m = &g_mm[mi];
         m->mp = (uint32_t)get64(f); m->mlen = (uint32_t)get64(f);
         m->active = (int)get64(f);  m->miss = (int)get64(f);
-#if defined(DNAC_NUDGE) || defined(DNAC_CUE)
         m->mlen_pre = 0;                    /* as prime_with_reference() leaves it */
-#endif
         ok &= rd(m->hash, sizeof(uint32_t), ((size_t)1 << m->hbits) * MWAYS, f);
         ok &= rd(m->pr, sizeof(uint16_t), sizeof(m->pr) / sizeof(m->pr[0]), f);
     }
@@ -1951,8 +1942,8 @@ static int do_compress(const char *inpath, const char *outpath, int k, const cha
 
     FILE *out = fopen(outpath, "wb");
     if (!out) { perror("open output"); free(buf); free(ref); mix_free(); return 1; }
-    /* header: magic ('C' plain / 'U' reference), k, level, table geometry,
-       original length [, ref info]. Older magics are refused, never guessed at:
+    /* header: magic (the family letter: see STREAM_LETTER), k, level, table
+       geometry, original length [, ref info]. Older magics are refused, never guessed at:
        'A'/'R' predate the level byte, 'B'/'S' predate the stored geometry, and
        'T' predates sticky reference anchors -- in every case the decoder cannot
        rebuild the models the encoder used. Plain streams are unaffected by the
@@ -1962,7 +1953,7 @@ static int do_compress(const char *inpath, const char *outpath, int k, const cha
        the count as coded data. */
 
     fputc('D', out); fputc('N', out); fputc('C', out);
-    fputc(refpath ? 'U' : (nb > 1 ? 'P' : 'C'), out);
+    fputc(stream_letter(refpath != NULL, nb > 1), out);   /* after state_load: it sets g_cue */
 
     fputc((int)k, out);
     fputc(g_level, out);
@@ -2115,11 +2106,19 @@ static int do_decompress(const char *inpath, const char *outpath, const char *re
                         " build's and it cannot be read safely\n");
         fclose(in); return 1;
     }
-    if (m0 != 'D' || m1 != 'N' || m2 != 'C' || (m3 != 'C' && m3 != 'U' && m3 != 'P')) {
+    int exper = 0, cue = 0, need_ref = 0, blocked = 0;   /* blocked: plain, cut into spans */
+    if (m0 != 'D' || m1 != 'N' || m2 != 'C' || stream_family(m3, &exper, &cue, &need_ref, &blocked)) {
         fprintf(stderr, "not a dnac file\n"); fclose(in); return 1;
     }
-    int need_ref = (m3 == 'U');
-    int blocked  = (m3 == 'P');   /* plain stream cut into independent spans */
+    if (exper != (DNAC_EXPERIMENTAL != 0)) {
+        fprintf(stderr, exper
+                ? "this file was written by an experimental dnac build (non-default cue"
+                  " or level-1 parameters); only that build can read it\n"
+                : "this build is experimental (non-default cue or level-1 parameters)"
+                  " and cannot read a file written by a release build\n");
+        fclose(in); return 1;
+    }
+    g_cue = cue;                  /* before any table is built: it decides the mixer's inputs */
     if (need_ref && !refpath) {
         fprintf(stderr, "this file was compressed against a reference: use  dnac dr <in> <out> <ref.fa>\n");
         fclose(in); return 1;
@@ -2183,6 +2182,12 @@ static int do_decompress(const char *inpath, const char *outpath, const char *re
         if (g_level != lvl) {
             fprintf(stderr, "state was primed at level %d but this file was written "
                             "at level %d\n", g_level, lvl);
+            fclose(in); mix_free(); return 1;
+        }
+        /* and for the cue, which state_load has just taken from the state */
+        if (g_cue != cue) {
+            fprintf(stderr, "state was primed %s the cue but this file was written %s it\n",
+                    g_cue ? "with" : "without", cue ? "with" : "without");
             fclose(in); mix_free(); return 1;
         }
         /* Same argument for the geometry: state_load sized the tables from the
@@ -2436,6 +2441,7 @@ int main(int argc, char **argv) {
     if (argc >= 5 && strcmp(argv[1], "cr") == 0) {
         int k = (argc >= 6) ? atoi(argv[5]) : 22;
         if (k < 1 || k > 28) { fprintf(stderr, "k (max order) must be 1..28\n"); return 1; }
+        g_level = REF_LEVEL_DEFAULT;          /* with a reference the default is 1 */
         if (argc >= 7 && set_level(atoi(argv[6]))) return 1;
         if (g_blocks > 1) {
             fprintf(stderr, "-j is not supported in reference mode yet: every block would"
@@ -2454,6 +2460,7 @@ int main(int argc, char **argv) {
     if (argc >= 4 && strcmp(argv[1], "prime") == 0) {
         int k = (argc >= 5) ? atoi(argv[4]) : 22;
         if (k < 1 || k > 28) { fprintf(stderr, "k (max order) must be 1..28\n"); return 1; }
+        g_level = REF_LEVEL_DEFAULT;          /* a state is for reference mode */
         if (argc >= 6 && set_level(atoi(argv[5]))) return 1;
         return do_prime(argv[2], argv[3], k);
     }
@@ -2475,9 +2482,11 @@ int main(int argc, char **argv) {
         "  dnac dr <in> <out> <ref>      decompress (same reference required)\n"
         "     <ref> may be a FASTA file or a primed state built with:\n"
         "  dnac prime <ref.fa> <state> [k] [lvl]  pay the priming pass once\n"
-        "     lvl = 1 fast (~2.2x, +0.4%% size) | 2 balanced | 3 max (default)\n"
-        "           4 light: a third less memory, ~18%% faster, +0.12%% size;\n"
-        "           NOT a higher setting than 3 -- see docs/model-ablation.md\n"
+        "     lvl = 1 fast | 2 balanced | 3 max | 4 light (a third less memory;\n"
+        "           NOT a higher setting than 3 -- see docs/model-ablation.md)\n"
+        "     default level: 3 for c, 1 for cr and prime (with a reference, level 1\n"
+        "           and the cue is ~2x faster than level 3 and still smaller than\n"
+        "           v0.8.0's level 3; without one, level 3 stays ahead)\n"
         "  dnac gen <out> <bases> [seed] generate a structured sample\n"
         "  dnac mut <in> <out> [per-mille] [seed]   simulate a resequenced genome\n"
         "  -map <file.tsv> [-mapw N]     write a per-window bit-cost map while\n"

@@ -4,6 +4,12 @@
 `4701a50`, 19:23:02 +0300) before any competitor ran on this pair. Target:
 CHM13 chr21. Reference: GRCh38 chr21. One run per tool.
 
+**Parameter set, added 2026-09-14 (Batch 4):** "dnac + cue" here is
+`CUE_MINLEN = 16` at level 3. v0.9.0 ships 4 and level 1 by default in
+reference mode, so this is the record of that build; its rows re-derive from
+`4932ffe`'s source, which `verify-claims.ps1` pins. The release build against
+the same competitor bytes is in `docs/batch4.md`.
+
 ## The two tables
 
 **FASTA** (`chm13_chr21.fa` against `dnac/chr21.fa`):

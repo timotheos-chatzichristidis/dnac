@@ -5,6 +5,11 @@
 table is no longer indexed by what the room ear (master 0) hears. Everything
 round-trips.
 
+**Parameter set, added 2026-09-14 (Batch 4):** measured with `CUE_MINLEN = 16`.
+v0.9.0 ships 4 (`docs/batch3.md`), so this is the record of that build; its
+rows re-derive from `4932ffe`'s source, which `verify-claims.ps1` pins.
+`CUE_ROOM` survives in v0.9.0 as an experimental knob.
+
 ## Scoreline
 
 | | prediction (the claim's direction) | outcome |

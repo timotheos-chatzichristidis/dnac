@@ -15,8 +15,10 @@
 # the priming pass is inside the time, as it is for a user with one target.
 #
 # Appends to $WORK/batch3-time.tsv:  <label> <level> <round> <seconds> <bytes>
+# ($OUT overrides it; Batch 4 times `cue_M4 rel v08@3` into its own file.)
 set -eu
 . "$(cd "$(dirname "$0")" && pwd)/common.sh"
+OUT=${OUT:-$WORK/batch3-time.tsv}
 
 LVL0=${1:?usage: batch3-time.sh <level> <rounds> <label>...}
 LVL=$LVL0
@@ -44,10 +46,10 @@ while [ "$i" -le "$R" ]; do
     t1=$(date +%s.%N)
     printf '%s\t%s\t%s\t%s\t%s\n' "$LBL" "$LVL" "$i" \
       "$(awk -v a="$t0" -v b="$t1" 'BEGIN{printf "%.2f", b-a}')" \
-      "$(wc -c < "$out")" >> "$WORK/batch3-time.tsv"
+      "$(wc -c < "$out")" >> "$OUT"
     echo "  round $i  $LBL l$LVL: $(awk -v a="$t0" -v b="$t1" 'BEGIN{printf "%.2f", b-a}') s, $(wc -c < "$out") B"
     rm -f "$out"
   done
   i=$((i + 1))
 done
-echo "BATCH3_TIME_COMPLETE -> $WORK/batch3-time.tsv"
+echo "BATCH3_TIME_COMPLETE -> $OUT"

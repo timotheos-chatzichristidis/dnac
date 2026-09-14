@@ -19,42 +19,59 @@ jobs:
           - { os: macos-latest,  cc: clang }
     steps:
       - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0          # the v0.8.0 tag: v0.9.0 must read what it wrote
 
       - name: Build
         run: make CC=${{ matrix.cc }} CFLAGS="-O2 -Wall -Wextra"
 
       # The only claim that must never regress: every byte comes back.
-      # 203 SHA-256 round-trips across plain, reference, level, state and block modes.
+      # SHA-256 round-trips across plain, reference, level, state and block
+      # modes, the cue's own cases, and the stored v0.8.0 streams in tests/v080.
       - name: Losslessness round-trips
         run: sh scripts/roundtrip.sh ./dnac
 
-      # v0.9.0's new mechanism (docs/cue.md) lives behind -DDNAC_CUE, so the
-      # default build proves nothing about it. Losslessness is the one claim
-      # that must never regress, and it has to hold for the build we intend to
-      # ship, not only for the one that is easy to test.
-      - name: Build with the cue
-        run: ${{ matrix.cc }} -O2 -Wall -Wextra -DDNAC_CUE -o dnac_cue dnac.c -lm
-
-      - name: Losslessness round-trips, with the cue
-        run: sh scripts/roundtrip.sh ./dnac_cue
-
-      # The cue is a second match deck, so the two things that must not happen
-      # are: it changes nothing (the flag never reached the compiler, and every
-      # figure on the branch is a build compared with itself), or it changes the
-      # archive of a file it has no business touching. An indel-dense target
-      # exercises the first; the flag being off must leave the stream alone.
-      - name: The flag must change the output, and only with the flag
+      # Since v0.9.0 the cue is on in every build and switched at run time; the
+      # switch travels in the magic. Switched off (-DCUE_DEFAULT=0, with
+      # v0.8.0's level default) the build must BE v0.8.0 -- the same bytes as
+      # the tag -- and an experimental build (a cue parameter moved) must mark
+      # its files so no release build reads them. The suite asserts each
+      # family's own rules, so it runs on all three.
+      - name: Build the cue switched off, and an experimental build
         run: |
+          ${{ matrix.cc }} -O2 -Wall -Wextra -DCUE_DEFAULT=0 -DREF_LEVEL_DEFAULT=3 -o dnac_v08 dnac.c -lm -pthread
+          ${{ matrix.cc }} -O2 -Wall -Wextra -DCUE_MINLEN=16 -o dnac_exp dnac.c -lm -pthread
+
+      - name: Losslessness round-trips, cue off and experimental
+        run: |
+          sh scripts/roundtrip.sh ./dnac_v08
+          sh scripts/roundtrip.sh ./dnac_exp
+
+      # The things that must not happen: the cue switched off is not v0.8.0; the
+      # release build writes v0.8.0's bytes (the cue never switched on); v0.9.0
+      # cannot read a v0.8.0 archive; v0.8.0 reads a v0.9.0 archive as if it
+      # were its own -- which is what a cue archive with v0.8.0's magic did
+      # before (docs/batch4.md, P0: exit 0, wrong bytes).
+      - name: The cue switched off is v0.8.0, and the two families never mix
+        run: |
+          git show v0.8.0:dnac.c > v080.c
+          ${{ matrix.cc }} -O2 -o dnac_v080 v080.c -lm -pthread
           ./dnac gen cue_ref.fa 300000 5
           ./dnac mut cue_ref.fa cue_tgt.fa 8 9
-          ./dnac     cr cue_tgt.fa plain.dnac cue_ref.fa 22 3
-          ./dnac_cue cr cue_tgt.fa cue.dnac   cue_ref.fa 22 3
-          ./dnac_cue dr cue.dnac   cue_back.fa cue_ref.fa
-          cmp cue_tgt.fa cue_back.fa
-          if cmp -s plain.dnac cue.dnac; then
-            echo "-DDNAC_CUE produced a byte-identical archive: the flag is not reaching the compiler"
-            exit 1
-          fi
+          for lvl in 1 3; do
+            ./dnac_v080 cr cue_tgt.fa old$lvl.dnac cue_ref.fa 22 $lvl
+            ./dnac_v08  cr cue_tgt.fa v08_$lvl.dnac cue_ref.fa 22 $lvl
+            cmp old$lvl.dnac v08_$lvl.dnac
+            ./dnac      cr cue_tgt.fa new$lvl.dnac cue_ref.fa 22 $lvl
+            if cmp -s old$lvl.dnac new$lvl.dnac; then
+              echo "the release build wrote v0.8.0's bytes: the cue is not on"; exit 1
+            fi
+            ./dnac dr old$lvl.dnac back$lvl.fa cue_ref.fa
+            cmp cue_tgt.fa back$lvl.fa
+            if ./dnac_v080 dr new$lvl.dnac bad$lvl.fa cue_ref.fa 2>/dev/null; then
+              echo "v0.8.0 accepted a v0.9.0 stream"; exit 1
+            fi
+          done
 
       - name: Sanity — compress/decompress a generated genome
         run: |
@@ -134,34 +151,30 @@ jobs:
           cmp tgt.fa from_clang.fa
 
       # The cue adds a probability table and a mixer input to the float path
-      # that this job exists to police, and v0.9.0 ships it. There is no clang
-      # on the measurement machine, so this is the only place the cross-COMPILER
-      # half of docs/reference-free.md's P7 can run; the float-variant half runs
-      # locally (scripts/cue/fpident.sh).
+      # that this job exists to police, and v0.9.0 ships it on by default, so
+      # the two builds above already carry it. There is no clang on the
+      # measurement machine, so this is the only place the cross-COMPILER half
+      # of docs/reference-free.md's P7 can run; the float-variant half runs
+      # locally (scripts/cue/fpident.sh). Reference mode is where the cue
+      # actually speaks, so it would show a float disagreement first -- at both
+      # levels, and at the default level, which is 1 there.
       - name: The cue must be identical across compilers too
         run: |
-          gcc   -O2 -Wall -Wextra -DDNAC_CUE -o cue_gcc   dnac.c -lm -pthread
-          clang -O2 -Wall -Wextra -DDNAC_CUE -o cue_clang dnac.c -lm -pthread
           ./dnac_gcc gen cue_s.fa 400000 13
           ./dnac_gcc mut cue_s.fa cue_t.fa 8 21
           for lvl in 1 3; do
-            ./cue_gcc   c cue_s.fa cg$lvl.dnac 22 $lvl
-            ./cue_clang c cue_s.fa cc$lvl.dnac 22 $lvl
-            cmp cg$lvl.dnac cc$lvl.dnac
-            ./cue_clang d cg$lvl.dnac from_cue_gcc$lvl.fa
-            ./cue_gcc   d cc$lvl.dnac from_cue_clang$lvl.fa
-            cmp cue_s.fa from_cue_gcc$lvl.fa
-            cmp cue_s.fa from_cue_clang$lvl.fa
+            ./dnac_gcc   cr cue_t.fa rg$lvl.dnac cue_s.fa 22 $lvl
+            ./dnac_clang cr cue_t.fa rc$lvl.dnac cue_s.fa 22 $lvl
+            cmp rg$lvl.dnac rc$lvl.dnac
+            ./dnac_clang dr rg$lvl.dnac from_rg$lvl.fa cue_s.fa
+            ./dnac_gcc   dr rc$lvl.dnac from_rc$lvl.fa cue_s.fa
+            cmp cue_t.fa from_rg$lvl.fa
+            cmp cue_t.fa from_rc$lvl.fa
           done
-          # reference mode is where the cue actually speaks, so it is the case
-          # that would show a float disagreement first
-          ./cue_gcc   cr cue_t.fa rg.dnac cue_s.fa 22 3
-          ./cue_clang cr cue_t.fa rc.dnac cue_s.fa 22 3
-          cmp rg.dnac rc.dnac
-          ./cue_clang dr rg.dnac from_rg.fa cue_s.fa
-          ./cue_gcc   dr rc.dnac from_rc.fa cue_s.fa
-          cmp cue_t.fa from_rg.fa
-          cmp cue_t.fa from_rc.fa
+          ./dnac_gcc   cr cue_t.fa rgd.dnac cue_s.fa
+          ./dnac_clang cr cue_t.fa rcd.dnac cue_s.fa
+          cmp rgd.dnac rcd.dnac
+          cmp rgd.dnac rg1.dnac     # the default in reference mode is level 1
 
       - name: Threads must not change a single byte
         run: |

@@ -3,6 +3,12 @@
 **Run 2026-09-10.** Pre-registered blind in `docs/remaining-prediction.md`
 (commit `f521918`, 21:03:52 +0300).
 
+**Parameter set, added 2026-09-14 (Batch 4):** every build here used
+`CUE_MINLEN = 16`, and the nudge and the alternating deck no longer exist in
+`dnac.c`. This is the record of those builds; its rows re-derive from
+`4932ffe`'s source, which `verify-claims.ps1` pins. The chr22 replication at the
+release settings is in `docs/batch4.md`.
+
 ## Scoreline
 
 | | prediction | outcome |

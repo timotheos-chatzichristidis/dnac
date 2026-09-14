@@ -14,6 +14,8 @@ if [ ! -x "$EXE" ] && [ -x "$EXE.exe" ]; then EXE="$EXE.exe"; fi
 # letters -- without them "C:/x/dnac.exe" would be turned into "./C:/x/dnac.exe".
 case $EXE in /*|./*|../*|?:/*|?:\\*) ;; *) EXE=./$EXE ;; esac
 EXE=$(cd "$(dirname "$EXE")" && pwd)/$(basename "$EXE")
+# the checkout, found before this script moves into its scratch directory
+SRCROOT=$(cd "$(dirname "$0")/.." && pwd)
 
 if command -v sha256sum >/dev/null 2>&1; then SHA="sha256sum"
 elif command -v shasum   >/dev/null 2>&1; then SHA="shasum -a 256"
@@ -197,6 +199,141 @@ if ! cmp -s map_off.dnac map_on.dnac; then
   fail=$((fail+1)); echo "FAIL: -map changed the compressed bytes"
 fi
 rm -f map_off.dnac map_on.dnac map.tsv
+
+# ------------------------------------------- v0.9.0: the cue and its families
+# Which family does this build write? Its own plain stream says: 'E' is a release
+# build with the cue, 'C' the cue switched off (a v0.8.0-configured build), and
+# lower case the same from an experimental build (non-default cue or level-1
+# parameters). Everything below asserts what that family must do.
+"$EXE" c diverged.fa fam.dnac >/dev/null
+LET=$(dd if=fam.dnac bs=1 skip=3 count=1 2>/dev/null)
+rm -f fam.dnac
+EXPER=0; CUEON=1
+case $LET in
+  E) ;;
+  C) CUEON=0 ;;
+  e) EXPER=1 ;;
+  c) EXPER=1; CUEON=0 ;;
+  *) n=$((n+1)); fail=$((fail+1)); echo "FAIL: a plain stream carries the letter '$LET'" ;;
+esac
+
+# The cases the cue exists for, and the one it must not spoil. Indel-dense: 4
+# indels and 40 substitutions per 1,000 bases. Homopolymer-dense: runs of 1-12
+# of one base, and a copy in which one run in five slips by a base. Target =
+# reference: the cue is not silent there (docs/batch3.md 4b), so this asserts
+# losslessness; that it costs nothing is a registry row, since it needs two builds.
+"$EXE" gen cue_ref.fa 60000 5 >/dev/null
+"$EXE" mut cue_ref.fa cue_ind.fa 40 6 >/dev/null
+awk 'BEGIN{srand(17);b="ACGT";o="";p=""
+     for(i=0;i<9000;i++){c=substr(b,int(rand()*4)+1,1);L=1+int(rand()*12)
+       for(j=0;j<L;j++)o=o c
+       M=L; if(int(rand()*5)==0) M=L+(rand()<0.5?-1:1); if(M<1)M=1
+       for(j=0;j<M;j++)p=p c}
+     print ">hp_ref" > "hp_ref.fa"; print o > "hp_ref.fa"
+     print ">hp_tgt" > "hp_tgt.fa"; print p > "hp_tgt.fa"}'
+for pair in "cue_ind.fa cue_ref.fa" "hp_tgt.fa hp_ref.fa" "cue_ref.fa cue_ref.fa"; do
+  set -- $pair
+  for lvl in default 1 3; do
+    if [ "$lvl" = default ]; then "$EXE" cr "$1" rt.dnac "$2" >/dev/null
+    else "$EXE" cr "$1" rt.dnac "$2" 22 "$lvl" >/dev/null; fi
+    "$EXE" dr rt.dnac rt.out "$2" >/dev/null
+    report "cue $1 / $2 level=$lvl" "$(hash_of "$1")" "$(hash_of rt.out)"
+    rm -f rt.dnac rt.out
+  done
+done
+# the cue is reset when priming ends, so a state must still be interchangeable
+# with its FASTA on exactly the file where the cue is busiest
+"$EXE" prime cue_ref.fa cue.state >/dev/null
+"$EXE" cr cue_ind.fa st.dnac cue.state >/dev/null
+"$EXE" cr cue_ind.fa fa.dnac cue_ref.fa >/dev/null
+report "cue: state-primed stream == FASTA-primed stream" "$(hash_of st.dnac)" "$(hash_of fa.dnac)"
+"$EXE" dr st.dnac rt.out cue_ref.fa >/dev/null
+report "cue: state -> FASTA decode" "$(hash_of cue_ind.fa)" "$(hash_of rt.out)"
+rm -f st.dnac fa.dnac rt.out
+
+# Default levels, read out of the header (byte 5): plain mode 3, reference mode
+# and prime 1 -- and 3 for a build that reproduces v0.8.0.
+hdr_level() { od -An -tu1 -j5 -N1 "$1" | tr -d ' '; }
+want_ref=1; [ "$CUEON" -eq 1 ] || want_ref=3
+"$EXE" c  cue_ind.fa dp.dnac >/dev/null
+"$EXE" cr cue_ind.fa dr.dnac cue_ref.fa >/dev/null
+"$EXE" cr cue_ind.fa ds.dnac cue.state >/dev/null
+report "default level, plain" "3" "$(hdr_level dp.dnac)"
+report "default level, reference" "$want_ref" "$(hdr_level dr.dnac)"
+report "default level, prime" "$want_ref" "$(hdr_level ds.dnac)"
+
+# A stream of the other family must be refused, and nothing written: flip the
+# case of the letter, which is exactly the release/experimental difference.
+L=$(dd if=dr.dnac bs=1 skip=3 count=1 2>/dev/null)
+F=$(printf '%s' "$L" | tr 'A-Za-z' 'a-zA-Z')
+for bad in "$F" Z; do
+  cp dr.dnac flip.dnac
+  printf 'DNC%s' "$bad" | dd of=flip.dnac bs=1 count=4 conv=notrunc 2>/dev/null
+  n=$((n+1))
+  if "$EXE" dr flip.dnac flip.out cue_ref.fa >/dev/null 2>&1 || [ -e flip.out ]; then
+    fail=$((fail+1)); echo "FAIL: a stream with the letter '$bad' was accepted by a build writing '$L'"
+  fi
+  rm -f flip.dnac flip.out
+done
+# ...and the same for a state: flip its release/experimental marker (byte 6,
+# '0' or 'x') and it must be refused, whichever family this build is
+S6=$(dd if=cue.state bs=1 skip=6 count=1 2>/dev/null)
+case $S6 in 0) S6F=x ;; *) S6F=0 ;; esac
+cp cue.state flip.state
+printf '%s' "$S6F" | dd of=flip.state bs=1 seek=6 count=1 conv=notrunc 2>/dev/null
+n=$((n+1))
+if "$EXE" cr cue_ind.fa flip.dnac flip.state >/dev/null 2>&1; then
+  fail=$((fail+1)); echo "FAIL: a state marked '$S6F' was accepted by a build that writes '$S6'"
+fi
+rm -f flip.state flip.dnac
+rm -f dp.dnac dr.dnac ds.dnac cue.state
+
+# Stored v0.8.0 streams (tests/v080/make.sh wrote them with the v0.8.0 tag). A
+# release build must decode every one byte for byte; an experimental build must
+# refuse every one. The inputs are regenerated, and must be the ones v0.8.0 used.
+FIX=$SRCROOT/tests/v080
+if [ ! -s "$FIX/inputs.sha256" ]; then
+  n=$((n+1)); fail=$((fail+1)); echo "FAIL: no stored v0.8.0 streams at $FIX"
+else
+  "$EXE" gen g.fa 40000 3 >/dev/null
+  "$EXE" mut g.fa m.fa 20 4 >/dev/null
+  n=$((n+1))
+  if ! $SHA -c "$FIX/inputs.sha256" >/dev/null 2>&1; then
+    fail=$((fail+1)); echo "FAIL: gen/mut no longer reproduce the v0.8.0 fixture inputs"
+  fi
+  for f in plain_l1 plain_l2 plain_l3 plain_l4 blocks_j3 ref_l1 ref_l3; do
+    case $f in ref_*) src=m.fa; "$EXE" dr "$FIX/$f.dnac" v8.out g.fa >/dev/null 2>&1 || true ;;
+               *)     src=g.fa; "$EXE" d  "$FIX/$f.dnac" v8.out      >/dev/null 2>&1 || true ;; esac
+    if [ "$EXPER" -eq 0 ]; then
+      if [ -e v8.out ]; then report "v0.8.0 stream $f" "$(hash_of $src)" "$(hash_of v8.out)"
+      else n=$((n+1)); fail=$((fail+1)); echo "FAIL: v0.8.0 stream $f was refused"; fi
+    else
+      n=$((n+1)); [ -e v8.out ] && { fail=$((fail+1)); echo "FAIL: an experimental build read v0.8.0 stream $f"; }
+    fi
+    rm -f v8.out
+  done
+  # a state carries the cue: one primed with it must refuse a v0.8.0 stream, and
+  # one primed without it (a v0.8.0-configured build) must read it; one primed
+  # by an experimental build must refuse it whatever its cue
+  "$EXE" prime g.fa g3.state 22 3 >/dev/null
+  n=$((n+1))
+  if [ "$EXPER" -eq 1 ]; then
+    if "$EXE" dr "$FIX/ref_l3.dnac" v8.out g3.state >/dev/null 2>&1 || [ -e v8.out ]; then
+      fail=$((fail+1)); echo "FAIL: an experimental state decoded a v0.8.0 stream"
+    fi
+    rm -f g3.state v8.out
+  else
+    if [ "$CUEON" -eq 1 ]; then
+      if "$EXE" dr "$FIX/ref_l3.dnac" v8.out g3.state >/dev/null 2>&1 || [ -e v8.out ]; then
+        fail=$((fail+1)); echo "FAIL: a state primed with the cue decoded a v0.8.0 stream"
+      fi
+    else
+      "$EXE" dr "$FIX/ref_l3.dnac" v8.out g3.state >/dev/null 2>&1 || true
+      [ -e v8.out ] && [ "$(hash_of m.fa)" = "$(hash_of v8.out)" ] || { fail=$((fail+1)); echo "FAIL: a cue-less state could not decode a v0.8.0 stream"; }
+    fi
+    rm -f g3.state v8.out
+  fi
+fi
 
 # ------------------------------------------------------------------- verdict
 if [ "$fail" -ne 0 ]; then echo "$fail of $n FAILED"; exit 1; fi

@@ -3,6 +3,12 @@
 **Run 2026-09-10.** Pre-registered in `docs/speed-prediction.md` (commit
 `b46f830`, 22:10:18 +0300). Every file below round-trips.
 
+**Parameter set, added 2026-09-14 (Batch 4):** measured with `CUE_MINLEN = 16`.
+v0.9.0 ships 4, so this is the record of that build; its rows re-derive from
+`4932ffe`'s source, which `verify-claims.ps1` pins. The 2.4x below came from two
+single runs in different minutes; the paired ratio is 2.12x (`docs/batch3.md`),
+and the release's is in `docs/batch4.md`.
+
 ## Where the time goes
 
 See the premises in `speed-prediction.md`. In one line: **about 5,000 CPU cycles

@@ -283,7 +283,8 @@ defended by the same 229 round-trips.
 
 | check | state |
 |---|---|
-| `sh scripts/roundtrip.sh ./dnac.exe` | 229/229, at the start of the session |
+| `sh scripts/roundtrip.sh ./dnac.exe` | **229/229**, at the start of the session and again at the end |
+| `./adversarial.ps1` | **155/155** on the release build |
 | `verify-claims.ps1 -Tier fast` | run with the new rows; see below |
 | `-SelfTest` | **4/4** — ANCHOR, DRIFT, ERROR and the new second-anchor detector, each watched going red before it was trusted |
 | `slow`, `extern`, `meta`, `cue`, `cue3`, `b4` | **still to run** |

@@ -53,18 +53,20 @@ can re-run and a zip made on a Windows desktop in 2026 is not.)*
 A match model is a needle on an earlier copy of the sequence. A substitution
 makes it wrong about one base. An **insertion or a deletion makes it wrong about
 where it is**, and every base after that is out of phase — which is why one
-extra letter between two human genomes used to cost as much as thirty
-substitutions. Until v0.9.0 the codec handled that the only way it knew: keep
+extra letter between two human genomes used to cost more than three
+substitutions put together (48.25 bits against 14.64). Until v0.9.0 the codec handled that the only way it knew: keep
 playing out of time until confidence collapsed, then re-anchor from a fresh hash
 lookup, throwing away the alignment it had.
 
 The cue is the other answer. When a match that was established (four bases or
 more) misses, dnac looks a few positions either side of where the needle is
 (±12) for a place where the last three bases agree, and loads that **shifted
-phase into a second, permanent match**. The cue never takes over. It is an extra
-input to the mixer, which learns online how far to trust it, and it is mixed in
-at full weight only once it has been right twelve bases running. One ear stays
-on the room, one stays in the headphones, and the headphones never come off.
+phase into a second, permanent match**. The cue does not take over when it is
+loaded: it is an extra input to the mixer from that moment, and the mixer learns
+online how far to trust it. Only once the cue has kept agreeing for twelve bases
+does a master match that is still missing, and is less sure than the cue, move
+to its position. One ear stays on the room, one stays in the headphones, and the
+headphones never come off.
 
 That last sentence is not a metaphor added afterwards. The mechanism is
 Timotheos's DJ beatmatching method translated line for line — including the
@@ -274,9 +276,9 @@ that the output is small: a controlled divergence gradient (`dnac mut` at 0.05,
 0.2, 1.0 and 5.0 per-mille against the same reference) costs level 1 only
 −0.25%, +0.74%, +1.21% and +1.81% — and at the point whose output lands nearest
 W3110's (2,018 bytes against 1,916), **level 1 is 5 bytes smaller, where W3110
-is 205 bytes larger**. Nor is it the smaller model set that level 1 drops. Switching level 1's mixer from two experts to
-level 3's four, and changing nothing else, gives 1,907 B — the whole gap, and
-then some. On a simulated E. coli individual the same switch recovers the gap
+is 205 bytes larger**. Nor is it the smaller model set that level 1 drops:
+switching level 1's mixer from two experts to level 3's four, and changing
+nothing else, gives 1,907 B — the whole gap, and then some. On a simulated E. coli individual the same switch recovers the gap
 exactly (12,204 → 12,051, which *is* level 3's size); on the diverged pair only
 a fifth of it. **On near-identical pairs the cost of level 1 is the mixer's
 context, not its models.** That fix was priced on the human pair and rejected by
@@ -656,6 +658,7 @@ only where the committee was wrong.
    │  reverse-complement match   │   • "seen its reverse-complement before?"
    │  the cue (a shifted phase)  │   • "the match lost its place — here is the
    │                             │     same copy, a few bases over" (v0.9.0)
+   │                             │     see The cue, above
    └────────────┬───────────────┘
         ┌────────▼────────┐   MIXER (logistic): blends predictors in the logit
         │   logistic mix  │   domain, weights learned online per match state —
@@ -702,6 +705,12 @@ The components, bottom up:
   (precise: when it fires it is rarely coincidence). Both are
   **substitution-tolerant**: a single mismatch (a SNP inside a repeat) doesn't
   break the match — confidence dips and recovers.
+- **The cue** (v0.9.0) — a *third* match, loaded at a shifted phase when a
+  forward match that was established loses its place, and then kept permanently
+  as a mixer input rather than replacing anything. Substitution tolerance above
+  handles a wrong base; the cue handles a wrong *position*, which is what an
+  insertion or a deletion produces. It is the only mechanism here that did not
+  come from the compression literature — see [The cue](#the-cue--the-one-new-mechanism-in-v090).
 - **Reverse-complement match model** — the same, but for inverted repeats: it
   looks up the reverse-complement of the current context and predicts walking
   *backward* and complemented (`complement = 3 − base`). Biggest single win on
@@ -747,7 +756,8 @@ The components, bottom up:
   and starts pointing at its own recently-coded self. An anchor that points into
   the reference is now never overwritten; the target still claims every bucket
   the reference never used. Worth **5.4% on a chr21 individual** and 2.6%
-  on the W3110/MG1655 pair (plain-ACGT files, 1,088 B -> 1,060 B), and it costs a diverged target nothing (O157 vs MG1655: +0.01%), because
+  on the W3110/MG1655 pair (plain-ACGT files, 1,088 B -> 1,060 B, as v0.4.0
+  measured it), and it costs a diverged target nothing (O157 vs MG1655: +0.01%), because
   that target's own prophages and IS elements hash to buckets the reference never
   filled. Same memory, one condition in the store loop. It was found while
   measuring something else entirely — whether a primed model could be frozen so

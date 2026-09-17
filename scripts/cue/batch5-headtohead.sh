@@ -57,7 +57,10 @@ gc() {
   for r in 1 2; do
     rm -f "$B/in.seq.co"
     t0=$(now)
-    "$GECO" -F -l "$lv" "$B/in.seq" >/dev/null 2>&1 || { echo "  GeCo3 l$lv failed on $cs" >&2; rm -f "$B/in.seq"; return 0; }
+    # GeCo3 splits its arguments on ':', so an absolute Windows path breaks it
+    # ("Error opening: C"). It runs in the work directory on a relative name,
+    # which is also what verify-claims.ps1's Geco does.
+    ( cd "$B" && "$GECO" -F -l "$lv" in.seq ) >/dev/null 2>&1 || { echo "  GeCo3 l$lv failed on $cs" >&2; rm -f "$B/in.seq"; return 0; }
     t1=$(now)
     d=$(awk -v a="$t0" -v b="$t1" 'BEGIN{printf "%.2f", b-a}')
     best=$(awk -v x="$d" -v y="${best:-99999}" 'BEGIN{print (x<y)?x:y}')

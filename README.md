@@ -40,7 +40,7 @@ excluded from the denominator).
 |--------------------------------|:-----------:|:-------:|-------|
 | naive 2-bit packing            | 2.000       | 2.000   | no modelling |
 | gzip `-9`                      | 2.2544      | 2.3769  | barely models DNA |
-| **dnac** (k=22, default)       | **@@CHR21FADEF@@**   | **1.8845** | this project |
+| **dnac** (k=22, default)       | **1.5447**   | **1.8845** | this project |
 
 *(The E. coli cell read 1.883 until v0.9.0. That is the figure for the plain
 ACGT `.seq` file, in a table whose note said "on the FASTA files" — a cell no
@@ -431,10 +431,10 @@ hashed tables instead of six. Measured peak resident set, not computed:
 
 | dataset | RAM `-l 3` | RAM `-l 4` | bits/base `-l 4` | size cost |
 |---|---:|---:|---:|---:|
-| chr21, 40 Mbp | 1,254 MB | **869 MB** | 1.5020 | +0.270% |
-| E. coli, 4.6 Mbp | 603 MB | **507 MB** | 1.8834 | +0.006% |
+| chr21, 40 Mbp | @@RAMC21L3@@ MB | **@@RAMC21L4@@ MB** | 1.5003 | +0.266% |
+| E. coli, 4.6 Mbp | 604 MB | **508 MB** | 1.8834 | +0.008% |
 
-The size cost grows with the sequence — +0.006% on a bacterial genome, +0.121% on
+The size cost grows with the sequence — +0.008% on a bacterial genome, +0.121% on
 a 10 MB slice, +0.270% on a whole chromosome — because the models it drops are
 the ones that earn over long range. Against the other memory lever, honestly:
 `HASHBITS_MAX 26→25` buys the same −31% for +0.051%, five times cheaper. What it
@@ -559,8 +559,8 @@ hit the cap it stops shrinking:
 
 | input | `-j 1` | `-j 8` | |
 |---|---:|---:|---|
-| E. coli, 4.6 Mbp (580 kbase blocks) | 603 MB | 650 MB | 1.08×, effectively flat |
-| human chr21, 40 Mbp (5 Mbase blocks) | 1,253 MB | 4,751 MB | **3.8×** |
+| E. coli, 4.6 Mbp (580 kbase blocks) | 604 MB | 650 MB | 1.08×, effectively flat |
+| human chr21, 40 Mbp (5 Mbase blocks) | @@RAMC21J1@@ MB | @@RAMC21J8@@ MB | **@@RAMC21X@@×** |
 
 So on a chromosome `-j 8` costs about 4.75 GB. Extrapolating the cap rather than
 measuring it: above roughly 500 Mbases of input every block of 8 exceeds the
@@ -592,10 +592,10 @@ Bits per base of the target, at the default and at `-l 3`:
 |--------|-----------|:-----:|:-----:|:-----:|:----------:|
 | **CHM13 chr21 (a real second person)** | GRCh38 chr21 | 1.390 | **0.0999** | **0.0971** | 14.3× — 547,019 bytes for a chromosome |
 | E. coli W3110 (real strain) | E. coli MG1655 | 1.880 | 0.0037 | **0.0033** | **570×** — 1,916 bytes for a 4.6 Mbp genome |
-| chr21 of a simulated individual (0.1% SNPs + indels) | chr21 | 1.502 | @@CIL1@@ | **@@CIL3@@** | @@CIX@@× |
+| chr21 of a simulated individual (0.1% SNPs + indels) | chr21 | 1.502 | 0.0203 | **0.0201** | 75× |
 | E. coli, simulated individual | E. coli MG1655 | 1.886 | 0.0210 | **0.0208** | 91× |
 | E. coli O157:H7 (real, diverged strain) | E. coli MG1655 | 1.812 | 0.5189 | **0.5176** | 3.5× |
-| E. coli MG1655 | *human chr21* (unrelated!) | 1.885 | @@UNRELL1@@ | @@UNRELL3@@ | @@UNRELX@@ (degrades gracefully) |
+| E. coli MG1655 | *human chr21* (unrelated!) | 1.885 | 1.891 | 1.889 | +0.23% (degrades gracefully) |
 
 The gain tracks how related the two sequences are, exactly as it should: nearly
 identical strains cost almost nothing, a diverged strain of the same species
@@ -778,7 +778,7 @@ The components, bottom up:
           reverse-complement strand (the single biggest win of that round)
 1.546  + a multiplying binary coder at 14-bit probability resolution, which
           matters most where the model is nearly always right (see below)
-@@CHR21FA@@  + the cue (v0.9.0) — worth almost nothing here, and a great deal
+1.5447 + the cue (v0.9.0) — worth almost nothing here, and a great deal
           with a reference: see the section above
 ─────
 ~1.57–1.60  academic SOTA (GeCo3 / XM)

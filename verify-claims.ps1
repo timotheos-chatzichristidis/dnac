@@ -812,7 +812,7 @@ $claims = @(
      measure={ Bpb (Size (& $F 'chr21_ind.fa') $null 3) (Bases (& $F 'chr21_ind.fa')) } }
 
   @{ id='unrelated-ref-bpb'; tier='slow'; doc='README.md'; unit='bpb'; tol=0.0006
-     anchor='| E. coli MG1655 | *human chr21* (unrelated!) | 1.885 | 1.889 |'
+     anchor='| E. coli MG1655 | *human chr21* (unrelated!) | 1.885 | 1.891 | 1.889 | +0.23% (degrades gracefully) |'
      expect=1.889
      measure={ Bpb (Size (& $F 'ecoli.fa') (& $F 'chr21.fa') 3) (Bases (& $F 'ecoli.fa')) } }
 
@@ -856,18 +856,18 @@ $claims = @(
      measure={ Bpb (Size (& $F 'chr21_slice.fa') $null 4) (Bases (& $F 'chr21_slice.fa')) } }
 
   @{ id='ecoli-l4-ram'; tier='fast'; doc='README.md'; unit='MB'; tol=65
-     anchor='| E. coli, 4.6 Mbp | 603 MB | **507 MB** | 1.8834 | +0.006% |'
-     expect=507
+     anchor='| E. coli, 4.6 Mbp | 604 MB | **508 MB** | 1.8834 | +0.008% |'
+     expect=508
      measure={ PeakMB (& $S 'ecoli.seq') 4 $null } }
 
   @{ id='chr21-l4-ram'; tier='slow'; doc='README.md'; unit='MB'; tol=130
-     anchor='| chr21, 40 Mbp | 1,254 MB | **869 MB** | 1.5020 | +0.270% |'
+     anchor='| chr21, 40 Mbp | @@RAMC21L3@@ MB | **@@RAMC21L4@@ MB** | 1.5003 | +0.266% |'
      expect=869
      measure={ PeakMB (& $S 'chr21.seq') 4 $null } }
 
   @{ id='chr21-l4-bpb'; tier='slow'; doc='README.md'; unit='bpb'; tol=6e-05
-     anchor='| chr21, 40 Mbp | 1,254 MB | **869 MB** | 1.5020 | +0.270% |'
-     expect=1.5020
+     anchor='| chr21, 40 Mbp | @@RAMC21L3@@ MB | **@@RAMC21L4@@ MB** | 1.5003 | +0.266% |'
+     expect=1.5003
      measure={ Bpb (Size (& $S 'chr21.seq') $null 4) (Bases (& $S 'chr21.seq')) } }
 
   @{ id='sliceseq-l3-bpb'; tier='fast'; doc='README.md'; unit='bpb'; tol=6e-05
@@ -972,7 +972,8 @@ $claims = @(
 
   @{ id='chr21-fa-bpb'; tier='slow'; doc='README.md'; unit='bpb'; tol=0.0005
      anchor='| **dnac** (k=22, default)       | **@@CHR21FADEF@@**   | **1.8845** | this project |'
-     expect=1.545
+     also=@(@{ doc='README.md'; anchor='1.5447 + the cue (v0.9.0)' })
+     expect=1.5447
      measure={ Bpb (Size (& $F 'chr21.fa') $null 3) (Bases (& $F 'chr21.fa')) } }
 
   @{ id='chr21-seq-l3-bpb'; tier='slow'; doc='README.md'; unit='bpb'; tol=0.0002
@@ -986,8 +987,8 @@ $claims = @(
      measure={ Bpb (Size (& $S 'chr21.seq') $null 1) (Bases (& $S 'chr21.seq')) } }
 
   @{ id='chr21-ind-bpb'; tier='slow'; doc='README.md'; unit='bpb'; tol=0.00006
-     anchor='chr21 | 1.504 | **0.0227**'
-     expect=0.0227
+     anchor='| chr21 of a simulated individual (0.1% SNPs + indels) | chr21 | 1.502 | 0.0203 | **0.0201** | 75× |'
+     expect=0.0201
      measure={ Bpb (Size (& $F 'chr21_ind.fa') (& $F 'chr21.fa') 3) (Bases (& $F 'chr21_ind.fa')) } }
 
   # --- v0.9.0, branch `nudge`: the cue --------------------------------------

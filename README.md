@@ -158,24 +158,24 @@ numbers here went stale once already.
 
 | dataset | tool | bits/base | compress | RAM |
 |---------|------|:---------:|---------:|----:|
-| human chr21 (40,088,619 bases) | **dnac `-l 3`** (default) | **1.4964** | @@C21L3T@@ s | 1.24 GB |
-| | **dnac `-l 2`** | **1.5023** | @@C21L2T@@ s | |
-| | **dnac `-l 1`** | **1.5048** | **@@C21L1T@@ s** | |
-| | GeCo3 `-l 14` | 1.5092 | @@G21L14T@@ s | |
-| | GeCo3 `-l 9` | 1.5177 | @@G21L9T@@ s | |
+| human chr21 (40,088,619 bases) | **dnac `-l 3`** (default) | **1.4964** | 88.0 s | 1.24 GB |
+| | **dnac `-l 2`** | **1.5023** | 59.2 s | |
+| | **dnac `-l 1`** | **1.5048** | **42.3 s** | |
+| | GeCo3 `-l 14` | 1.5092 | 127.6 s | |
+| | GeCo3 `-l 9` | 1.5177 | 77.6 s | |
 | | GeCo3 `-l 16` | *did not finish* | — | 8.4 GB, thrashed |
-| chr21 slice (9,836,065 bases) | **dnac `-l 3`** | **1.7105** | @@SLL3T@@ s | ~0.4 GB |
-| | **dnac `-l 1`** | 1.7168 | **@@SLL1T@@ s** | |
-| | GeCo3 `-l 16` | 1.7163 | @@GSL16T@@ s | 8.4 GB |
-| | GeCo3 `-l 14` | 1.7195 | @@GSL14T@@ s | |
-| E. coli (4,641,652 bases) | **dnac `-l 3`** | **1.8832** | **@@ECL3T@@ s** | ~0.6 GB |
-| | GeCo3 `-l 9` | 1.8903 | @@GEL9T@@ s | |
-| | GeCo3 `-l 16` | 1.8913 | @@GEL16T@@ s | 8.4 GB |
+| chr21 slice (9,836,065 bases) | **dnac `-l 3`** | **1.7105** | 22.1 s | ~0.4 GB |
+| | **dnac `-l 1`** | 1.7168 | **10.6 s** | |
+| | GeCo3 `-l 16` | 1.7163 | 91.6 s | 8.4 GB |
+| | GeCo3 `-l 14` | 1.7195 | 40.2 s | |
+| E. coli (4,641,652 bases) | **dnac `-l 3`** | **1.8832** | **10.0 s** | ~0.6 GB |
+| | GeCo3 `-l 9` | 1.8903 | 11.4 s | |
+| | GeCo3 `-l 16` | 1.8913 | 73.8 s | 8.4 GB |
 
 **On all three datasets dnac has a setting that is at once faster and smaller
 than every GeCo3 setting tested.** On E. coli and the chr21 slice that setting is
 the default `-l 3`; on the full chromosome `-l 1` beats GeCo3 `-l 9` on both axes
-(46.6 s vs 75.1 s, 1.5065 vs 1.5177) while `-l 3` beats `-l 14` on both.
+(42.3 s vs 77.6 s, 1.5048 vs 1.5177) while `-l 3` beats `-l 14` on both.
 
 GeCo3's maximum level needs 8.4 GB, which did not fit alongside anything else on
 this 16 GB machine for the full chromosome — it spent 7 minutes at 19% CPU
@@ -397,10 +397,10 @@ ladder**, and level 4 is deliberately not "better than 3":
 
 | level | models | time | bits/base | vs max |
 |:-----:|--------|-----:|----------:|--------|
-| 1 `fast` | 6 orders, 2 mixing experts, no IR, no tolerant models | @@L1T@@ s | 1.7180 | @@L1X@@× faster, +0.369% size |
-| 2 `balanced` | all orders, 4 experts, no IR, no tolerant models | @@L2T@@ s | 1.7166 | @@L2X@@× faster, +0.292% |
-| 4 `light` | 8 orders, 4 experts, IR, no tolerant models | @@L4T@@ s | 1.7137 | @@L4X@@× faster, +0.121%, **−31% RAM** |
-| 3 `max` (default without a reference) | everything | @@L3T@@ s | 1.7116 | — |
+| 1 `fast` | 6 orders, 2 mixing experts, no IR, no tolerant models | 10.6 s | 1.7180 | 2.0× faster, +0.369% size |
+| 2 `balanced` | all orders, 4 experts, no IR, no tolerant models | 14.6 s | 1.7166 | 1.4× faster, +0.292% |
+| 4 `light` | 8 orders, 4 experts, IR, no tolerant models | 16.1 s | 1.7137 | 1.3× faster, +0.121%, **−31% RAM** |
+| 3 `max` (default without a reference) | everything | 20.8 s | 1.7116 | — |
 
 **Since v0.9.0 the default is per mode: level 3 without a reference, level 1
 with one.** That is not a preference, it is where the measurement pointed and
@@ -622,14 +622,19 @@ be done once and saved:
 
 | reference | priming pass | load a saved state | compress a 40 Mbase target |
 |-----------|:------------:|:------------------:|:--------------------------:|
-| E. coli (4.6 Mbp) | 10.0 s | **0.3 s** | — |
-| human chr21 (40 Mbp) | 98 s | ~5 s | 188 s → **83 s** end-to-end |
+| E. coli (4.6 Mbp) | 5.9 s | **0.5 s** | — |
+| human chr21 (40 Mbp) | 45.2 s | **0.6 s** | 80.6 s → **35.9 s** end-to-end |
+
+(At the level `prime` and `cr` now pick with a reference, which is 1. Level 3
+roughly doubles every figure in that table — v0.8.0 measured 98 s to prime chr21
+and 188 s → 83 s end-to-end, and that is still what `-l 3` costs.)
 
 A state file and the FASTA it came from are **interchangeable and produce
 bit-identical output** (the adversarial suite checks exactly this): you can
 compress with one and decompress with the other. Table sizes are therefore
 derived from the reference alone, never from the target. The state is a cache in
-host byte/float layout — big (616 MB for E. coli, 1,255 MB for chr21, since it
+host byte/float layout — big (481 MB for E. coli and 717 MB for chr21 at the
+default level, 616 MB and 1,255 MB at `-l 3`, since it
 *is* the models' memory) and not an interchange format; the compressed stream is the
 portable artefact.
 

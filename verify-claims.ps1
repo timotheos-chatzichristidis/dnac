@@ -747,7 +747,7 @@ $claims = @(
      measure={ Ext 'gzip' (& $S 'meta.seq') } }
 
   @{ id='ecoli-seq-bpb'; tier='fast'; doc='README.md'; unit='bpb'; tol=0.0002
-     anchor='| E. coli (4,641,652 bases) | **dnac `-l 3`** | **1.8832**'
+     anchor='| E. coli (4,641,652 bases) | **dnac `-l 3`** | **1.8832** | **10.0 s** |'
      expect=1.8832
      measure={ Bpb (Size (& $S 'ecoli.seq') $null 3) (Bases (& $S 'ecoli.seq')) } }
 
@@ -817,17 +817,17 @@ $claims = @(
      measure={ Bpb (Size (& $F 'ecoli.fa') (& $F 'chr21.fa') 3) (Bases (& $F 'ecoli.fa')) } }
 
   @{ id='slice-l1-bpb'; tier='fast'; doc='README.md'; unit='bpb'; tol=6e-05
-     anchor='| 1 `fast` | 6 orders, 2 mixing experts, no IR, no tolerant models | @@L1T@@ s | 1.7180 |'
+     anchor='| 1 `fast` | 6 orders, 2 mixing experts, no IR, no tolerant models | 10.6 s | 1.7180 |'
      expect=1.718
      measure={ Bpb (Size (& $F 'chr21_slice.fa') $null 1) (Bases (& $F 'chr21_slice.fa')) } }
 
   @{ id='slice-l2-bpb'; tier='fast'; doc='README.md'; unit='bpb'; tol=6e-05
-     anchor='| 2 `balanced` | all orders, 4 experts, no IR, no tolerant models | @@L2T@@ s | 1.7166 |'
+     anchor='| 2 `balanced` | all orders, 4 experts, no IR, no tolerant models | 14.6 s | 1.7166 |'
      expect=1.7166
      measure={ Bpb (Size (& $F 'chr21_slice.fa') $null 2) (Bases (& $F 'chr21_slice.fa')) } }
 
   @{ id='slice-l3-bpb'; tier='fast'; doc='README.md'; unit='bpb'; tol=6e-05
-     anchor='| 3 `max` (default without a reference) | everything | @@L3T@@ s | 1.7116 |'
+     anchor='| 3 `max` (default without a reference) | everything | 20.8 s | 1.7116 |'
      expect=1.7116
      measure={ Bpb (Size (& $F 'chr21_slice.fa') $null 3) (Bases (& $F 'chr21_slice.fa')) } }
 
@@ -851,7 +851,7 @@ $claims = @(
   # rows carry a wide tolerance for the same reason the -j ones do: peak working
   # set is sampled, not exact.
   @{ id='slice-l4-bpb'; tier='fast'; doc='README.md'; unit='bpb'; tol=6e-05
-     anchor='| 4 `light` | 8 orders, 4 experts, IR, no tolerant models | @@L4T@@ s | 1.7137 |'
+     anchor='| 4 `light` | 8 orders, 4 experts, IR, no tolerant models | 16.1 s | 1.7137 |'
      expect=1.7137
      measure={ Bpb (Size (& $F 'chr21_slice.fa') $null 4) (Bases (& $F 'chr21_slice.fa')) } }
 
@@ -871,12 +871,12 @@ $claims = @(
      measure={ Bpb (Size (& $S 'chr21.seq') $null 4) (Bases (& $S 'chr21.seq')) } }
 
   @{ id='sliceseq-l3-bpb'; tier='fast'; doc='README.md'; unit='bpb'; tol=6e-05
-     anchor='| chr21 slice (9,836,065 bases) | **dnac `-l 3`** | **1.7105** |'
+     anchor='| chr21 slice (9,836,065 bases) | **dnac `-l 3`** | **1.7105** | 22.1 s |'
      expect=1.7105
      measure={ Bpb (Size (& $S 'chr21slice.seq') $null 3) (Bases (& $S 'chr21slice.seq')) } }
 
   @{ id='sliceseq-l1-bpb'; tier='fast'; doc='README.md'; unit='bpb'; tol=6e-05
-     anchor='| | **dnac `-l 1`** | 1.7168 |'
+     anchor='| | **dnac `-l 1`** | 1.7168 | **10.6 s** |'
      expect=1.7168
      measure={ Bpb (Size (& $S 'chr21slice.seq') $null 1) (Bases (& $S 'chr21slice.seq')) } }
 
@@ -896,7 +896,7 @@ $claims = @(
      measure={ Size (& $S 'chr21.seq') $null 3 8 } }
 
   @{ id='chr21-seq-l2-bpb'; tier='slow'; doc='README.md'; unit='bpb'; tol=6e-05
-     anchor='| | **dnac `-l 2`** | **1.5023** |'
+     anchor='| | **dnac `-l 2`** | **1.5023** | 59.2 s |'
      expect=1.5023
      measure={ Bpb (Size (& $S 'chr21.seq') $null 2) (Bases (& $S 'chr21.seq')) } }
 
@@ -966,7 +966,7 @@ $claims = @(
      measure={ Bpb (Geco (& $S 'chr21.seq') '-l 9') (Bases (& $S 'chr21.seq')) } }
 
   @{ id='geco-chr21-l14-bpb'; tier='extern'; doc='README.md'; unit='bpb'; tol=0.0002
-     anchor='| | GeCo3 `-l 14` | 1.5092 |'
+     anchor='| | GeCo3 `-l 14` | 1.5092 | 127.6 s |'
      expect=1.5092
      measure={ Bpb (Geco (& $S 'chr21.seq') '-l 14') (Bases (& $S 'chr21.seq')) } }
 
@@ -977,12 +977,12 @@ $claims = @(
      measure={ Bpb (Size (& $F 'chr21.fa') $null 3) (Bases (& $F 'chr21.fa')) } }
 
   @{ id='chr21-seq-l3-bpb'; tier='slow'; doc='README.md'; unit='bpb'; tol=0.0002
-     anchor='| human chr21 (40,088,619 bases) | **dnac `-l 3`** (default) | **1.4964**'
+     anchor='| human chr21 (40,088,619 bases) | **dnac `-l 3`** (default) | **1.4964** | 88.0 s |'
      expect=1.4964
      measure={ Bpb (Size (& $S 'chr21.seq') $null 3) (Bases (& $S 'chr21.seq')) } }
 
   @{ id='chr21-seq-l1-bpb'; tier='slow'; doc='README.md'; unit='bpb'; tol=0.0002
-     anchor='| | **dnac `-l 1`** | **1.5048**'
+     anchor='| | **dnac `-l 1`** | **1.5048** | **42.3 s** |'
      expect=1.5048
      measure={ Bpb (Size (& $S 'chr21.seq') $null 1) (Bases (& $S 'chr21.seq')) } }
 

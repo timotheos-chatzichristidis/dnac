@@ -108,12 +108,11 @@ for j in 1 2 4 8 16; do
   "$REL" d "$B/j.dnac" "$B/j.out" >/dev/null 2>&1 || { echo "FAIL decode -j $j" >&2; exit 1; }
   t2=$(now)
   cmp -s "$SEQ/chr21.seq" "$B/j.out" || { echo "FAIL lossless -j $j" >&2; exit 1; }
-  awk -v j="$j" -v n="$(wc -c < "$B/j.dnac")" -v e="$(el "$t0" "$t1")" -v d="$(el "$t1" "$t2")"     'BEGIN{ printf "  chr21 -j %-2s %10d B  enc %7.1f s  dec %7.1f s
-", j, n, e, d }'
-  printf 'dnac-j	%s	3	%s	%s
-' "$j" "$(wc -c < "$B/j.dnac")" "$(el "$t0" "$t1")" >> "$B/h2h.tsv"
+  jn=$(wc -c < "$B/j.dnac")
+  je=$(el "$t0" "$t1"); jd=$(el "$t1" "$t2")
+  echo "  chr21 -j $j  $jn B  enc $je s  dec $jd s"
+  printf 'dnac-j\t%s\t3\t%s\t%s\n' "$j" "$jn" "$je" >> "$B/h2h.tsv"
   rm -f "$B/j.dnac" "$B/j.out"
 done
-
 echo
 echo "ALL_DONE  ->  $B/h2h.tsv"

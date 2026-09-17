@@ -717,32 +717,32 @@ $claims = @(
   # bench-external/seq/meta.seq. These are the only rows here where the number
   # being defended is one a competitor set.
   @{ id='meta-dnac-l3-bytes'; tier='meta'; doc='README.md'; unit='B'; tol=0
-     anchor='| **dnac -l3** | 17,323,036 |'
-     expect=17323036
+     anchor='| **dnac -l3** | 17,320,408 | **0.6928** | 415.4 s | 411.6 s |'
+     expect=17320408
      measure={ Size (& $S 'meta.seq') $null 3 } }
 
   @{ id='meta-dnac-l1-bytes'; tier='meta'; doc='README.md'; unit='B'; tol=0
-     anchor='| **dnac -l1** | 17,653,816 |'
-     expect=17653816
+     anchor='| **dnac -l1** | 17,652,211 | **0.7061** | 197.9 s | 195.4 s |'
+     expect=17652211
      measure={ Size (& $S 'meta.seq') $null 1 } }
 
   @{ id='meta-zstd-bytes'; tier='meta'; doc='README.md'; unit='B'; tol=0
-     anchor='| zstd -19 --long=27 | 25,427,359 |'
+     anchor='| zstd -19 --long=27 | 25,427,359 | 1.0171 | 157.2 s | **0.3 s** |'
      expect=25427359
      measure={ Ext 'zstd' (& $S 'meta.seq') } }
 
   @{ id='meta-xz-bytes'; tier='meta'; doc='README.md'; unit='B'; tol=0
-     anchor='| xz -9e | 25,072,456 |'
+     anchor='| xz -9e | 25,072,456 | 1.0029 | 252.1 s | 1.3 s |'
      expect=25072456
      measure={ Ext 'xz' (& $S 'meta.seq') } }
 
   @{ id='meta-bzip2-bytes'; tier='meta'; doc='README.md'; unit='B'; tol=0
-     anchor='| bzip2 -9 | 46,527,654 |'
+     anchor='| bzip2 -9 | 46,527,654 | 1.8611 | 19.5 s | 5.9 s |'
      expect=46527654
      measure={ Ext 'bzip2' (& $S 'meta.seq') } }
 
   @{ id='meta-gzip-bytes'; tier='meta'; doc='README.md'; unit='B'; tol=0
-     anchor='| gzip -9 | 49,936,274 |'
+     anchor='| gzip -9 | 49,936,274 | 1.9975 | 127.8 s | 1.1 s |'
      expect=49936274
      measure={ Ext 'gzip' (& $S 'meta.seq') } }
 
@@ -785,13 +785,13 @@ $claims = @(
   # 941 -> 1,255 MB) and nothing here would have caught it, because no row
   # covered them. Any number we publish needs a row; that is the whole point.
   @{ id='ecoli-state-bytes'; tier='fast'; doc='README.md'; unit='MB'; tol=1
-     anchor='(616 MB for E. coli, 1,255 MB for chr21'
-     expect=616
+     anchor='(481 MB for E. coli and 717 MB for chr21 at the'
+     expect=481
      measure={ State (& $F 'ecoli.fa') } }
 
   @{ id='chr21-state-bytes'; tier='slow'; doc='README.md'; unit='MB'; tol=1
-     anchor='1,255 MB for chr21'
-     expect=1255
+     anchor='default level, 616 MB and 1,255 MB at `-l 3`'
+     expect=717
      measure={ State (& $F 'chr21.fa') } }
 
   # -j sizes are published, so they are executed like every other figure. The
@@ -861,12 +861,12 @@ $claims = @(
      measure={ PeakMB (& $S 'ecoli.seq') 4 $null } }
 
   @{ id='chr21-l4-ram'; tier='slow'; doc='README.md'; unit='MB'; tol=130
-     anchor='| chr21, 40 Mbp | @@RAMC21L3@@ MB | **@@RAMC21L4@@ MB** | 1.5003 | +0.266% |'
-     expect=869
+     anchor='| chr21, 40 Mbp | 1,252 MB | **868 MB** | 1.5003 | +0.266% |'
+     expect=868
      measure={ PeakMB (& $S 'chr21.seq') 4 $null } }
 
   @{ id='chr21-l4-bpb'; tier='slow'; doc='README.md'; unit='bpb'; tol=6e-05
-     anchor='| chr21, 40 Mbp | @@RAMC21L3@@ MB | **@@RAMC21L4@@ MB** | 1.5003 | +0.266% |'
+     anchor='| chr21, 40 Mbp | 1,252 MB | **868 MB** | 1.5003 | +0.266% |'
      expect=1.5003
      measure={ Bpb (Size (& $S 'chr21.seq') $null 4) (Bases (& $S 'chr21.seq')) } }
 
@@ -886,12 +886,12 @@ $claims = @(
      measure={ Size (& $S 'ecoli.seq') $null 3 4 } }
 
   @{ id='chr21-j1-bytes'; tier='slow'; doc='README.md'; unit='B'; tol=0
-     anchor='| 1 | 7,498,339 |'
+     anchor='| 1 | 7,498,339 | 88.4 s | 88.8 s |'
      expect=7498339
      measure={ Size (& $S 'chr21.seq') $null 3 1 } }
 
   @{ id='chr21-j8-bytes'; tier='slow'; doc='README.md'; unit='B'; tol=0
-     anchor='| 8 | 7,828,539 |'
+     anchor='| 8 | 7,828,539 | **23.2 s** | **23.5 s** |'
      expect=7828539
      measure={ Size (& $S 'chr21.seq') $null 3 8 } }
 
@@ -901,23 +901,23 @@ $claims = @(
      measure={ Bpb (Size (& $S 'chr21.seq') $null 2) (Bases (& $S 'chr21.seq')) } }
 
   @{ id='ram-ecoli-j1'; tier='fast'; doc='README.md'; unit='MB'; tol=65
-     anchor='| E. coli, 4.6 Mbp (580 kbase blocks) | 603 MB |'
-     expect=603
+     anchor='| E. coli, 4.6 Mbp (580 kbase blocks) | 604 MB |'
+     expect=604
      measure={ PeakMB (& $S 'ecoli.seq') 3 1 } }
 
   @{ id='ram-ecoli-j8'; tier='fast'; doc='README.md'; unit='MB'; tol=65
-     anchor='| E. coli, 4.6 Mbp (580 kbase blocks) | 603 MB | 650 MB |'
+     anchor='| E. coli, 4.6 Mbp (580 kbase blocks) | 604 MB | 650 MB |'
      expect=650
      measure={ PeakMB (& $S 'ecoli.seq') 3 8 } }
 
   @{ id='ram-chr21-j1'; tier='slow'; doc='README.md'; unit='MB'; tol=130
-     anchor='| human chr21, 40 Mbp (5 Mbase blocks) | 1,253 MB |'
-     expect=1253
+     anchor='| human chr21, 40 Mbp (5 Mbase blocks) | 1,252 MB |'
+     expect=1252
      measure={ PeakMB (& $S 'chr21.seq') 3 1 } }
 
   @{ id='ram-chr21-j8'; tier='slow'; doc='README.md'; unit='MB'; tol=480
-     anchor='| human chr21, 40 Mbp (5 Mbase blocks) | 1,253 MB | 4,751 MB |'
-     expect=4751
+     anchor='| human chr21, 40 Mbp (5 Mbase blocks) | 1,252 MB | 4,747 MB |'
+     expect=4747
      measure={ PeakMB (& $S 'chr21.seq') 3 8 } }
 
   @{ id='geco-ecoli-l9-bpb'; tier='extern'; doc='README.md'; unit='bpb'; tol=0.0002
@@ -971,7 +971,7 @@ $claims = @(
      measure={ Bpb (Geco (& $S 'chr21.seq') '-l 14') (Bases (& $S 'chr21.seq')) } }
 
   @{ id='chr21-fa-bpb'; tier='slow'; doc='README.md'; unit='bpb'; tol=0.0005
-     anchor='| **dnac** (k=22, default)       | **@@CHR21FADEF@@**   | **1.8845** | this project |'
+     anchor='| **dnac** (k=22, default)       | **1.5447**   | **1.8845** | this project |'
      also=@(@{ doc='README.md'; anchor='1.5447 + the cue (v0.9.0)' })
      expect=1.5447
      measure={ Bpb (Size (& $F 'chr21.fa') $null 3) (Bases (& $F 'chr21.fa')) } }
@@ -2414,7 +2414,7 @@ $claims = @(
   # the E. coli one was wrong because of it: it printed the plain-ACGT figure in
   # a table whose note said FASTA. Every cell now re-derives.
   @{ id='ecoli-fa-headline-bpb'; tier='fast'; doc='README.md'; unit='bpb'; tol=0.0006
-     anchor='| **dnac** (k=22, default)       | **@@CHR21FADEF@@**   | **1.8845** | this project |'
+     anchor='| **dnac** (k=22, default)       | **1.5447**   | **1.8845** | this project |'
      expect=1.8845
      measure={ Bpb (Size (& $F 'ecoli.fa') $null 3) (Bases (& $F 'ecoli.fa')) } }
 
@@ -2466,17 +2466,17 @@ $claims = @(
   # The chr21 block table's other three rows. They were published without a row
   # until Batch 5, like the headline table's E. coli cell.
   @{ id='chr21-j2-bytes'; tier='slow'; doc='README.md'; unit='B'; tol=0
-     anchor='| 2 | 7,687,850 |'
+     anchor='| 2 | 7,687,850 | 50.8 s | 52.3 s |'
      expect=7687850
      measure={ Size (& $S 'chr21.seq') $null 3 2 } }
 
   @{ id='chr21-j4-bytes'; tier='slow'; doc='README.md'; unit='B'; tol=0
-     anchor='| 4 | 7,732,528 |'
+     anchor='| 4 | 7,732,528 | 32.0 s | 32.0 s |'
      expect=7732528
      measure={ Size (& $S 'chr21.seq') $null 3 4 } }
 
   @{ id='chr21-j16-bytes'; tier='slow'; doc='README.md'; unit='B'; tol=0
-     anchor='| 16 | 7,907,062 |'
+     anchor='| 16 | 7,907,062 | 22.4 s | 22.6 s |'
      expect=7907062
      measure={ Size (& $S 'chr21.seq') $null 3 16 } }
 

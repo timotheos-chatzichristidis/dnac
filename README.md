@@ -23,7 +23,7 @@ the measurement rewarded it, reverted when it did not. What the measurement
 [docs/negative-results.md](docs/negative-results.md).
 
 **Read [Where this loses](#where-this-loses) alongside the results below.** It is
-@@METAX@@x smaller than `zstd -19` on data with no reference and **635x slower to
+1.47x smaller than `zstd -19` on data with no reference and **635x slower to
 decompress**; on aligned reads CRAM wins on structure, because an aligner hands it
 each read's position for free; its reference mode saturates at about chromosome
 scale; and the new reference-mode default is **9.84% worse than v0.8.0 on the
@@ -311,21 +311,22 @@ theirs, no outside information for either side.
 
 | tool | bytes | bits/base | encode | decode |
 |------|------:|----------:|-------:|-------:|
-| **dnac -l3** | 17,323,036 | **0.6929** | 439.8 s | 417.1 s |
-| **dnac -l1** | 17,653,816 | **0.7062** | 187.1 s | 190.6 s |
-| xz -9e | 25,072,456 | 1.0029 | 254.0 s | 2.0 s |
-| zstd -19 --long=27 | 25,427,359 | 1.0171 | 150.7 s | **0.3 s** |
-| bzip2 -9 | 46,527,654 | 1.8611 | 20.0 s | 6.3 s |
-| gzip -9 | 49,936,274 | 1.9975 | 126.3 s | 1.8 s |
+| **dnac -l3** | 17,320,408 | **0.6928** | 415.4 s | 411.6 s |
+| **dnac -l1** | 17,652,211 | **0.7061** | 197.9 s | 195.4 s |
+| xz -9e | 25,072,456 | 1.0029 | 252.1 s | 1.3 s |
+| zstd -19 --long=27 | 25,427,359 | 1.0171 | 157.2 s | **0.3 s** |
+| bzip2 -9 | 46,527,654 | 1.8611 | 19.5 s | 5.9 s |
+| gzip -9 | 49,936,274 | 1.9975 | 127.8 s | 1.1 s |
 
-**1.47x smaller than zstd — a 31% saving, not the 2x that would make anyone
-change tools.** Against gzip it is 2.88x, but gzip is not what you would choose
-for a new archive.
+**1.45x smaller than `xz -9e`, which is the smallest of the general-purpose
+tools here, and 1.47x smaller than `zstd -19` — a 31% saving, not the 2x that
+would make anyone change tools.** Against gzip it is 2.88x, but gzip is not what
+you would choose for a new archive.
 
-### Decompression is 635x slower than zstd, and that is structural
+### Decompression is 651x slower than zstd, and that is structural
 
-`-l1` *encodes* in 187 s against zstd's 151 s — 24% slower, not the orders of
-magnitude one might assume. Decoding is the problem: **190.6 s against 0.3 s.**
+`-l1` *encodes* in 198 s against zstd's 157 s — 26% slower, not the orders of
+magnitude one might assume. Decoding is the problem: **195.4 s against 0.3 s.**
 
 This does not get optimised away. A context-mixing decoder has to rebuild the
 identical model, symbol by symbol, before it can read the next bit, so decode
@@ -433,7 +434,7 @@ hashed tables instead of six. Measured peak resident set, not computed:
 
 | dataset | RAM `-l 3` | RAM `-l 4` | bits/base `-l 4` | size cost |
 |---|---:|---:|---:|---:|
-| chr21, 40 Mbp | @@RAMC21L3@@ MB | **@@RAMC21L4@@ MB** | 1.5003 | +0.266% |
+| chr21, 40 Mbp | 1,252 MB | **868 MB** | 1.5003 | +0.266% |
 | E. coli, 4.6 Mbp | 604 MB | **508 MB** | 1.8834 | +0.008% |
 
 The size cost grows with the sequence — +0.008% on a bacterial genome, +0.121% on
@@ -563,7 +564,7 @@ hit the cap it stops shrinking:
 | input | `-j 1` | `-j 8` | |
 |---|---:|---:|---|
 | E. coli, 4.6 Mbp (580 kbase blocks) | 604 MB | 650 MB | 1.08×, effectively flat |
-| human chr21, 40 Mbp (5 Mbase blocks) | @@RAMC21J1@@ MB | @@RAMC21J8@@ MB | **@@RAMC21X@@×** |
+| human chr21, 40 Mbp (5 Mbase blocks) | 1,252 MB | 4,747 MB | **3.8×** |
 
 So on a chromosome `-j 8` costs about 4.75 GB. Extrapolating the cap rather than
 measuring it: above roughly 500 Mbases of input every block of 8 exceeds the

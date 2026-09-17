@@ -100,6 +100,28 @@ matched one rather than an extrapolation.
 | **W3** | at a matched output size (~2 kB, the 0.2 per-mille point) the simulated penalty is **far below W3110's 205 B** — so the loss is content, not size |
 | **W4** | the per-event arithmetic predicts the gradient's penalty within a factor of 2.5: level 1 pays +3.12 bits per indel and saves 0.17 bits per substitution (Batch 4 R1), i.e. about 0.39 B per indel minus 0.021 B per SNP |
 
+### W5, added after W1–W4 were run, and disclosed as such
+
+W1–W4 were measured before this paragraph was written, and W3 came back
+decisive: at a matched output size the simulated pair's level-1 penalty is 4 B
+against W3110's 205 B. That answers "size or content" and immediately raises
+"**which** content", which the four `L1_*` diagnostics can answer in minutes.
+Adding a prediction after seeing a result is exactly the move Batch 3 had to
+disclose, so it is disclosed here: **W5 was written after W1–W4 and before the
+`L1_*` runs**, and it is a diagnosis of a loss, not a re-opening of Batch 3's
+add-back decision (that rule was about time on the human pair, and nothing here
+re-prices it).
+
+The experiment: W3110 against MG1655 at level 1, release build, with one of
+`L1_ORDERS`, `L1_IR`, `L1_STCM`, `L1_NMIX=4` switched on at a time, against
+level 1 (2,121 B) and level 3 (1,916 B).
+
+| | prediction |
+|---|---|
+| **W5a** | one part dominates: the largest single add-back recovers **at least 40%** of the 205 B |
+| **W5b** | that part is **`L1_ORDERS`** (the master order set) — re-establishing context after a slip is what a near-identical pair spends its bytes on, and per-event level 1 is *better* on substitutions and worse only on indels |
+| **W5c** | `L1_STCM` (the tolerant models) recovers less than `L1_ORDERS`, because W3110's differences are structural rather than substitutions |
+
 **D1, the decision rule, fixed now.** If W1 holds *and* every real pair whose
 output exceeds 100 kB stays under 3%, the reference-mode default **stays level
 1**, and the README states the W3110 case in both units (+9.84%, +190 bytes)

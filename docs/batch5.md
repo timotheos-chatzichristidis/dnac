@@ -265,7 +265,7 @@ defended by the same 229 round-trips.
 |---|---|
 | `sh scripts/roundtrip.sh ./dnac.exe` | 229/229, at the start of the session |
 | `verify-claims.ps1 -Tier fast` | run with the new rows; see below |
-| `-SelfTest` | four always-run detectors, including the new second-anchor one |
+| `-SelfTest` | **4/4** — ANCHOR, DRIFT, ERROR and the new second-anchor detector, each watched going red before it was trusted |
 | `slow`, `extern`, `meta`, `cue`, `cue3`, `b4` | **still to run** |
 
 The registry went **314 → 350 rows**. The tiers that defend the records

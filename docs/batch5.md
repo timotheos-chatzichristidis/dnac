@@ -199,6 +199,62 @@ recipe that generates its own input must generate a canonical one.** Two
 implementations disagreeing is what caught it -- the same instrument that caught
 Batch 4's window-split bug, working the same way.
 
+## The two tables that quote wall-clock, re-run in one session
+
+The head-to-head against GeCo3 and the metagenome bake-off both promise that
+every row came from one session on one machine. v0.9.0 moves every dnac size in
+them, so keeping v0.8.0's times beside v0.9.0's sizes would have broken exactly
+that promise. Both were re-run end to end, dnac three rounds and GeCo3 two, the
+minimum quoted.
+
+| dataset | dnac | GeCo3 |
+|---|---|---|
+| E. coli | `-l 3` 1.8832 @ **10.0 s** | `-l 9` 1.8903 @ 11.4 s; `-l 16` 1.8913 @ 73.8 s |
+| chr21 slice | `-l 3` 1.7105 @ **22.1 s**; `-l 1` 1.7168 @ 10.6 s | `-l 16` 1.7163 @ 91.6 s; `-l 14` 1.7195 @ 40.2 s |
+| chr21 | `-l 3` 1.4964 @ 88.0 s; `-l 2` 1.5023 @ 59.2 s; `-l 1` 1.5048 @ **42.3 s** | `-l 14` 1.5092 @ 127.6 s; `-l 9` 1.5177 @ 77.6 s |
+
+**The claim survives**: on all three datasets dnac still has a setting that is at
+once faster and smaller than every GeCo3 setting tested. GeCo3's own times came
+out well below the session the README quoted before (127.6 s against 174.1 on
+chr21 `-l 14`, 91.6 against 224.8 on the slice at `-l 16`) while its sizes are
+identical to the byte -- which is the 24% timing noise this project keeps
+finding, seen from the other side, and the reason no wall-clock figure here has
+a claim row.
+
+Two invocation bugs surfaced while doing it, both of the same kind as the
+defline: **a recipe that does not reproduce what it claims to.**
+
+- `batch5-headtohead.sh` passed GeCo3 an absolute Windows path, and GeCo3 splits
+  its arguments on `:`, so every GeCo3 row failed with `Error opening: C`. It
+  runs in the work directory on a relative name now, which is what the registry
+  already did.
+- `batch5-meta.sh` piped into `zstd -c`. zstd writes a content-size field when it
+  knows the input's length, so a pipe is **four bytes larger** than the
+  registry's `-o file`, and `xz` on this machine resolves to a busybox applet
+  that cannot compress at all. Every competitor is now invoked exactly as
+  `verify-claims.ps1`'s `Ext` invokes it.
+
+## The priming table is a level-1 table now
+
+`prime` and `cr` default to level 1 with a reference, so every figure in "Pay for
+the reference once" moved, and the state files with them:
+
+| reference | priming pass | load a state | a 40 Mbase target | state |
+|---|---:|---:|---:|---:|
+| E. coli, 4.6 Mbp | 5.9 s | 0.5 s | — | **481 MB** (616 at `-l 3`) |
+| chr21, 40 Mbp | 45.2 s | 0.6 s | 80.6 s → **35.9 s** | **717 MB** (1,255 at `-l 3`) |
+
+**P7 failed, and in the opposite direction to the prediction.** It said the state
+would be *larger* than 616 MB by less than 40 MB, because the cue adds a deck and
+a mixer input to the model memory. At level 3 the state is unchanged to the
+megabyte; at the default it is **22% smaller**, because the default is level 1
+and level 1 holds fewer tables. The prediction simply forgot that Batch 4 moved
+the default -- a miss of exactly the kind this batch found three of in the data.
+
+The script also asserts, at chromosome scale, the thing that table claims in
+passing and nothing else checks there: a state and the FASTA it came from write
+the **same archive, byte for byte**.
+
 ## R: what is green, and what still has to run
 
 The rewrite is a documentation and registry change; `dnac.c` is untouched by

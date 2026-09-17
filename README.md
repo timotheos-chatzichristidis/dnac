@@ -537,15 +537,16 @@ What it buys, measured on the full chr21 (40 Mbp) on an 8-core machine:
 
 | `-j` | bytes | encode | decode |
 |---:|---:|---:|---:|
-| 1 | 7,498,339 | @@J1ET@@ s | @@J1DT@@ s |
-| 2 | 7,687,850 | @@J2ET@@ s | @@J2DT@@ s |
-| 4 | 7,732,528 | @@J4ET@@ s | @@J4DT@@ s |
-| 8 | 7,828,539 | **@@J8ET@@ s** | **@@J8DT@@ s** |
-| 16 | 7,907,062 | @@J16ET@@ s | @@J16DT@@ s |
+| 1 | 7,498,339 | 88.4 s | 88.8 s |
+| 2 | 7,687,850 | 50.8 s | 52.3 s |
+| 4 | 7,732,528 | 32.0 s | 32.0 s |
+| 8 | 7,828,539 | **23.2 s** | **23.5 s** |
+| 16 | 7,907,062 | 22.4 s | 22.6 s |
 
-5.1× on encode and 3.8× on decode at `-j 8`; `-j 16` buys nothing on 8 cores and
-costs another percent, so more blocks than cores is only ever a loss. Both sides
-speed up, because a block is independent in both directions.
+**3.8× on encode and 3.8× on decode at `-j 8`** — the two are the same number,
+which is the codec's symmetry showing: a block is independent in both
+directions. `-j 16` on 8 cores buys 3% more speed for another 1% of size, which
+is not a trade worth making; more blocks than cores has nothing left to give.
 
 On human chr21 the split costs more than on E. coli — +2.53% at N=2 and +4.40% at N=8 —
 because long-range repeats (Alu, LINE, satellite) are where its compression comes

@@ -255,6 +255,26 @@ The script also asserts, at chromosome scale, the thing that table claims in
 passing and nothing else checks there: a state and the FASTA it came from write
 the **same archive, byte for byte**.
 
+### And the same trap once more: stderr sent to /dev/null
+
+`batch5-meta.sh` reported `(xz -9e failed)` on both runs. Run by hand, `xz -9e`
+compresses the 200 Mbase metagenome perfectly well, to **25,072,456 bytes** --
+the exact figure the README has always printed -- in 252.1 s. The script could
+not say why it failed, because the failing command's stderr went to
+`/dev/null`. That is the trap `benchmark.ps1` taught this project in August
+("do not pipe a tool's stderr to Out-Null in a harness whose job is to notice
+the tool failed"), met again in a script written this session. The xz row was
+therefore measured in a **second invocation, minutes after the first**, on the
+same otherwise-idle machine, which is stated here rather than presented as part
+of the one session the rest of that table came from.
+
+A second thing that row settles: **xz, not zstd, is the smallest of the
+general-purpose tools on this input** (25,072,456 against 25,427,359). The
+README quoted "1.47x smaller than zstd" -- true, but zstd is not the toughest
+competitor in its own table. It now reads 1.45x against xz *and* 1.47x against
+zstd, so the comparison is against the best of the field and against the one
+people actually run.
+
 ## R: what is green, and what still has to run
 
 The rewrite is a documentation and registry change; `dnac.c` is untouched by

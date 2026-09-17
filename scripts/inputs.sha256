@@ -1,0 +1,20 @@
+# The exact bytes every figure in README.md was measured on.
+#
+# `sh scripts/get-data.sh` fetches the first five by accession and checks them
+# against this file; `--sim` rebuilds the last two with `dnac mut`. A mismatch
+# is a different measurement, not a worse download, and the script stops.
+#
+# Two of these were not reproducible until 2026-09-17 (docs/batch5.md):
+#   o157.fa      is THREE records -- the chromosome and plasmids pOSAK1 and
+#                pO157. The script used to fetch only the chromosome.
+#   ecoli/w3110  NCBI wraps at 70 columns now and wrapped at 80 then; the
+#                script re-wraps to 80, which reproduces the bytes exactly.
+#   *_ind.fa     `dnac mut` writes its INPUT'S PATH into the defline, so the
+#                argument's spelling is part of the file. See --sim.
+53bb6a51b6e92139ced1e38f74b7938781027c52200922ff03718c2237d23bb4 *ecoli.fa
+e12fc575b8fdaae3da53c4ff4e0b4a7f33371761c933b8a0c4178efa1854a381 *w3110.fa
+71c2e5c364293c9ba36fc2c7acbcaa75cd6884295fe06260ba198826a8b1ddd3 *o157.fa
+2064bcc6b46ff2d1e0369b6aa2dea105611b5cbc3284492d58dc1cc3fe1e6968 *chr21.fa
+15a1d31019afaa29c525c54fae42af2faaccc38ccdff6229996b66abee6a25a8 *chr21_slice.fa
+df6f73101bf7560209725f38dc46b44730a5fda7f56a288e619abff2bf837de8 *ecoli_ind.fa
+bccefe13e65c7aae660120d5d24645973d12e6c211c3ab2b8c963865eb10ccb4 *chr21_ind.fa

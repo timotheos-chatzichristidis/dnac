@@ -436,9 +436,16 @@ function MutTarget($rate) {
         # are the same genome in a different archive (2 bytes at level 3, 7 at
         # level 1). The header is overwritten with a canonical one, exactly as
         # scripts/cue/batch5-w3110.sh does, so this row and that script agree.
-        $lines = [System.IO.File]::ReadAllLines($raw)
-        $lines[0] = ">mut_${rate}_seed42"
-        [System.IO.File]::WriteAllLines($t, $lines)
+        # Byte surgery, not ReadAllLines/WriteAllLines: the latter would write
+        # CRLF on Windows and turn every line of the FASTA into a different
+        # line, which is a different file again. Replace the first line only.
+        $bytes = [System.IO.File]::ReadAllBytes($raw)
+        $nl    = [Array]::IndexOf($bytes, [byte]10)
+        if ($nl -lt 0) { throw "no newline in $raw" }
+        $head  = [System.Text.Encoding]::ASCII.GetBytes(">mut_${rate}_seed42`n")
+        $fs    = [System.IO.File]::Create($t)
+        try { $fs.Write($head, 0, $head.Length); $fs.Write($bytes, $nl + 1, $bytes.Length - $nl - 1) }
+        finally { $fs.Dispose() }
         Remove-Item $raw -Force -ErrorAction SilentlyContinue
     }
     $script:MutMemo[$rate] = $t
@@ -691,7 +698,13 @@ function B4Identity {
 }
 
 $S = { param($n) Join-Path $root "bench-external\seq\$n" }   # plain-ACGT .seq files
-$F = { param($n) Join-Path $root $n }                        # FASTA files in the repo root
+# FASTA inputs. They live in the repository root on the machine the figures were
+# measured on, and in ./data on a fresh checkout, because that is where
+# scripts/get-data.sh puts what it fetches -- so look in both, root first.
+# scripts/cue/common.sh has the same fallback, for the same reason.
+$F = { param($n)
+        $p = Join-Path $root $n
+        if (Test-Path $p) { $p } else { Join-Path $root "data\$n" } }
 
 # --- the registry -------------------------------------------------------------
 # anchor = a substring that must appear verbatim in doc. Keep it tight enough
@@ -2544,21 +2557,21 @@ $claims = @(
   # The gradient target is derived here, by the release build, from the same
   # reference and seed the document names, so the row re-derives the INPUT as
   # well as the number and a changed `mut` cannot pass unnoticed.
-  @{ id='w5-mut02-penalty-bytes'; tier='b5'; doc='README.md'; unit='B'; tol=0
-     also=@(@{ doc='docs/batch5.md'; anchor='| `mut` 0.2 ‰ | 3,989 | 3,993 | 4 B | **+0.10%** | 928 | 92 |' })
-     anchor='the penalty is **4 bytes against W3110''s 205**'
-     expect=4
-     measure={ MutPenalty '0.2' 'bytes' } }
+  @{ id='w5-mut005-penalty-bytes'; tier='b5'; doc='README.md'; unit='B'; tol=0
+     also=@(@{ doc='docs/batch5.md'; anchor='| `mut` 0.05 ‰ | 2,018 | 2,013 | **−5 B** | **−0.25%** | 232 | 23 |' })
+     anchor='**level 1 is 5 bytes smaller, where W3110'
+     expect=-5
+     measure={ MutPenalty '0.05' 'bytes' } }
 
   @{ id='w5-mut50-penalty-pct'; tier='b5'; doc='README.md'; unit='%'; tol=0.005
-     also=@(@{ doc='docs/batch5.md'; anchor='| `mut` 5.0 ‰ | 43,149 | 43,937 | 788 B | +1.83% | 23,208 | 2,320 |' })
-     anchor='+0.18%, +0.10%, +1.40% and +1.83%'
-     expect=1.83
+     also=@(@{ doc='docs/batch5.md'; anchor='| `mut` 5.0 ‰ | 42,933 | 43,710 | 777 B | +1.81% | 23,208 | 2,320 |' })
+     anchor='−0.25%, +0.74%, +1.21% and +1.81%'
+     expect=1.81
      measure={ MutPenalty '5.0' 'pct' } }
 
   @{ id='w5-w3110-penalty-bytes'; tier='b5'; doc='README.md'; unit='B'; tol=0
      also=@(@{ doc='docs/batch5.md'; anchor='| **W3110** | 1,916 | 2,121 | **205 B** | **+10.70%** | | |' })
-     anchor='the penalty is **4 bytes against W3110''s 205**'
+     anchor='**level 1 is 5 bytes smaller, where W3110'
      expect=205
      measure={ (Size (& $F 'w3110.fa') (& $F 'ecoli.fa') 1) - (Size (& $F 'w3110.fa') (& $F 'ecoli.fa') 3) } }
 

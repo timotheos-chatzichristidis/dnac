@@ -272,9 +272,9 @@ kilobytes, and that is the honest way to read it.
 It is worth saying *why*, because the obvious explanation is wrong. It is not
 that the output is small: a controlled divergence gradient (`dnac mut` at 0.05,
 0.2, 1.0 and 5.0 per-mille against the same reference) costs level 1 only
-+0.18%, +0.10%, +1.40% and +1.83% — and at the point whose output lands nearest
-W3110's, the penalty is **4 bytes against W3110's 205**. Nor is it the smaller
-model set that level 1 drops. Switching level 1's mixer from two experts to
+−0.25%, +0.74%, +1.21% and +1.81% — and at the point whose output lands nearest
+W3110's (2,018 bytes against 1,916), **level 1 is 5 bytes smaller, where W3110
+is 205 bytes larger**. Nor is it the smaller model set that level 1 drops. Switching level 1's mixer from two experts to
 level 3's four, and changing nothing else, gives 1,907 B — the whole gap, and
 then some. On a simulated E. coli individual the same switch recovers the gap
 exactly (12,204 → 12,051, which *is* level 3's size); on the diverged pair only

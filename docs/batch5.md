@@ -22,29 +22,35 @@ settings.
 
 | target | level 3 | level 1 | penalty | | SNPs | indels |
 |---|---:|---:|---:|---:|---:|---:|
-| `mut` 0.05 ‰ | 2,220 | 2,224 | 4 B | **+0.18%** | 232 | 23 |
-| `mut` 0.2 ‰ | 3,989 | 3,993 | 4 B | **+0.10%** | 928 | 92 |
-| `mut` 1.0 ‰ | 12,112 | 12,281 | 169 B | +1.40% | 4,641 | 464 |
-| `mut` 5.0 ‰ | 43,149 | 43,937 | 788 B | +1.83% | 23,208 | 2,320 |
+| `mut` 0.05 ‰ | 2,018 | 2,013 | **−5 B** | **−0.25%** | 232 | 23 |
+| `mut` 0.2 ‰ | 3,767 | 3,795 | 28 B | +0.74% | 928 | 92 |
+| `mut` 1.0 ‰ | 11,928 | 12,072 | 144 B | +1.21% | 4,641 | 464 |
+| `mut` 5.0 ‰ | 42,933 | 43,710 | 777 B | +1.81% | 23,208 | 2,320 |
 | `ecoli_ind` | 12,051 | 12,204 | 153 B | +1.27% | | |
 | **W3110** | 1,916 | 2,121 | **205 B** | **+10.70%** | | |
 | O157:H7 | 362,006 | 362,862 | 856 B | +0.24% | | |
 
+(The four `mut` rows are the re-measurement with a canonical defline; see the
+instrument finding below for why the first attempt's figures were different.)
+
 **W1 held**: the whole simulated gradient stays under 2%, nowhere near 9.84%.
-**W2 held**: the penalty is not a fixed overhead — it runs from 4 B to 788 B,
-a factor of 197, against the "at least 3x" predicted. **W3 held, decisively**:
-the 0.2 ‰ point produces 3,989 B, twice W3110's output, and pays **4 bytes**
-where W3110 pays 205. At a matched output size the simulated penalty is fifty
-times smaller, so **the loss is content, not size**.
+**W2 held**: the penalty is not a fixed overhead — it runs from −5 B to 777 B,
+far past the "at least 3x" predicted, and it even changes sign. **W3 held,
+decisively**: the 0.05 ‰ point produces **2,018 B**, within a hundred bytes of
+W3110's 1,916, and at that matched output size level 1 is **5 bytes smaller**,
+where W3110 pays **205 bytes more**. So **the loss is content, not size** — and
+not merely smaller on the simulated pair but the other way round.
 
 **W4 part held**, 3 of 4. The per-event arithmetic (level 1 pays +3.12 bits per
 indel and saves 0.17 bits per substitution, Batch 4 R1) predicts 4.2, 16.7, 83.5
-and 417.7 B against measured 4, 4, 169 and 788 — ratios 0.96, 0.24, 2.02, 1.89.
-Three are inside the factor of 2.5 the prediction allowed; the 0.2 ‰ point is
-four times outside it, in the direction of costing *less* than the events say it
-should. Two of the four are also nearly twice the predicted value, so the
-arithmetic is the right order and not the right number: at these rates the model
-recovers more from an indel than the isolated per-event screen suggests.
+and 417.7 B against measured −5, 28, 144 and 777 — ratios −1.20, 1.68, 1.72,
+1.86. The three larger rates sit inside the factor of 2.5 the prediction allowed
+and all lean the same way, about 1.75x the predicted cost. The smallest rate has
+the **wrong sign**: with only 23 indels in the whole genome, level 1 comes out
+ahead. So the arithmetic is the right order and not the right number, and below
+about a hundred events it does not even give the right direction — which is
+another way of saying the isolated per-event screen does not predict a whole
+file, the lesson `docs/batch3.md` already had to learn once.
 
 ### W5: which content, then
 

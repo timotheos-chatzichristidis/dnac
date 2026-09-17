@@ -98,3 +98,72 @@ the default now, on the strength of a result found after that rule was written,
 is exactly the move the routine exists to prevent. It is recorded instead as the
 first candidate for the next release, with its price attached, and it is in the
 README where a reader will see it rather than in a drawer.
+
+## P: the release figures, predicted then measured
+
+Plain mode at the release is Batch 3's `cue_M4`, so P1–P3 were stated to the
+byte from `docs/batch3.md` §5 before anything ran. They are the sharpest test in
+this batch of Batch 4's P1 — that the run-time cue *is* the compiled cue — because
+they extrapolate it to files and levels that check never touched.
+
+| | claim | predicted | measured | |
+|---|---|---:|---:|---|
+| **P1** | E. coli `.seq`, level 3 | 1,092,635 ± 6 | **1,092,635** | held, to the byte |
+| **P2** | chr21 `.seq`, level 3 | 7,498,337 ± 8 | **7,498,339** | held (1.4963 bpb, as predicted) |
+| **P3** | chr21 `.seq`, level 1 | 7,540,777 ± 8 | **7,540,777** | held, to the byte |
+| **P4** | chr21 slice `.seq`, level 3 | 2,103,300–2,104,100 | **2,103,089** | **failed**, 211 B past the band — a bigger gain than predicted (−0.054%, not −0.009% to −0.044%) |
+| **P6** | E. coli `-j 8` | within ±0.05% of 1,116,080 | 1,116,227 (+0.013%) | held |
+| **P8** | W3110 `.fa`, levels 3 / 1 | 1,916 / 2,121 | **1,916 / 2,121** | held, to the byte |
+| **P9** | `ecoli_ind` and O157 `.fa` | 12,051 / 12,204 and 362,006 / 362,862 | all four exact | held, to the byte |
+| **P10** | level 4 with the cue | a gain, smaller than 0.05% | E. coli −0.005%, slice −0.054% | **part held**: a gain on both, but the slice is just past the band |
+
+P8 and P9 are worth one more sentence than their table row. Batch 4 measured
+those five numbers against a **primed state**; these rows compressed against the
+**FASTA** reference instead, and got the same bytes. That is the state/FASTA
+interchangeability the adversarial suite asserts, holding across a format change
+and at the release settings.
+
+The three near-misses (P4, P10, and the E. coli `-j` blocks going from neutral to
++0.013%) all point the same way: `CUE_MINLEN=4` makes the cue slightly *more*
+active in plain mode than the extrapolation from `CUE_MINLEN=16` predicted, and
+in block mode that costs a little rather than earning. It is 147 bytes on a
+1.1 MB file, and it is stated here rather than rounded away.
+
+## F: the rewrite, and what giving every cell a row turned up
+
+**F1 held with one consequence worth naming.** `verify-claims.ps1` now compiles
+two builds: `$dnac` is the release (no flags at all — the binary a reader of the
+README would build), and `$v08` is the same source configured as v0.8.0, kept
+only for the rows whose claim *is* a comparison. Every README figure was then
+re-measured twice by independent code — once by `scripts/cue/batch5-readme.sh`
+and once by the registry — and the two agreed everywhere. That is the check
+Batch 4's window-split bug argued for: a figure computed once by one
+implementation is a figure nobody has checked.
+
+**A tenth wrong published figure, and the row that had never existed.** The
+headline table said `| **dnac** (k=22) | 1.546 | 1.883 |` with the note "on the
+FASTA files". 1.546 *is* `chr21.fa`. **1.883 is `ecoli.seq`** — the plain-ACGT
+file. The FASTA figure is 1.8845. The error is small and it is the same shape as
+the nine before it: the cell was published, read many times, and **never
+executed**, because no row covered it while the row above and below it did. Both
+cells now have one, and so does the `gzip -9` row that replaced the `zip` row —
+`zip` was a number this repository could not re-run.
+
+**F3 changed more of the README than expected.** Printing the reference-mode
+tables at the default *and* at `-l 3` is what makes the level-1 loss visible
+without a reader knowing this document exists — but it also moved the
+competitor comparison. Against GeCo3's own reference templates, v0.8.0 was 19.6%
+ahead on the near-identical pair; v0.9.0 is 19.4% ahead at `-l 3` and **3.0%
+ahead at the default**, because on a 2 kB output level 1's two-expert mixer eats
+most of the lead (W5). The "compression-as-classifier" section quoted that 19.6%
+as evidence the idea would not transfer; it is now quoted at both levels, and
+the conclusion is unchanged.
+
+**A claim can now be held in two documents at once (`also`).** The release
+figures live in `docs/batch4.md` as the record of the run that produced them and
+in `README.md` as what the codec does today. Re-measuring them twice would have
+doubled the most expensive tier for no extra information, so a row may carry a
+second (doc, anchor) pair: one measurement, two sentences, and editing either
+sentence by hand turns the claim red. Twenty rows use it. The self-test breaks
+the second anchor exactly as it breaks the first, and was watched doing it —
+`-SelfTest` now reports 4/4 instead of 3/3 on the always-run detectors.

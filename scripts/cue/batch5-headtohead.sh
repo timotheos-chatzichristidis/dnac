@@ -25,6 +25,7 @@ GECO=${GECO:-$ROOT/bench-external/GeCo3-master/src/GeCo3.exe}
 REL=$(build rel $(defines_for rel))
 
 now() { ${PYTHON:-python} -c 'import time; print("%.3f" % time.time())'; }
+el()  { awk -v a="$1" -v b="$2" 'BEGIN{printf "%.1f", b-a}'; }
 
 # dnac <case> <level> <file>: three rounds, minimum, round-tripped once
 dn() {
@@ -91,6 +92,25 @@ gc chr21 9 "$SEQ/chr21.seq"
 # so it is re-run here rather than in a second session.
 echo "== the four levels, chr21_slice.fa (the README's level table)"
 for lv in 1 2 4 3; do dn slice_fa "$lv" "$ROOT/chr21_slice.fa"; done
+
+# The block table quotes encode AND decode wall-clock on the full chr21, which
+# no other section here measures. One round each: at 40 Mbase and five block
+# counts, three rounds would be an hour for numbers that carry no claim row
+# (the SIZES in that table do have rows, and are measured by batch5-readme.sh).
+echo "== blocks on the full chr21, encode and decode (the README's -j table)"
+for j in 1 2 4 8 16; do
+  t0=$(now)
+  "$REL" c "$SEQ/chr21.seq" "$B/j.dnac" 22 3 -j "$j" >/dev/null 2>&1 || { echo "FAIL -j $j" >&2; exit 1; }
+  t1=$(now)
+  "$REL" d "$B/j.dnac" "$B/j.out" >/dev/null 2>&1 || { echo "FAIL decode -j $j" >&2; exit 1; }
+  t2=$(now)
+  cmp -s "$SEQ/chr21.seq" "$B/j.out" || { echo "FAIL lossless -j $j" >&2; exit 1; }
+  awk -v j="$j" -v n="$(wc -c < "$B/j.dnac")" -v e="$(el "$t0" "$t1")" -v d="$(el "$t1" "$t2")"     'BEGIN{ printf "  chr21 -j %-2s %10d B  enc %7.1f s  dec %7.1f s
+", j, n, e, d }'
+  printf 'dnac-j	%s	3	%s	%s
+' "$j" "$(wc -c < "$B/j.dnac")" "$(el "$t0" "$t1")" >> "$B/h2h.tsv"
+  rm -f "$B/j.dnac" "$B/j.out"
+done
 
 echo
 echo "ALL_DONE  ->  $B/h2h.tsv"

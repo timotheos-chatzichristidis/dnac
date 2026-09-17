@@ -7,6 +7,15 @@ stages, a range coder, and an optional reference mode. On the sequences measured
 here it compresses real genomes below **GeCo3**, the current open-source state of
 the art, in both reference-free and reference-based modes.
 
+**v0.9.0 adds one new mechanism, [the cue](#the-cue--the-one-new-mechanism-in-v090).**
+When the match model loses its place — which is what an insertion or a deletion
+does to it — a second match is loaded at a shifted phase and kept permanently in
+the mixer, the way a DJ keeps one ear in the headphones. Losing your place now
+costs 26.9 bits instead of 48.25, and a real human chromosome coded against
+another person's is **6.75% smaller** (19.36% on the sequence they share). The
+idea is not from the compression literature; it is Timotheos's own beatmatching
+method, and [`docs/origin.md`](docs/origin.md) records how it arrived.
+
 No dependencies beyond libc. Builds clean with `-Wall -Wextra` on gcc and clang.
 Every design decision was a falsifiable experiment on real genomes — kept when
 the measurement rewarded it, reverted when it did not. What the measurement
@@ -14,19 +23,116 @@ the measurement rewarded it, reverted when it did not. What the measurement
 [docs/negative-results.md](docs/negative-results.md).
 
 **Read [Where this loses](#where-this-loses) alongside the results below.** It is
-1.47x smaller than `zstd -19` on data with no reference and **635x slower to
+@@METAX@@x smaller than `zstd -19` on data with no reference and **635x slower to
 decompress**; on aligned reads CRAM wins on structure, because an aligner hands it
-each read's position for free; and its reference mode saturates at about
-chromosome scale. Those figures are measured to the same standard as the winning
-ones.
+each read's position for free; its reference mode saturates at about chromosome
+scale; and the new reference-mode default is **9.84% worse than v0.8.0 on the
+tightest bacterial pair**, which one argument fixes. Those figures are measured
+to the same standard as the winning ones.
 
 ## Results (real genomes, bits per ACGT base — lower is better)
+
+All three rows are the same two FASTA files, and bits/base counts only the
+`ACGT` bases (the `N` gaps, headers and newlines are stored losslessly and
+excluded from the denominator).
 
 | method                         | human chr21 | E. coli | notes |
 |--------------------------------|:-----------:|:-------:|-------|
 | naive 2-bit packing            | 2.000       | 2.000   | no modelling |
-| zip / Deflate                  | 2.305       | 2.416   | barely models DNA |
-| **dnac** (k=22)                | **1.546**   | **1.883** | this project, on the FASTA files |
+| gzip `-9`                      | 2.2544      | 2.3769  | barely models DNA |
+| **dnac** (k=22, default)       | **@@CHR21FADEF@@**   | **1.8845** | this project |
+
+*(The E. coli cell read 1.883 until v0.9.0. That is the figure for the plain
+ACGT `.seq` file, in a table whose note said "on the FASTA files" — a cell no
+row covered, found when Batch 5 gave every cell one. The `zip` row went the
+same way: it is `gzip -9` now, because `gzip -9` is a command this repository
+can re-run and a zip made on a Windows desktop in 2026 is not.)*
+
+## The cue — the one new mechanism in v0.9.0
+
+A match model is a needle on an earlier copy of the sequence. A substitution
+makes it wrong about one base. An **insertion or a deletion makes it wrong about
+where it is**, and every base after that is out of phase — which is why one
+extra letter between two human genomes used to cost as much as thirty
+substitutions. Until v0.9.0 the codec handled that the only way it knew: keep
+playing out of time until confidence collapsed, then re-anchor from a fresh hash
+lookup, throwing away the alignment it had.
+
+The cue is the other answer. When a match that was established (four bases or
+more) misses, dnac looks a few positions either side of where the needle is
+(±12) for a place where the last three bases agree, and loads that **shifted
+phase into a second, permanent match**. The cue never takes over. It is an extra
+input to the mixer, which learns online how far to trust it, and it is mixed in
+at full weight only once it has been right twelve bases running. One ear stays
+on the room, one stays in the headphones, and the headphones never come off.
+
+That last sentence is not a metaphor added afterwards. The mechanism is
+Timotheos's DJ beatmatching method translated line for line — including the
+details that carried the gain, which were his and not the obvious ones
+(*permanently* one ear in and one out, never both; the cue heard *through* the
+room). [`docs/origin.md`](docs/origin.md) records how it arose, including that
+the assistant holding the idea filed it under existing frames twice before
+building it. It is not in paq8px, GeCo3 or JARVIS3
+([`docs/cue-prior-art.md`](docs/cue-prior-art.md)).
+
+### What it costs to lose your place, before and after
+
+Ten controlled targets: a 4.6 Mbase E. coli genome with 1,000 events of one kind
+injected, coded against the unmodified genome. Bits per event is
+`(target − control) × 8 / 2000`, the mean of three seeds, at level 3.
+
+| event | v0.8.0 | v0.9.0 | |
+|---|---:|---:|---|
+| substitution | 14.64 bits | 14.75 bits | unchanged, as it must be — the cue is for phase, not for content |
+| **random indel** | 48.25 bits | **26.90 bits** | −44% |
+| **slip inside a homopolymer** | 31.43 bits | **11.60 bits** | −63% |
+
+And it *learns* along the file, which is the part of the idea that was least
+obvious and easiest to test. The same slip costs 14.76 bits in the first half of
+a target and 8.44 in the second — **a fall of 43%** over one genome. Without the
+cue the same measurement falls 9%.
+
+### On two real people, at chromosome scale
+
+CHM13 against GRCh38, whole chromosomes as FASTA, default settings. Windows of
+1 kb are classed **once**, by what v0.8.0 paid for them, and then summed for
+both builds — so the classes cannot move under the comparison.
+
+| | chr21 | chr22 (held out) |
+|---|---:|---:|
+| v0.8.0, level 3 | 586,615 B | 794,330 B |
+| v0.9.0, level 3 | **547,019 B** | **742,177 B** |
+| whole file | **−6.75%** | **−6.57%** |
+| on *shared* sequence (< 0.2 bits/base) | **−19.36%** | **−16.90%** |
+| on diverged sequence (0.2–1.0) | −3.55% | −4.51% |
+| on sequence one of them lacks (≥ 1.0) | −0.26% | −0.23% |
+
+chr22 is the held-out set: nothing was ever tuned on it. The gain lives where
+the mechanism says it should — on sequence the two people share, where a match
+exists to lose the place in — and does not disturb sequence where no match
+exists at all.
+
+On simulated data the effect is larger still (a simulated chr21 individual is
+**−11.52%**), and on bacteria smaller (a simulated E. coli individual −4.21%,
+the diverged O157:H7 pair −0.18%): the cue pays in proportion to how many indels
+there are to recover from.
+
+### What it is not worth
+
+**Without a reference it is worth almost nothing** — −0.11% on chr21, −0.005% on
+E. coli, at level 3. That is a gain on every dataset tried and never a loss, so
+it ships always on; but the mechanism needs a long established match to miss and
+a shifted copy of it to exist, and without a reference that is only the file's
+own repeats, which are rarer and come later
+([`docs/reference-free.md`](docs/reference-free.md)). The README's reference-free
+headline is not where this mechanism lives.
+
+It also costs about 3% of encode time, and two ideas that sounded better than
+the plain version measured as nothing: alternating the two decks
+([`docs/cue-back.md`](docs/cue-back.md)) and one refinement of "hearing the cue
+through the room" ([`docs/cue-room.md`](docs/cue-room.md)). Both are written up
+as failures, because the gain comes from the cue's *permanence* and not from
+those.
 
 ## Head-to-head vs GeCo3 — same machine, same input files
 
@@ -43,19 +149,19 @@ numbers here went stale once already.
 
 | dataset | tool | bits/base | compress | RAM |
 |---------|------|:---------:|---------:|----:|
-| human chr21 (40,088,619 bases) | **dnac `-l 3`** (default) | **1.4979** | 88.7 s | 1.24 GB |
-| | **dnac `-l 2`** | **1.5039** | 60.0 s | |
-| | **dnac `-l 1`** | **1.5065** | **46.6 s** | |
-| | GeCo3 `-l 14` | 1.5092 | 174.1 s | |
-| | GeCo3 `-l 9` | 1.5177 | 75.1 s | |
+| human chr21 (40,088,619 bases) | **dnac `-l 3`** (default) | **@@C21L3@@** | @@C21L3T@@ s | 1.24 GB |
+| | **dnac `-l 2`** | **@@C21L2@@** | @@C21L2T@@ s | |
+| | **dnac `-l 1`** | **@@C21L1@@** | **@@C21L1T@@ s** | |
+| | GeCo3 `-l 14` | 1.5092 | @@G21L14T@@ s | |
+| | GeCo3 `-l 9` | 1.5177 | @@G21L9T@@ s | |
 | | GeCo3 `-l 16` | *did not finish* | — | 8.4 GB, thrashed |
-| chr21 slice (9,836,065 bases) | **dnac `-l 3`** | **1.7114** | 20.8 s | ~0.4 GB |
-| | **dnac `-l 1`** | 1.7178 | **9.7 s** | |
-| | GeCo3 `-l 16` | 1.7163 | 224.8 s | 8.4 GB |
-| | GeCo3 `-l 14` | 1.7195 | 42.6 s | |
-| E. coli (4,641,652 bases) | **dnac `-l 3`** | **1.8833** | **9.4 s** | ~0.6 GB |
-| | GeCo3 `-l 9` | 1.8903 | 11.4 s | |
-| | GeCo3 `-l 16` | 1.8913 | 130.6 s | 8.4 GB |
+| chr21 slice (9,836,065 bases) | **dnac `-l 3`** | **1.7105** | @@SLL3T@@ s | ~0.4 GB |
+| | **dnac `-l 1`** | 1.7168 | **@@SLL1T@@ s** | |
+| | GeCo3 `-l 16` | 1.7163 | @@GSL16T@@ s | 8.4 GB |
+| | GeCo3 `-l 14` | 1.7195 | @@GSL14T@@ s | |
+| E. coli (4,641,652 bases) | **dnac `-l 3`** | **1.8832** | **@@ECL3T@@ s** | ~0.6 GB |
+| | GeCo3 `-l 9` | 1.8903 | @@GEL9T@@ s | |
+| | GeCo3 `-l 16` | 1.8913 | @@GEL16T@@ s | 8.4 GB |
 
 **On all three datasets dnac has a setting that is at once faster and smaller
 than every GeCo3 setting tested.** On E. coli and the chr21 slice that setting is
@@ -71,10 +177,10 @@ swapping before being stopped. The 10 MB chr21 slice exists in the table so that
 `benchmark/run_ref.sh` (`-rm 20:500:1:35:0.95/3:100:0.95 -rm 13:200:... -lr 0.03
 -hs 64`, and the hybrid variant that adds target models):
 
-| pair | dnac | GeCo3 ref models | GeCo3 hybrid |
-|------|-----:|-----------------:|-------------:|
-| W3110 vs MG1655 (near-identical strains) | **1,060 B** | 1,404 B | 1,319 B |
-| O157:H7 vs MG1655 (diverged strains) | **361,417 B** | 431,652 B | 365,401 B |
+| pair | dnac (default, `-l 1`) | dnac `-l 3` | GeCo3 ref models | GeCo3 hybrid |
+|------|-----:|-----:|-----------------:|-------------:|
+| W3110 vs MG1655 (near-identical strains) | 1,280 B | **1,063 B** | 1,404 B | 1,319 B |
+| O157:H7 vs MG1655 (diverged strains) | 361,611 B | **360,752 B** | 431,652 B | 365,401 B |
 
 (Stored file sizes on the plain-ACGT `.seq` files, as everywhere in this
 section. The same pairs measured on the original FASTA files cost a little more
@@ -89,9 +195,13 @@ section. The same pairs measured on the original FASTA files cost a little more
   published before v0.3.0: they compared our *maximum* level against GeCo3's
   *fast* one, and carried a chr21 time (194 s) measured before the `-O3`,
   prefetch and stretch-table work. The honest comparison is the table above.
-- **Reference-based it is now ahead on both pairs**: 1% better than their best
-  configuration on the diverged one, and 20% better on the near-identical one
-  (1,060 bytes against 1,319 for a whole 4.6 Mbp genome).
+- **Reference-based it is ahead on both pairs, at both levels** — but by how
+  much depends on the level, and v0.9.0's default is the fast one. At `-l 3` it
+  is 1.3% better than their best configuration on the diverged pair and 19.4%
+  better on the near-identical one (1,063 bytes against 1,319 for a whole 4.6 Mbp
+  genome). At the default those margins are 1.0% and **3.0%**: on a two-kilobyte
+  output, what level 1's two-expert mixer gives up eats most of the lead. See
+  [Where this loses](#the-new-default-is-984-worse-on-the-tightest-bacterial-pair).
 - Note that GeCo3's heaviest level is *worse* than its own level 9 on E. coli
   (1.8913 vs 1.8903, 20× the time): more models is not automatically better —
   the same lesson our own rejected experiments taught.
@@ -135,6 +245,54 @@ meta` re-runs it. The reference-scale table is round-tripped but needs a
 whole-genome priming pass (2 h 11 m, a 3.88 GB state file), so it is recorded with
 its method rather than wired into the registry. The CRAM figure is arithmetic and
 is labelled as such.
+
+### The new default is 9.84% worse on the tightest bacterial pair
+
+Since v0.9.0 `dnac cr` picks level 1, because with a reference that is 2.1x
+faster than v0.8.0's default *and* 4% smaller on a real human pair. On the one
+input where level 1 has nothing to win back, it is simply worse:
+
+| pair, FASTA | v0.8.0 default (`-l 3`) | v0.9.0 default (`-l 1`) | v0.9.0 `-l 3` |
+|---|---:|---:|---:|
+| **W3110 vs MG1655** (near-identical) | 1,931 B | **2,121 B — +9.84%** | **1,916 B** |
+| O157:H7 vs MG1655 (diverged) | 362,666 B | 362,862 B — +0.05% | 362,006 B |
+
+**The remedy is one argument** (`dnac cr target.fa out.dnac ref.fa 22 3`), and at
+level 3 v0.9.0 is smaller than v0.8.0 on both pairs. The loss is also 190 bytes:
+the percentage is large because a whole 4.6 Mbase genome stores in two
+kilobytes, and that is the honest way to read it.
+
+It is worth saying *why*, because the obvious explanation is wrong. It is not
+that the output is small: a controlled divergence gradient (`dnac mut` at 0.05,
+0.2, 1.0 and 5.0 per-mille against the same reference) costs level 1 only
++0.18%, +0.10%, +1.40% and +1.83% — and at the point whose output lands nearest
+W3110's, the penalty is **4 bytes against W3110's 205**. Nor is it the smaller
+model set that level 1 drops. Switching level 1's mixer from two experts to
+level 3's four, and changing nothing else, gives 1,907 B — the whole gap, and
+then some. On a simulated E. coli individual the same switch recovers the gap
+exactly (12,204 → 12,051, which *is* level 3's size); on the diverged pair only
+a fifth of it. **On near-identical pairs the cost of level 1 is the mixer's
+context, not its models.** That fix was priced on the human pair and rejected by
+a rule fixed in advance: +21.1% time for −0.52% size ([`docs/batch3.md`](docs/batch3.md)).
+It is the first candidate for the next release, and it is recorded here rather
+than in a drawer.
+
+### The lead over the best competitor is 1.57x at the default, not 1.62x
+
+On the real human pair, plain ACGT, against the best of zstd `--patch-from`,
+HRCM and GeCo3's own reference templates, v0.9.0 is the smallest — but how far
+ahead depends on the level, and the default is the fast one:
+
+| | best competitor | v0.9.0 `-l 3` | v0.9.0 default (`-l 1`) |
+|---|---:|---:|---:|
+| plain ACGT | 877,373 B (GeCo3 hybrid, unverified) | 541,353 B — **1.62x** | 557,497 B — **1.57x** |
+| FASTA | 1,438,137 B (HRCM) | 547,019 B — **2.63x** | 563,031 B — **2.55x** |
+
+Level 1 buys 2.1x the speed and gives up about 3% of the size to do it, so the
+margin over the field narrows at exactly the setting most people will run.
+GeCo3's sizes could not be verified here — its decoder fails on every input
+tried — and HRCM drops a trailing empty line, so both are read generously in
+their own favour ([`docs/competitors.md`](docs/competitors.md)).
 
 ### Against the general-purpose compressors, on data with no reference
 
@@ -211,26 +369,39 @@ this codec would have been tested for: on short, damaged reads it reaches 0.968
 AUPRC where Kraken2 reaches 0.184.
 
 Our own numbers say the idea would not transfer here anyway. Against GeCo3's
-reference templates we are 19.6% ahead on the near-identical pair and **1.1% ahead
-on the diverged pair** — and the diverged case is the one classification needs help
-with. Separation between a right and a wrong reference is set by biology, not by
-the last 1% of modelling: a better compressor is not a better classifier.
+reference templates we are 19.4% ahead on the near-identical pair and **1.3%
+ahead on the diverged pair** at `-l 3` (3.0% and 1.0% at the default) — and the
+diverged case is the one classification needs help with. The cue did not change
+that: it earns where a match exists to lose the place in, which is precisely the
+near-identical case that was already easy. Separation between a right and a wrong
+reference is set by biology, not by the last 1% of modelling: a better
+compressor is not a better classifier.
 
 ## Compression levels
 
 Most of the codec's time goes into models that earn very little. Measured by
 ablation on the 10 MB chr21 slice, inverted-repeat training costs **13%** of the
 run and the substitution-tolerant context models cost **19%**, while together
-they are worth 0.289% of compressed size. Four levels expose that trade, listed
+they are worth 0.291% of compressed size. Four levels expose that trade, listed
 here fastest first — **the numbers are model-set identifiers, not a quality
 ladder**, and level 4 is deliberately not "better than 3":
 
 | level | models | time | bits/base | vs max |
 |:-----:|--------|-----:|----------:|--------|
-| 1 `fast` | 6 orders, 2 mixing experts, no IR, no tolerant models | 10.4 s | 1.7190 | **2.1× faster**, +0.375% size |
-| 2 `balanced` | all orders, 4 experts, no IR, no tolerant models | 14.9 s | 1.7175 | 1.5× faster, +0.289% |
-| 4 `light` | 8 orders, 4 experts, IR, no tolerant models | 16.2 s | 1.7146 | 1.3× faster, +0.121%, **−31% RAM** |
-| 3 `max` (default) | everything | 21.7 s | 1.7126 | — |
+| 1 `fast` | 6 orders, 2 mixing experts, no IR, no tolerant models | @@L1T@@ s | 1.7180 | @@L1X@@× faster, +0.369% size |
+| 2 `balanced` | all orders, 4 experts, no IR, no tolerant models | @@L2T@@ s | 1.7166 | @@L2X@@× faster, +0.292% |
+| 4 `light` | 8 orders, 4 experts, IR, no tolerant models | @@L4T@@ s | 1.7137 | @@L4X@@× faster, +0.121%, **−31% RAM** |
+| 3 `max` (default without a reference) | everything | @@L3T@@ s | 1.7116 | — |
+
+**Since v0.9.0 the default is per mode: level 3 without a reference, level 1
+with one.** That is not a preference, it is where the measurement pointed and
+the two modes pointed in opposite directions. Reference-free, level 1 costs
++0.46% against level 3 and the cue does not win it back — against a 0.85% margin
+over GeCo3, that is most of the margin, so level 3 stays. With a reference the
+cue does its work at level 1 and keeps it: the pair is 2.1x faster than v0.8.0's
+default *and* 4.02% smaller, which is a setting that is better on both axes at
+once ([`docs/reference-free.md`](docs/reference-free.md)). Where that default
+loses is stated in [Where this loses](#where-this-loses), not buried here.
 
 All four timed back to back in one session, minimum of three runs. The level
 byte travels in the header, so `4` had to be a new value rather than a redefined
@@ -272,7 +443,12 @@ identical input for byte-identical output. The size half of the claim, which is
 deterministic, has a row in `verify-claims.ps1`; the timings deliberately do not,
 for the same reason no other wall-clock figure here does.
 
-### Which of the 15 predictors earns what
+### Which of the predictors earns what
+
+*(This table is v0.8.0's model set — 15 mixer inputs. v0.9.0 adds the cue, a
+16th, which is not in it: the cue was measured as a mechanism, on the controlled
+targets and on real pairs, rather than by leave-one-out. Everything else here
+is unchanged by it.)*
 
 `./ablate.ps1` answers the question the round-trip suites structurally cannot:
 what any individual model is worth. It zeroes one input inside the mixer — the
@@ -317,6 +493,15 @@ Two results worth noting, both the same lesson the rest of this project keeps
 teaching: **six order models compress better than eight**, and **two mixing
 experts beat four**, at these sizes. More models is not automatically better.
 
+That second one flips with a reference, which is worth knowing before anyone
+generalises it. On a near-identical pair at level 1, giving the mixer four
+experts instead of two recovers the *whole* difference between level 1 and level
+3 (W3110 2,121 → 1,907 B; a simulated E. coli individual 12,204 → 12,051 B,
+exactly level 3's size) — while on the diverged pair it recovers a fifth, and on
+a real human pair it was priced at +21% time for −0.52% size and turned down.
+The mixer's context, not the model set, is what level 1 gives up where the
+reference is very close.
+
 **The ordering is a trade, not a guarantee.** Level 3 is the smallest on the
 real genomes measured above, but on highly repetitive or synthetic sequence the
 extra models can cost more than they earn: on a 1 Mbase sample from `dnac gen`,
@@ -334,30 +519,30 @@ cannot see blocks 0..j-1 while other cores are still producing them.
 
 | `-j` | bytes (E. coli, 4.6 Mbp) | vs one block |
 |---:|---:|---:|
-| 1 (default) | 1,092,692 | — |
-| 2 | 1,100,603 | +0.72% |
-| 4 | 1,108,086 | +1.41% |
-| 8 | 1,116,080 | +2.14% |
+| 1 (default) | 1,092,635 | — |
+| 2 | 1,100,595 | +0.73% |
+| 4 | 1,108,139 | +1.42% |
+| 8 | 1,116,227 | +2.16% |
 
 What it buys, measured on the full chr21 (40 Mbp) on an 8-core machine:
 
 | `-j` | bytes | encode | decode |
 |---:|---:|---:|---:|
-| 1 | 7,506,264 | 112.6 s | 83.5 s |
-| 2 | 7,695,177 | 50.8 s | 52.8 s |
-| 4 | 7,740,168 | 32.8 s | 33.1 s |
-| 8 | 7,836,217 | **22.2 s** | **22.0 s** |
-| 16 | 7,914,651 | 21.7 s | 23.1 s |
+| 1 | 7,498,339 | @@J1ET@@ s | @@J1DT@@ s |
+| 2 | 7,687,850 | @@J2ET@@ s | @@J2DT@@ s |
+| 4 | 7,732,528 | @@J4ET@@ s | @@J4DT@@ s |
+| 8 | 7,828,539 | **@@J8ET@@ s** | **@@J8DT@@ s** |
+| 16 | 7,907,062 | @@J16ET@@ s | @@J16DT@@ s |
 
 5.1× on encode and 3.8× on decode at `-j 8`; `-j 16` buys nothing on 8 cores and
 costs another percent, so more blocks than cores is only ever a loss. Both sides
 speed up, because a block is independent in both directions.
 
-On human chr21 the split costs more than on E. coli — +2.52% at N=2 and +4.40% at N=8 —
+On human chr21 the split costs more than on E. coli — +2.53% at N=2 and +4.40% at N=8 —
 because long-range repeats (Alu, LINE, satellite) are where its compression comes
 from, and a block cannot reach the ones behind it. That is why this is **opt-in
-and will stay opt-in**: at 8 blocks chr21 goes to 1.5637 bpb, behind GeCo3's
-1.5092, and the whole margin this project has is 0.7%. `-j 1` is the default and
+and will stay opt-in**: at 8 blocks chr21 goes to 1.5622 bpb, behind GeCo3's
+1.5092, and the whole margin this project has is 0.85%. `-j 1` is the default and
 is byte-for-byte identical to a build with no block support at all.
 
 What it costs in memory depends on the size of the file, and the honest answer
@@ -389,19 +574,29 @@ is 1.25 GB for chr21 — ironically the mode where a block boundary is cheapest
 
 Two genomes of a species differ by ~0.1%, so a genome stored *against a
 reference* costs a fraction of one stored alone. Same models, same code — the
-reference is simply fed through them first (see below).
+reference is simply fed through them first (see below). **This is the mode the
+cue was built for, and since v0.9.0 it defaults to level 1**, which is about
+twice as fast as v0.8.0's default and still smaller on everything but the
+tightest bacterial pair.
 
-| target | reference | alone | with reference | smaller by |
-|--------|-----------|:-----:|:--------------:|:----------:|
-| E. coli W3110 (real strain) | E. coli MG1655 | 1.880 | **0.0033** | **565×** — 1,931 bytes for a 4.6 Mbp genome |
-| chr21 of a simulated individual (0.1% SNPs + indels) | chr21 | 1.504 | **0.0227** | **66×** — 7.54 MB → 111 KB |
-| E. coli, simulated individual | E. coli MG1655 | 1.885 | **0.0217** | 87× |
-| E. coli O157:H7 (real, diverged strain) | E. coli MG1655 | 1.812 | **0.519** | 3.5× |
-| E. coli MG1655 | *human chr21* (unrelated!) | 1.885 | 1.889 | −0.2% (degrades gracefully) |
+Bits per base of the target, at the default and at `-l 3`:
+
+| target | reference | alone | default (`-l 1`) | `-l 3` | smaller by |
+|--------|-----------|:-----:|:-----:|:-----:|:----------:|
+| **CHM13 chr21 (a real second person)** | GRCh38 chr21 | 1.390 | **0.0999** | **0.0971** | 14.3× — 547,019 bytes for a chromosome |
+| E. coli W3110 (real strain) | E. coli MG1655 | 1.880 | 0.0037 | **0.0033** | **570×** — 1,916 bytes for a 4.6 Mbp genome |
+| chr21 of a simulated individual (0.1% SNPs + indels) | chr21 | @@CIALONE@@ | @@CIL1@@ | **@@CIL3@@** | @@CIX@@× |
+| E. coli, simulated individual | E. coli MG1655 | 1.886 | 0.0210 | **0.0208** | 91× |
+| E. coli O157:H7 (real, diverged strain) | E. coli MG1655 | 1.812 | 0.5189 | **0.5176** | 3.5× |
+| E. coli MG1655 | *human chr21* (unrelated!) | 1.885 | @@UNRELL1@@ | @@UNRELL3@@ | @@UNRELX@@ (degrades gracefully) |
 
 The gain tracks how related the two sequences are, exactly as it should: nearly
 identical strains cost almost nothing, a diverged strain of the same species
 costs a third, an unrelated reference costs nothing extra and breaks nothing.
+The first row is the one that matters most and is the newest: it is not a
+simulation but two real human assemblies, and it is the held-out kind of test —
+[the cue section](#the-cue--the-one-new-mechanism-in-v090) has the chromosome 22
+replication of it.
 
 ### Pay for the reference once (`prime`)
 
@@ -452,6 +647,8 @@ only where the committee was wrong.
    │  match model, 13-base anchor│   • LZ-style "seen this stretch before?"
    │  match model, 16-base anchor│   • the same, but only on a surer anchor
    │  reverse-complement match   │   • "seen its reverse-complement before?"
+   │  the cue (a shifted phase)  │   • "the match lost its place — here is the
+   │                             │     same copy, a few bases over" (v0.9.0)
    └────────────┬───────────────┘
         ┌────────▼────────┐   MIXER (logistic): blends predictors in the logit
         │   logistic mix  │   domain, weights learned online per match state —
@@ -574,6 +771,8 @@ The components, bottom up:
           reverse-complement strand (the single biggest win of that round)
 1.546  + a multiplying binary coder at 14-bit probability resolution, which
           matters most where the model is nearly always right (see below)
+@@CHR21FA@@  + the cue (v0.9.0) — worth almost nothing here, and a great deal
+          with a reference: see the section above
 ─────
 ~1.57–1.60  academic SOTA (GeCo3 / XM)
 
@@ -700,7 +899,7 @@ Try a **real** genome: download a `.fa` from NCBI/Ensembl and
   homopolymer-dense pairs, target = reference, the default levels, the stream
   families of streams and states) and the stored v0.8.0 streams in `tests/v080`,
   for 229.
-- `ablate.ps1` — what each of the 15 prediction inputs is worth
+- `ablate.ps1` — what each of v0.8.0's 15 prediction inputs is worth
   (`-Mode loo|diag|mask`). Drives `-DDNAC_ABLATE` / `-DDNAC_DIAG` in `dnac.c`:
   the first zeroes an input inside the mixer without touching table geometry, so
   the answer is the value of the *model* rather than of the memory it held; the
@@ -716,6 +915,21 @@ Try a **real** genome: download a `.fa` from NCBI/Ensembl and
 - `Makefile`, `scripts/*.sh` — the same build, losslessness and benchmark paths
   for Linux/macOS/WSL, plus `scripts/get-data.sh` which fetches the exact
   sequences the tables above were measured on, by accession.
+- `docs/` — the record of v0.9.0, one document per pre-registered experiment,
+  each written *before* the run and scored after: `origin.md` (where the cue came
+  from, and the two times it was dismissed), `cue.md`, `cue-room.md`,
+  `cue-back.md` (two of his refinements, measured as failures and kept),
+  `real-human.md`, `remaining.md`, `competitors.md`, `speed.md`,
+  `reference-free.md`, `model-ablation.md`, and `batch1.md` … `batch5.md` for the
+  five batches that turned those experiments into a release. `v0.9.0-plan.md`
+  holds the five-pass routine every claim had to survive. **The figures in the
+  older documents are the parameters they were measured at
+  (`CUE_MINLEN=16`); the release re-measured all of them at 4, and that
+  re-measurement is `batch4.md`.** Nothing was edited to match.
+- `scripts/cue/*.sh` — the runnable form of those experiments: every label
+  compiles the source that measured it (`4932ffe`), so a record can be
+  re-derived years later without trusting that today's `dnac.c` is the same
+  codec.
 - `docs/negative-results.md` — six ideas that were built or measured and then
   rejected by the measurement: the reference-mode advantage does **not** transfer
   outside DNA; block boundaries cost 2.5% to enter and **+86%** on high-coverage
@@ -762,6 +976,25 @@ magic to `DNCU` — plain streams are unaffected by that change, so `DNCC` staye
 put. Older archives are refused with an explicit message
 rather than misread. Reference mode additionally requires the exact same
 reference, which it verifies by fingerprint and refuses when wrong.
+
+**v0.9.0 turned the fourth letter into a family, and v0.8.0's archives still
+decode.** `DNCC`/`DNCU`/`DNCP` (plain / reference / blocks) are v0.8.0's streams
+and are read byte-for-byte by this release; `DNCE`/`DNCV`/`DNCQ` are the same
+three with the cue; and a **lower-case** letter marks an archive written by an
+experimental build — one that moved a cue parameter or a level-1 model knob —
+which a release build refuses, and which refuses a release build's files. The cue
+is therefore a *run-time* switch read out of the header, not a compile-time one,
+and seven v0.8.0 streams are committed in `tests/v080/` so every build is
+checked against files it did not write. Primed states carry the same
+distinction (`DNACST02` without the cue, `DNACST03` with), because priming runs
+the cue and moves the match anchors: a state and a stream from different
+families are refused, like a level mismatch.
+
+That design exists because the alternative was measured and it was silent. While
+the cue was a compile flag, a `-DDNAC_CUE` archive carried v0.8.0's magic, and
+the build without the flag decoded it to **wrong bytes at exit 0** — the same
+shape as the v0.3.0 geometry bug, and it would have shipped with a v0.9.0 that
+only flipped a default ([`docs/batch4.md`](docs/batch4.md)).
 
 Since v0.3.0 an archive is **no longer tied to the build that wrote it**. The
 hash-table geometry used to be recomputed by the decoder from the compile-time

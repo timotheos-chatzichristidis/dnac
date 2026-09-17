@@ -41,7 +41,7 @@ PIN=4932ffe
 # tree. `rel` is the release (the cue on, CUE_MINLEN 4, level 1 by default with
 # a reference); `v08` is the same source with the cue off and v0.8.0's default
 # level, byte-identical to the v0.8.0 tag (docs/batch4-prediction.md P2).
-TREE_LABELS="rel v08 exp"          # exp: an experimental build, for its refusals
+TREE_LABELS="rel v08 exp rel_x4"   # exp/rel_x4: experimental builds (Batch 5 W5)
 build() { # build <label> [defines...]
   lbl=$1; shift
   exe=$WORK/dnac_$lbl.exe
@@ -59,6 +59,7 @@ defines_for() { # the flags each label in the docs was measured with
     rel)        ;;                                   # working tree, see TREE_LABELS
     v08)        echo "-DCUE_DEFAULT=0 -DREF_LEVEL_DEFAULT=3" ;;
     exp)        echo "-DCUE_MINLEN=16" ;;
+    rel_x4)     echo "-DL1_NMIX=4" ;;   # Batch 5 W5: four mixer experts at level 1
     base)       ;;
     cue)        echo "-DDNAC_CUE" ;;
     noroom)     echo "-DDNAC_CUE -DCUE_ROOM=0" ;;

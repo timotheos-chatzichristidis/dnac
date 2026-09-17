@@ -9,8 +9,8 @@ authors:
 repository-code: "https://github.com/timotheos-chatzichristidis/dnac"
 url: "https://github.com/timotheos-chatzichristidis/dnac"
 license: GPL-3.0-or-later
-version: 0.8.0
-date-released: "2026-09-07"
+version: 0.9.0
+date-released: "2026-09-17"
 abstract: >-
   A single-file lossless DNA compressor in C. It codes each base as two binary
   decisions and predicts them with an ensemble of finite-context models,
@@ -18,13 +18,21 @@ abstract: >-
   logistic mixer and two chained SSE/APM stages, driven by a range coder. An
   optional reference mode primes the whole model on a related sequence before
   coding the target, and that primed state can be serialised and reused.
+  Version 0.9.0 adds the cue: when a match model loses its place, which is what
+  an insertion or a deletion does to it, a second match is loaded at a shifted
+  phase and kept permanently as a mixer input rather than replacing the first.
+  An indel then costs 26.9 bits instead of 48.25, and a human chromosome coded
+  against another person's assembly is 6.75% smaller (19.36% on the sequence
+  the two share).
   On the sequences benchmarked it compresses below GeCo3 in both reference-free
-  and reference-based modes. All results are verified by SHA-256 round-trip.
+  and reference-based modes. All results are verified by SHA-256 round-trip and
+  re-derived by a registry of executable claims.
 keywords:
   - DNA compression
   - lossless compression
   - context mixing
   - arithmetic coding
   - referential compression
+  - match models
   - bioinformatics
   - genomics

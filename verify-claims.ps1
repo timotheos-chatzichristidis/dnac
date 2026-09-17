@@ -76,19 +76,26 @@ $ErrorActionPreference = 'Stop'
 $root = $PSScriptRoot
 $work = Join-Path $root 'bench-external\work'
 New-Item -ItemType Directory -Force $work | Out-Null
-# The rows that defend README.md defend v0.8.0's figures, and README.md describes
-# v0.8.0 until Batch 5 rewrites it. Since v0.9.0 the unflagged build has the cue
-# on and picks level 1 in reference mode, so those rows run dnac.c built as
-# v0.8.0 instead: the cue off, level 3 by default everywhere. That build is
-# byte-identical to the v0.8.0 tag's (docs/batch4-prediction.md P2, checked by
-# scripts/cue/batch4.sh), with build.ps1's flags, so every figure it re-derives
-# is the figure the README printed. It is compiled from THIS checkout, so a
-# change to dnac.c still reaches every row.
-$dnac = Join-Path $work 'dnac_v08.exe'
+# Since Batch 5, README.md describes v0.9.0, so the rows that defend it run the
+# RELEASE build: dnac.c with no flags at all, the cue on, level 3 without a
+# reference and level 1 with one. That is the binary a reader of the README
+# would build, which is the only build whose figures the README may print.
+#
+# $v08 is the same source configured as v0.8.0 (the cue off, v0.8.0's default
+# level everywhere). It is byte-identical to the v0.8.0 tag
+# (docs/batch4-prediction.md P2, checked by scripts/cue/batch4.sh), and it stays
+# for the handful of rows whose claim IS a comparison with v0.8.0 -- "-4.02%
+# against v0.8.0's default" cannot be re-derived by one build alone.
+#
+# Both are compiled from THIS checkout, so a change to dnac.c reaches every row.
+$dnac = Join-Path $work 'dnac_rel.exe'
+$v08  = Join-Path $work 'dnac_v08.exe'
 if (-not $AnchorsOnly) {
     $cc  = if ($env:DNAC_CC) { $env:DNAC_CC } else { 'gcc' }
-    $log = & $cc -O3 -Wall -o $dnac (Join-Path $root 'dnac.c') -lm '-DCUE_DEFAULT=0' '-DREF_LEVEL_DEFAULT=3' 2>&1
-    if ($LASTEXITCODE -ne 0 -or -not (Test-Path $dnac)) { throw "$cc failed building the v0.8.0-configured dnac (set DNAC_CC):`n$log" }
+    $log = & $cc -O3 -Wall -o $dnac (Join-Path $root 'dnac.c') -lm 2>&1
+    if ($LASTEXITCODE -ne 0 -or -not (Test-Path $dnac)) { throw "$cc failed building the release dnac (set DNAC_CC):`n$log" }
+    $log = & $cc -O3 -Wall -o $v08 (Join-Path $root 'dnac.c') -lm '-DCUE_DEFAULT=0' '-DREF_LEVEL_DEFAULT=3' 2>&1
+    if ($LASTEXITCODE -ne 0 -or -not (Test-Path $v08)) { throw "$cc failed building the v0.8.0-configured dnac (set DNAC_CC):`n$log" }
 }
 
 # --- measurement helpers ------------------------------------------------------
@@ -224,10 +231,14 @@ $PARAMH = "$PARAMR -tm 4:1:0:1:0.9/0:0:0 -tm 17:100:1:10:0.95/2:20:0.95"
 
 # Priming pass -> size of the saved model memory, in MB (decimal, as the README
 # writes it). Deterministic, unlike a timing, which is why it belongs here.
-function State($ref) {
+function State($ref, $level) {
     $st = Join-Path $work 'vc.state'
     Remove-Item $st -Force -ErrorAction SilentlyContinue
-    & $dnac prime $ref $st 22 | Out-Null
+    # No level means "whatever the CLI picks", which is the figure a reader gets
+    # and which v0.9.0 moved from 3 to 1 for `prime`. Rows that want the other
+    # one say so.
+    if ($level) { & $dnac prime $ref $st 22 $level | Out-Null }
+    else        { & $dnac prime $ref $st 22        | Out-Null }
     if ($LASTEXITCODE -ne 0 -or -not (Test-Path $st)) { throw "prime failed: $ref" }
     $mb = [math]::Round((Get-Item $st).Length / 1e6, 0)
     Remove-Item $st -Force -ErrorAction SilentlyContinue
@@ -279,6 +290,9 @@ function CueDefs($label) {
         'rel'       { @() }                                   # working tree: see $TreeLabels
         'v08'       { @('-DCUE_DEFAULT=0','-DREF_LEVEL_DEFAULT=3') }
         'exp'       { @('-DCUE_MINLEN=16') }
+        # Batch 5's W5: the release with four mixer experts at level 1, which is
+        # what the whole level-1 penalty on a near-identical pair turns out to be.
+        'rel_x4'    { @('-DL1_NMIX=4') }
         'base'      { @() }
         'cue'       { @('-DDNAC_CUE') }
         'noroom'    { @('-DDNAC_CUE','-DCUE_ROOM=0') }
@@ -322,7 +336,7 @@ $script:PinnedRev = '4932ffe'
 # ...except these two, which are v0.9.0's own builds from the working tree: `rel`
 # the release, `v08` the cue switched off (byte-identical to the v0.8.0 tag).
 # scripts/cue/common.sh has the same list in TREE_LABELS.
-$script:TreeLabels = @('rel', 'v08', 'exp')   # exp: an experimental build, for its refusals
+$script:TreeLabels = @('rel', 'v08', 'exp', 'rel_x4')   # exp/rel_x4: experimental builds
 function PinnedFile($path) {
     New-Item -ItemType Directory -Force $cueWork | Out-Null
     $dst = Join-Path $cueWork ("pin_$($script:PinnedRev)_" + ($path -replace '[\\/]', '_'))
@@ -403,6 +417,46 @@ function CuePerEvent($label, $kind, $level) {
 }
 
 function CuePct($a, $b) { [math]::Round(100.0 * ($b / $a - 1.0), 2) }   # b against a, per cent
+
+# --- Batch 5 (docs/batch5.md) -------------------------------------------------
+# The controlled divergence gradient that settled the reference-mode default.
+# The target is DERIVED here rather than stored: `dnac mut` at <rate> per-mille,
+# seed 42, on MG1655 -- so these rows re-derive the input as well as the number,
+# and a change to `mut` cannot slip past them. Deterministic, so it is cached.
+$script:MutMemo = @{}
+function MutTarget($rate) {
+    if ($script:MutMemo.ContainsKey($rate)) { return $script:MutMemo[$rate] }
+    $t = Join-Path $work "mut_$rate.fa"
+    if (-not (Test-Path $t) -or (Get-Item $t).Length -eq 0) {
+        & $dnac mut (& $F 'ecoli.fa') $t $rate 42 | Out-Null
+        if ($LASTEXITCODE -ne 0 -or -not (Test-Path $t)) { throw "dnac mut failed at $rate per-mille" }
+    }
+    $script:MutMemo[$rate] = $t
+    $t
+}
+
+# What level 1 costs against level 3 on that target: bytes, or per cent.
+function MutPenalty($rate, $what) {
+    $t  = MutTarget $rate
+    $l3 = Size $t (& $F 'ecoli.fa') 3
+    $l1 = Size $t (& $F 'ecoli.fa') 1
+    if ($what -eq 'pct') { CuePct $l3 $l1 } else { $l1 - $l3 }
+}
+
+# The level the CLI picks when the user names none -- read back out of the
+# header, which is the only place that cannot be talked into agreeing. Byte 5 is
+# the level (magic, k, level, hashbits, mhb, length), in both modes.
+function DefaultLevel($ref) {
+    $in  = Join-Path $work 'lvl.fa'
+    $out = Join-Path $work 'lvl.dnac'
+    Remove-Item $out -Force -ErrorAction SilentlyContinue
+    if (-not (Test-Path $in)) { & $dnac gen $in 200000 7 | Out-Null }
+    if ($ref) { & $dnac cr $in $out $ref 22 | Out-Null } else { & $dnac c $in $out 22 | Out-Null }
+    if ($LASTEXITCODE -ne 0 -or -not (Test-Path $out)) { throw "compress failed while reading the default level" }
+    $b = [System.IO.File]::ReadAllBytes($out)[5]
+    Remove-Item $out -Force -ErrorAction SilentlyContinue
+    [int]$b
+}
 
 # The bit-cost map, bucketed into 1,000-base windows, for the real human pair.
 # -map reads probabilities the coder computed anyway and touches no model state,
@@ -670,23 +724,23 @@ $claims = @(
      measure={ Ext 'gzip' (& $S 'meta.seq') } }
 
   @{ id='ecoli-seq-bpb'; tier='fast'; doc='README.md'; unit='bpb'; tol=0.0002
-     anchor='| E. coli (4,641,652 bases) | **dnac `-l 3`** | **1.8833**'
-     expect=1.8833
+     anchor='| E. coli (4,641,652 bases) | **dnac `-l 3`** | **1.8832**'
+     expect=1.8832
      measure={ Bpb (Size (& $S 'ecoli.seq') $null 3) (Bases (& $S 'ecoli.seq')) } }
 
   @{ id='w3110-seq-bytes'; tier='fast'; doc='README.md'; unit='B'; tol=0
-     anchor='| W3110 vs MG1655 (near-identical strains) | **1,060 B** |'
-     expect=1060
+     anchor='| W3110 vs MG1655 (near-identical strains) | 1,280 B | **1,063 B** | 1,404 B | 1,319 B |'
+     expect=1063
      measure={ Size (& $S 'w3110.seq') (& $S 'ecoli.seq') 3 } }
 
   @{ id='o157-seq-bytes'; tier='fast'; doc='README.md'; unit='B'; tol=0
-     anchor='| O157:H7 vs MG1655 (diverged strains) | **361,417 B** |'
-     expect=361417
+     anchor='| O157:H7 vs MG1655 (diverged strains) | 361,611 B | **360,752 B** | 431,652 B | 365,401 B |'
+     expect=360752
      measure={ Size (& $S 'o157.seq') (& $S 'ecoli.seq') 3 } }
 
   @{ id='w3110-fa-bytes'; tier='fast'; doc='README.md'; unit='B'; tol=0
-     anchor='1,931 bytes for a 4.6 Mbp genome'
-     expect=1931
+     anchor='1,916 bytes for a 4.6 Mbp genome'
+     expect=1916
      measure={ Size (& $F 'w3110.fa') (& $F 'ecoli.fa') 3 } }
 
   @{ id='ecoli-fa-alone-bpb'; tier='fast'; doc='README.md'; unit='bpb'; tol=0.001
@@ -695,13 +749,13 @@ $claims = @(
      measure={ Bpb (Size (& $F 'w3110.fa') $null 3) (Bases (& $F 'w3110.fa')) } }
 
   @{ id='ecoli-ind-bpb'; tier='fast'; doc='README.md'; unit='bpb'; tol=0.00006
-     anchor='| E. coli, simulated individual | E. coli MG1655 | 1.885 | **0.0217**'
-     expect=0.0217
+     anchor='| E. coli, simulated individual | E. coli MG1655 | 1.886 | 0.0210 | **0.0208** | 91× |'
+     expect=0.0208
      measure={ Bpb (Size (& $F 'ecoli_ind.fa') (& $F 'ecoli.fa') 3) (Bases (& $F 'ecoli_ind.fa')) } }
 
   @{ id='o157-fa-ref-bpb'; tier='fast'; doc='README.md'; unit='bpb'; tol=0.001
-     anchor='| E. coli O157:H7 (real, diverged strain) | E. coli MG1655 | 1.812 | **0.519**'
-     expect=0.519
+     anchor='| E. coli O157:H7 (real, diverged strain) | E. coli MG1655 | 1.812 | 0.5189 | **0.5176** | 3.5× |'
+     expect=0.5176
      measure={ Bpb (Size (& $F 'o157.fa') (& $F 'ecoli.fa') 3) (Bases (& $F 'o157.fa')) } }
 
   # State-file sizes were wrong in the README until 2026-08-19 (523 -> 616 MB,
@@ -720,13 +774,13 @@ $claims = @(
   # -j sizes are published, so they are executed like every other figure. The
   # block count is part of the format, so these also prove the split itself.
   @{ id='ecoli-j2-bytes'; tier='fast'; doc='README.md'; unit='B'; tol=0
-     anchor='| 2 | 1,100,603 | +0.72% |'
-     expect=1100603
+     anchor='| 2 | 1,100,595 | +0.73% |'
+     expect=1100595
      measure={ Size (& $S 'ecoli.seq') $null 3 2 } }
 
   @{ id='ecoli-j8-bytes'; tier='fast'; doc='README.md'; unit='B'; tol=0
-     anchor='| 8 | 1,116,080 | +2.14% |'
-     expect=1116080
+     anchor='| 8 | 1,116,227 | +2.16% |'
+     expect=1116227
      measure={ Size (& $S 'ecoli.seq') $null 3 8 } }
 
   @{ id='chr21-ind-alone-bpb'; tier='slow'; doc='README.md'; unit='bpb'; tol=0.0006
@@ -740,18 +794,18 @@ $claims = @(
      measure={ Bpb (Size (& $F 'ecoli.fa') (& $F 'chr21.fa') 3) (Bases (& $F 'ecoli.fa')) } }
 
   @{ id='slice-l1-bpb'; tier='fast'; doc='README.md'; unit='bpb'; tol=6e-05
-     anchor='| 1 `fast` | 6 orders, 2 mixing experts, no IR, no tolerant models | 10.4 s | 1.7190 |'
-     expect=1.719
+     anchor='| 1 `fast` | 6 orders, 2 mixing experts, no IR, no tolerant models | @@L1T@@ s | 1.7180 |'
+     expect=1.718
      measure={ Bpb (Size (& $F 'chr21_slice.fa') $null 1) (Bases (& $F 'chr21_slice.fa')) } }
 
   @{ id='slice-l2-bpb'; tier='fast'; doc='README.md'; unit='bpb'; tol=6e-05
-     anchor='| 2 `balanced` | all orders, 4 experts, no IR, no tolerant models | 14.9 s | 1.7175 |'
-     expect=1.7175
+     anchor='| 2 `balanced` | all orders, 4 experts, no IR, no tolerant models | @@L2T@@ s | 1.7166 |'
+     expect=1.7166
      measure={ Bpb (Size (& $F 'chr21_slice.fa') $null 2) (Bases (& $F 'chr21_slice.fa')) } }
 
   @{ id='slice-l3-bpb'; tier='fast'; doc='README.md'; unit='bpb'; tol=6e-05
-     anchor='| 3 `max` (default) | everything | 21.7 s | 1.7126 |'
-     expect=1.7126
+     anchor='| 3 `max` (default without a reference) | everything | @@L3T@@ s | 1.7116 |'
+     expect=1.7116
      measure={ Bpb (Size (& $F 'chr21_slice.fa') $null 3) (Bases (& $F 'chr21_slice.fa')) } }
 
   # The level paragraph's load-bearing number: what IR training and the tolerant
@@ -761,8 +815,8 @@ $claims = @(
   # measures 11-13% for IR training). Per-model splits need a compiler and live
   # in docs/model-ablation.md, re-derived by ./ablate.ps1.
   @{ id='slice-l3-vs-l2-pct'; tier='fast'; doc='README.md'; unit='%'; tol=0.002
-     anchor='worth 0.289% of compressed size'
-     expect=0.289
+     anchor='worth 0.291% of compressed size'
+     expect=0.291
      measure={
         $l3 = Size (& $F 'chr21_slice.fa') $null 3
         $l2 = Size (& $F 'chr21_slice.fa') $null 2
@@ -774,8 +828,8 @@ $claims = @(
   # rows carry a wide tolerance for the same reason the -j ones do: peak working
   # set is sampled, not exact.
   @{ id='slice-l4-bpb'; tier='fast'; doc='README.md'; unit='bpb'; tol=6e-05
-     anchor='| 4 `light` | 8 orders, 4 experts, IR, no tolerant models | 16.2 s | 1.7146 |'
-     expect=1.7146
+     anchor='| 4 `light` | 8 orders, 4 experts, IR, no tolerant models | @@L4T@@ s | 1.7137 |'
+     expect=1.7137
      measure={ Bpb (Size (& $F 'chr21_slice.fa') $null 4) (Bases (& $F 'chr21_slice.fa')) } }
 
   @{ id='ecoli-l4-ram'; tier='fast'; doc='README.md'; unit='MB'; tol=65
@@ -794,18 +848,18 @@ $claims = @(
      measure={ Bpb (Size (& $S 'chr21.seq') $null 4) (Bases (& $S 'chr21.seq')) } }
 
   @{ id='sliceseq-l3-bpb'; tier='fast'; doc='README.md'; unit='bpb'; tol=6e-05
-     anchor='| chr21 slice (9,836,065 bases) | **dnac `-l 3`** | **1.7114** |'
-     expect=1.7114
+     anchor='| chr21 slice (9,836,065 bases) | **dnac `-l 3`** | **1.7105** |'
+     expect=1.7105
      measure={ Bpb (Size (& $S 'chr21slice.seq') $null 3) (Bases (& $S 'chr21slice.seq')) } }
 
   @{ id='sliceseq-l1-bpb'; tier='fast'; doc='README.md'; unit='bpb'; tol=6e-05
-     anchor='| | **dnac `-l 1`** | 1.7178 |'
-     expect=1.7178
+     anchor='| | **dnac `-l 1`** | 1.7168 |'
+     expect=1.7168
      measure={ Bpb (Size (& $S 'chr21slice.seq') $null 1) (Bases (& $S 'chr21slice.seq')) } }
 
   @{ id='ecoli-j4-bytes'; tier='fast'; doc='README.md'; unit='B'; tol=0
-     anchor='| 4 | 1,108,086 | +1.41% |'
-     expect=1108086
+     anchor='| 4 | 1,108,139 | +1.42% |'
+     expect=1108139
      measure={ Size (& $S 'ecoli.seq') $null 3 4 } }
 
   @{ id='chr21-j1-bytes'; tier='slow'; doc='README.md'; unit='B'; tol=0
@@ -854,22 +908,22 @@ $claims = @(
      measure={ Bpb (Geco (& $S 'ecoli.seq') '-l 16') (Bases (& $S 'ecoli.seq')) } }
 
   @{ id='geco-w3110-ref-bytes'; tier='extern'; doc='README.md'; unit='B'; tol=0
-     anchor='| W3110 vs MG1655 (near-identical strains) | **1,060 B** | 1,404 B |'
+     anchor='| W3110 vs MG1655 (near-identical strains) | 1,280 B | **1,063 B** | 1,404 B | 1,319 B |'
      expect=1404
      measure={ Geco (& $S 'w3110.seq') "$PARAMR -r ref.seq" (& $S 'ecoli.seq') } }
 
   @{ id='geco-w3110-hybrid-bytes'; tier='extern'; doc='README.md'; unit='B'; tol=0
-     anchor='| W3110 vs MG1655 (near-identical strains) | **1,060 B** | 1,404 B | 1,319 B |'
+     anchor='| W3110 vs MG1655 (near-identical strains) | 1,280 B | **1,063 B** | 1,404 B | 1,319 B |'
      expect=1319
      measure={ Geco (& $S 'w3110.seq') "$PARAMH -r ref.seq" (& $S 'ecoli.seq') } }
 
   @{ id='geco-o157-ref-bytes'; tier='extern'; doc='README.md'; unit='B'; tol=0
-     anchor='| O157:H7 vs MG1655 (diverged strains) | **361,417 B** | 431,652 B |'
+     anchor='| O157:H7 vs MG1655 (diverged strains) | 361,611 B | **360,752 B** | 431,652 B | 365,401 B |'
      expect=431652
      measure={ Geco (& $S 'o157.seq') "$PARAMR -r ref.seq" (& $S 'ecoli.seq') } }
 
   @{ id='geco-o157-hybrid-bytes'; tier='extern'; doc='README.md'; unit='B'; tol=0
-     anchor='| O157:H7 vs MG1655 (diverged strains) | **361,417 B** | 431,652 B | 365,401 B |'
+     anchor='| O157:H7 vs MG1655 (diverged strains) | 361,611 B | **360,752 B** | 431,652 B | 365,401 B |'
      expect=365401
      measure={ Geco (& $S 'o157.seq') "$PARAMH -r ref.seq" (& $S 'ecoli.seq') } }
 
@@ -894,8 +948,8 @@ $claims = @(
      measure={ Bpb (Geco (& $S 'chr21.seq') '-l 14') (Bases (& $S 'chr21.seq')) } }
 
   @{ id='chr21-fa-bpb'; tier='slow'; doc='README.md'; unit='bpb'; tol=0.0005
-     anchor='| **dnac** (k=22)                | **1.546**'
-     expect=1.546
+     anchor='| **dnac** (k=22, default)       | **@@CHR21FADEF@@**   | **1.8845** | this project |'
+     expect=1.545
      measure={ Bpb (Size (& $F 'chr21.fa') $null 3) (Bases (& $F 'chr21.fa')) } }
 
   @{ id='chr21-seq-l3-bpb'; tier='slow'; doc='README.md'; unit='bpb'; tol=0.0002
@@ -2175,32 +2229,38 @@ $claims = @(
   # P3: the release's size on the real pair at its default level
   @{ id='b4-p3-chm13-l1'; tier='b4'; doc='docs/batch4.md'; unit='B'; tol=0
      anchor='CHM13 chr21 against GRCh38 chr21 at level 1, the release build: **563,031 B**,'
+     also=@(@{ doc='README.md'; anchor='| FASTA | 1,438,137 B (HRCM) | 547,019 B — **2.63x** | 563,031 B — **2.55x** |' })
      expect=563031
      measure={ CueHuman 'rel' 'chm13_chr21.fa' 'grch38_chr21.fa' 1 } }
 
   # R1: per event at the release settings, level 3 (the records' level) and 1
   @{ id='b4-r1-v08-ind-l3'; tier='b4'; doc='docs/batch4.md'; unit='bits'; tol=0.005
      anchor='| 3 | v0.8.0 | 14.64 | **48.25** | 31.43 |'
+     also=@(@{ doc='README.md'; anchor='| **random indel** | 48.25 bits | **26.90 bits** | −44% |' })
      expect=48.25
      measure={ CuePerEvent 'v08' 'ind' 3 } }
 
   @{ id='b4-r1-v08-sub-l3'; tier='b4'; doc='docs/batch4.md'; unit='bits'; tol=0.005
      anchor='| 3 | v0.8.0 | 14.64 | **48.25** | 31.43 |'
+     also=@(@{ doc='README.md'; anchor='| substitution | 14.64 bits | 14.75 bits |' })
      expect=14.64
      measure={ CuePerEvent 'v08' 'sub' 3 } }
 
   @{ id='b4-r1-rel-sub-l3'; tier='b4'; doc='docs/batch4.md'; unit='bits'; tol=0.005
      anchor='| 3 | release | 14.75 | **26.90** | **11.60** |'
+     also=@(@{ doc='README.md'; anchor='| substitution | 14.64 bits | 14.75 bits |' })
      expect=14.75
      measure={ CuePerEvent 'rel' 'sub' 3 } }
 
   @{ id='b4-r1-rel-ind-l3'; tier='b4'; doc='docs/batch4.md'; unit='bits'; tol=0.005
      anchor='| 3 | release | 14.75 | **26.90** | **11.60** |'
+     also=@(@{ doc='README.md'; anchor='| **random indel** | 48.25 bits | **26.90 bits** | −44% |' }; @{ doc='README.md'; anchor='costs 26.9 bits instead of 48.25' })
      expect=26.90
      measure={ CuePerEvent 'rel' 'ind' 3 } }
 
   @{ id='b4-r1-rel-hp-l3'; tier='b4'; doc='docs/batch4.md'; unit='bits'; tol=0.005
      anchor='| 3 | release | 14.75 | **26.90** | **11.60** |'
+     also=@(@{ doc='README.md'; anchor='| **slip inside a homopolymer** | 31.43 bits | **11.60 bits** | −63% |' })
      expect=11.60
      measure={ CuePerEvent 'rel' 'hp' 3 } }
 
@@ -2211,22 +2271,26 @@ $claims = @(
 
   @{ id='b4-r1-osmosis-rel'; tier='b4'; doc='docs/batch4.md'; unit='ratio'; tol=0.0005
      anchor='43%** (ratio 0.571), against 9% without the cue (ratio 0.913)'
+     also=@(@{ doc='README.md'; anchor='**a fall of 43%**' })
      expect=0.571
      measure={ (CueHalves 'rel').hp.ratio } }
 
   @{ id='b4-r1-osmosis-v08'; tier='b4'; doc='docs/batch4.md'; unit='ratio'; tol=0.0005
      anchor='against 9% without the cue (ratio 0.913)'
+     also=@(@{ doc='README.md'; anchor='cue the same measurement falls 9%' })
      expect=0.913
      measure={ (CueHalves 'v08').hp.ratio } }
 
   # R2, R3, and the level-1 default against v0.8.0's level 3
   @{ id='b4-r2-chr21ind-l3'; tier='b4'; doc='docs/batch4.md'; unit='%'; tol=0.005
      anchor='| `chr21_ind` | 3 | 113,925 | 100,806 | **−11.52%** | −11.52% |'
+     also=@(@{ doc='README.md'; anchor='**−11.52%**' })
      expect=-11.52
      measure={ CuePct (CueChr21Ind 'v08' 3) (CueChr21Ind 'rel' 3) } }
 
   @{ id='b4-r3-chm13-l3'; tier='b4'; doc='docs/batch4.md'; unit='%'; tol=0.005
      anchor='| CHM13 chr21 | 3 | 586,615 | 547,019 | **−6.75%** | −6.75% |'
+     also=@(@{ doc='README.md'; anchor='| whole file | **−6.75%** | **−6.57%** |' })
      expect=-6.75
      measure={ CuePct (CueHuman 'v08' 'chm13_chr21.fa' 'grch38_chr21.fa' 3) (CueHuman 'rel' 'chm13_chr21.fa' 'grch38_chr21.fa' 3) } }
 
@@ -2238,6 +2302,7 @@ $claims = @(
   # the loss: the level-1 default on the near-identical bacterial pair
   @{ id='b4-w3110-default-loss'; tier='b4'; doc='docs/batch4.md'; unit='%'; tol=0.005
      anchor='| W3110 | 1 | 2,130 | 2,121 | −0.42% | **+9.84%** |'
+     also=@(@{ doc='README.md'; anchor='| **W3110 vs MG1655** (near-identical) | 1,931 B | **2,121 B — +9.84%** | **1,916 B** |' })
      expect=9.84
      measure={ CuePct (CueReal 'v08' 'w3110' 3) (CueReal 'rel' 'w3110' 1) } }
 
@@ -2245,11 +2310,13 @@ $claims = @(
   # at level 3), and the chr22 file
   @{ id='b4-r4-chr21-shared-l3'; tier='b4'; doc='docs/batch4.md'; unit='%'; tol=0.005
      anchor='| chr21 | 3 | **−19.36%** | −3.55% | **−0.26%** | −6.85% | −6.75% |'
+     also=@(@{ doc='README.md'; anchor='| on *shared* sequence (< 0.2 bits/base) | **−19.36%** | **−16.90%** |' })
      expect=-19.36
      measure={ CueWindows 'chm13_chr21' 'grch38_chr21' 'shared' 'rel' $null 3 } }
 
   @{ id='b4-r4-chr21-novel-l3'; tier='b4'; doc='docs/batch4.md'; unit='%'; tol=0.005
      anchor='| chr21 | 3 | **−19.36%** | −3.55% | **−0.26%** | −6.85% | −6.75% |'
+     also=@(@{ doc='README.md'; anchor='| on sequence one of them lacks (≥ 1.0) | −0.26% | −0.23% |' })
      expect=-0.26
      measure={ CueWindows 'chm13_chr21' 'grch38_chr21' 'novel' 'rel' $null 3 } }
 
@@ -2260,16 +2327,19 @@ $claims = @(
 
   @{ id='b4-r5-chr22-shared-l3'; tier='b4'; doc='docs/batch4.md'; unit='%'; tol=0.005
      anchor='| chr22 | 3 | **−16.90%** | −4.51% | **−0.23%** | −6.64% | **−6.57%** |'
+     also=@(@{ doc='README.md'; anchor='| on *shared* sequence (< 0.2 bits/base) | **−19.36%** | **−16.90%** |' })
      expect=-16.90
      measure={ CueWindows 'chm13_chr22' 'grch38_chr22' 'shared' 'rel' $null 3 } }
 
   @{ id='b4-r5-chr22-novel-l3'; tier='b4'; doc='docs/batch4.md'; unit='%'; tol=0.005
      anchor='| chr22 | 3 | **−16.90%** | −4.51% | **−0.23%** | −6.64% | **−6.57%** |'
+     also=@(@{ doc='README.md'; anchor='| on sequence one of them lacks (≥ 1.0) | −0.26% | −0.23% |' })
      expect=-0.23
      measure={ CueWindows 'chm13_chr22' 'grch38_chr22' 'novel' 'rel' $null 3 } }
 
   @{ id='b4-r5-chr22-file-l3'; tier='b4'; doc='docs/batch4.md'; unit='%'; tol=0.005
      anchor='| chr22 | 3 | **−16.90%** | −4.51% | **−0.23%** | −6.64% | **−6.57%** |'
+     also=@(@{ doc='README.md'; anchor='| whole file | **−6.75%** | **−6.57%** |' })
      expect=-6.57
      measure={ CuePct (CueHuman 'v08' 'chm13_chr22.fa' 'grch38_chr22.fa' 3) (CueHuman 'rel' 'chm13_chr22.fa' 'grch38_chr22.fa' 3) } }
 
@@ -2277,32 +2347,216 @@ $claims = @(
   # (the FASTA sizes are b4-p3 and b4-r3's; the competitors' own bytes are extern rows)
   @{ id='b4-r6-seq-l3'; tier='b4'; doc='docs/batch4.md'; unit='B'; tol=0
      anchor='| **541,353 B, 1.621x** | **557,497 B, 1.574x** |'
+     also=@(@{ doc='README.md'; anchor='| plain ACGT | 877,373 B (GeCo3 hybrid, unverified) | 541,353 B — **1.62x** | 557,497 B — **1.57x** |' })
      expect=541353
      measure={ CueHuman 'rel' 'chm13_chr21.seq' 'grch38_chr21.seq' 3 } }
 
   @{ id='b4-r6-seq-l1'; tier='b4'; doc='docs/batch4.md'; unit='B'; tol=0
      anchor='| **541,353 B, 1.621x** | **557,497 B, 1.574x** |'
+     also=@(@{ doc='README.md'; anchor='| plain ACGT | 877,373 B (GeCo3 hybrid, unverified) | 541,353 B — **1.62x** | 557,497 B — **1.57x** |' })
      expect=557497
      measure={ CueHuman 'rel' 'chm13_chr21.seq' 'grch38_chr21.seq' 1 } }
 
   @{ id='b4-r6-fa-l3'; tier='b4'; doc='docs/batch4.md'; unit='B'; tol=0
      anchor='| **547,019 B, 2.629x** | **563,031 B, 2.554x** |'
+     also=@(@{ doc='README.md'; anchor='| FASTA | 1,438,137 B (HRCM) | 547,019 B — **2.63x** | 563,031 B — **2.55x** |' })
      expect=547019
      measure={ CueHuman 'rel' 'chm13_chr21.fa' 'grch38_chr21.fa' 3 } }
 
   @{ id='b4-o157-default'; tier='b4'; doc='docs/batch4.md'; unit='%'; tol=0.005
      anchor='| O157 | 1 | 363,532 | 362,862 | −0.18% | **+0.05%** |'
+     also=@(@{ doc='README.md'; anchor='| O157:H7 vs MG1655 (diverged) | 362,666 B | 362,862 B — +0.05% | 362,006 B |' })
      expect=0.05
      measure={ CuePct (CueReal 'v08' 'o157' 3) (CueReal 'rel' 'o157' 1) } }
+
+  # The first row of the reference table: the real human pair, and what that
+  # chromosome costs with no reference at all (the denominator of the 14.3x).
+  @{ id='chm13-alone-bpb'; tier='b4'; doc='README.md'; unit='bpb'; tol=0.0006
+     anchor='| **CHM13 chr21 (a real second person)** | GRCh38 chr21 | 1.390 | **0.0999** | **0.0971** | 14.3× — 547,019 bytes for a chromosome |'
+     expect=1.390
+     measure={ Bpb (CueSize 'rel' (Join-Path $cueHuman 'chm13_chr21.fa') $null 3) 45090688 } }
+
+  @{ id='chm13-default-bpb'; tier='b4'; doc='README.md'; unit='bpb'; tol=0.00006
+     anchor='| **CHM13 chr21 (a real second person)** | GRCh38 chr21 | 1.390 | **0.0999** | **0.0971** | 14.3× — 547,019 bytes for a chromosome |'
+     expect=0.0999
+     measure={ Bpb (CueHuman 'rel' 'chm13_chr21.fa' 'grch38_chr21.fa' 1) 45090688 } }
+
+  @{ id='chm13-l3-bpb'; tier='b4'; doc='README.md'; unit='bpb'; tol=0.00006
+     anchor='| **CHM13 chr21 (a real second person)** | GRCh38 chr21 | 1.390 | **0.0999** | **0.0971** | 14.3× — 547,019 bytes for a chromosome |'
+     expect=0.0971
+     measure={ Bpb (CueHuman 'rel' 'chm13_chr21.fa' 'grch38_chr21.fa' 3) 45090688 } }
+
+  # The headline table's other cells. None of them had a row until Batch 5, and
+  # the E. coli one was wrong because of it: it printed the plain-ACGT figure in
+  # a table whose note said FASTA. Every cell now re-derives.
+  @{ id='ecoli-fa-headline-bpb'; tier='fast'; doc='README.md'; unit='bpb'; tol=0.0006
+     anchor='| **dnac** (k=22, default)       | **@@CHR21FADEF@@**   | **1.8845** | this project |'
+     expect=1.8845
+     measure={ Bpb (Size (& $F 'ecoli.fa') $null 3) (Bases (& $F 'ecoli.fa')) } }
+
+  @{ id='ecoli-fa-gzip-bpb'; tier='fast'; doc='README.md'; unit='bpb'; tol=0.0006
+     anchor='| gzip `-9`                      | 2.2544      | 2.3769  | barely models DNA |'
+     expect=2.3769
+     measure={ Bpb (Ext 'gzip' (& $F 'ecoli.fa')) (Bases (& $F 'ecoli.fa')) } }
+
+  @{ id='chr21-fa-gzip-bpb'; tier='slow'; doc='README.md'; unit='bpb'; tol=0.0006
+     anchor='| gzip `-9`                      | 2.2544      | 2.3769  | barely models DNA |'
+     expect=2.2544
+     measure={ Bpb (Ext 'gzip' (& $F 'chr21.fa')) (Bases (& $F 'chr21.fa')) } }
+
+  # The margin over GeCo3 reference-free, which two other sentences lean on and
+  # which no row defended before Batch 5. It moved with v0.9.0 (0.7% -> 0.85%)
+  # because the cue is a small gain in plain mode too.
+  @{ id='geco-margin-pct'; tier='extern'; doc='README.md'; unit='%'; tol=0.005
+     also=@(@{ doc='README.md'; anchor='the whole margin this project has is 0.85%' })
+     anchor='against a 0.85% margin'
+     expect=0.85
+     measure={
+        $d = Bpb (Size (& $S 'chr21.seq') $null 3) (Bases (& $S 'chr21.seq'))
+        $g = Bpb (Geco (& $S 'chr21.seq') '-l 14') (Bases (& $S 'chr21.seq'))
+        [math]::Round(100.0 * ($g - $d) / $g, 2) } }
+
+  # --- Batch 5: the figures the v0.9.0 README added -------------------------
+  # Every one of these is measured by the RELEASE build ($dnac), which is what a
+  # reader of the README would build. The rows that state a comparison with
+  # v0.8.0 pass $v08 for that side and say so.
+
+  @{ id='ecoli-j1-bytes'; tier='fast'; doc='README.md'; unit='B'; tol=0
+     anchor='| 1 (default) | 1,092,635 | — |'
+     expect=1092635
+     measure={ Size (& $S 'ecoli.seq') $null 3 } }
+
+  @{ id='ecoli-ind-alone-bpb'; tier='fast'; doc='README.md'; unit='bpb'; tol=0.0006
+     anchor='| E. coli, simulated individual | E. coli MG1655 | 1.886 |'
+     expect=1.886
+     measure={ Bpb (Size (& $F 'ecoli_ind.fa') $null 3) (Bases (& $F 'ecoli_ind.fa')) } }
+
+  @{ id='o157-alone-bpb'; tier='fast'; doc='README.md'; unit='bpb'; tol=0.0006
+     anchor='| E. coli O157:H7 (real, diverged strain) | E. coli MG1655 | 1.812 |'
+     expect=1.812
+     measure={ Bpb (Size (& $F 'o157.fa') $null 3) (Bases (& $F 'o157.fa')) } }
+
+  # The loss the release ships with, in the units the README states it in.
+  @{ id='w3110-fa-default-bytes'; tier='fast'; doc='README.md'; unit='B'; tol=0
+     anchor='| **W3110 vs MG1655** (near-identical) | 1,931 B | **2,121 B — +9.84%** | **1,916 B** |'
+     expect=2121
+     measure={ Size (& $F 'w3110.fa') (& $F 'ecoli.fa') 1 } }
+
+  @{ id='w3110-fa-v08-bytes'; tier='fast'; doc='README.md'; unit='B'; tol=0
+     anchor='| **W3110 vs MG1655** (near-identical) | 1,931 B | **2,121 B — +9.84%** | **1,916 B** |'
+     expect=1931
+     measure={ Size (& $F 'w3110.fa') (& $F 'ecoli.fa') 3 $null $v08 } }
+
+  @{ id='o157-fa-default-bytes'; tier='fast'; doc='README.md'; unit='B'; tol=0
+     anchor='| O157:H7 vs MG1655 (diverged) | 362,666 B | 362,862 B — +0.05% | 362,006 B |'
+     expect=362862
+     measure={ Size (& $F 'o157.fa') (& $F 'ecoli.fa') 1 } }
+
+  @{ id='o157-fa-v08-bytes'; tier='fast'; doc='README.md'; unit='B'; tol=0
+     anchor='| O157:H7 vs MG1655 (diverged) | 362,666 B | 362,862 B — +0.05% | 362,006 B |'
+     expect=362666
+     measure={ Size (& $F 'o157.fa') (& $F 'ecoli.fa') 3 $null $v08 } }
+
+  @{ id='w3110-seq-default-bytes'; tier='fast'; doc='README.md'; unit='B'; tol=0
+     anchor='| W3110 vs MG1655 (near-identical strains) | 1,280 B | **1,063 B** | 1,404 B | 1,319 B |'
+     expect=1280
+     measure={ Size (& $S 'w3110.seq') (& $S 'ecoli.seq') 1 } }
+
+  @{ id='o157-seq-default-bytes'; tier='fast'; doc='README.md'; unit='B'; tol=0
+     anchor='| O157:H7 vs MG1655 (diverged strains) | 361,611 B | **360,752 B** | 431,652 B | 365,401 B |'
+     expect=361611
+     measure={ Size (& $S 'o157.seq') (& $S 'ecoli.seq') 1 } }
+
+  # What the cue is worth on the two bacterial pairs, stated as percentages in
+  # the cue section.
+  @{ id='ecoliind-cue-pct'; tier='fast'; doc='README.md'; unit='%'; tol=0.005
+     anchor='a simulated E. coli individual −4.21%'
+     expect=-4.21
+     measure={ CuePct (Size (& $F 'ecoli_ind.fa') (& $F 'ecoli.fa') 3 $null $v08) (Size (& $F 'ecoli_ind.fa') (& $F 'ecoli.fa') 3) } }
+
+  @{ id='o157-cue-pct'; tier='fast'; doc='README.md'; unit='%'; tol=0.005
+     anchor='the diverged O157:H7 pair −0.18%'
+     expect=-0.18
+     measure={ CuePct (Size (& $F 'o157.fa') (& $F 'ecoli.fa') 3 $null $v08) (Size (& $F 'o157.fa') (& $F 'ecoli.fa') 3) } }
+
+  # Reference-free the cue is worth almost nothing, which is a README claim and
+  # therefore executed like any other. Three decimals: two would round the
+  # E. coli figure to zero and hide its sign.
+  @{ id='ecoli-cue-plain-pct'; tier='fast'; doc='README.md'; unit='%'; tol=0.0005
+     anchor='−0.005% on'
+     expect=-0.005
+     measure={
+        $b = Size (& $S 'ecoli.seq') $null 3 $null $v08
+        $r = Size (& $S 'ecoli.seq') $null 3
+        [math]::Round(100.0 * ($r / $b - 1.0), 3) } }
+
+  # --- W: the experiment that settled the default (docs/batch5.md) ----------
+  # The gradient target is derived here, by the release build, from the same
+  # reference and seed the document names, so the row re-derives the INPUT as
+  # well as the number and a changed `mut` cannot pass unnoticed.
+  @{ id='w5-mut02-penalty-bytes'; tier='fast'; doc='README.md'; unit='B'; tol=0
+     also=@(@{ doc='docs/batch5.md'; anchor='| `mut` 0.2 ‰ | 3,989 | 3,993 | 4 B | **+0.10%** | 928 | 92 |' })
+     anchor='the penalty is **4 bytes against W3110''s 205**'
+     expect=4
+     measure={ MutPenalty '0.2' 'bytes' } }
+
+  @{ id='w5-mut50-penalty-pct'; tier='fast'; doc='README.md'; unit='%'; tol=0.005
+     also=@(@{ doc='docs/batch5.md'; anchor='| `mut` 5.0 ‰ | 43,149 | 43,937 | 788 B | +1.83% | 23,208 | 2,320 |' })
+     anchor='+0.18%, +0.10%, +1.40% and +1.83%'
+     expect=1.83
+     measure={ MutPenalty '5.0' 'pct' } }
+
+  @{ id='w5-w3110-penalty-bytes'; tier='fast'; doc='README.md'; unit='B'; tol=0
+     also=@(@{ doc='docs/batch5.md'; anchor='| **W3110** | 1,916 | 2,121 | **205 B** | **+10.70%** | | |' })
+     anchor='the penalty is **4 bytes against W3110''s 205**'
+     expect=205
+     measure={ (Size (& $F 'w3110.fa') (& $F 'ecoli.fa') 1) - (Size (& $F 'w3110.fa') (& $F 'ecoli.fa') 3) } }
+
+  # W5: the whole gap is the mixer's expert count. An experimental build, which
+  # marks its own archives, so it can never be confused with the release.
+  @{ id='w5-x4-w3110-bytes'; tier='fast'; doc='README.md'; unit='B'; tol=0
+     also=@(@{ doc='docs/batch5.md'; anchor='| **four mixer experts (`L1_NMIX=4`)** | **1,907** | **104%** |' })
+     anchor='W3110 2,121 → 1,907 B; a simulated E. coli individual 12,204 → 12,051 B,'
+     expect=1907
+     measure={ Size (& $F 'w3110.fa') (& $F 'ecoli.fa') 1 $null (CueExe 'rel_x4') } }
+
+  @{ id='w5-x4-ecoliind-bytes'; tier='fast'; doc='README.md'; unit='B'; tol=0
+     also=@(@{ doc='docs/batch5.md'; anchor='| `ecoli_ind` (simulated individual) | 12,204 | **12,051** | 12,051 |' })
+     anchor='W3110 2,121 → 1,907 B; a simulated E. coli individual 12,204 → 12,051 B,'
+     expect=12051
+     measure={ Size (& $F 'ecoli_ind.fa') (& $F 'ecoli.fa') 1 $null (CueExe 'rel_x4') } }
+
+  # The per-mode default itself: what the CLI picks when the user says nothing.
+  # Nothing else here can see it, because every other row names a level.
+  @{ id='default-level-plain'; tier='fast'; doc='README.md'; unit='level'; tol=0
+     anchor='**Since v0.9.0 the default is per mode: level 3 without a reference, level 1'
+     expect=3
+     measure={ DefaultLevel $null } }
+
+  @{ id='default-level-ref'; tier='fast'; doc='README.md'; unit='level'; tol=0
+     anchor='**Since v0.9.0 the default is per mode: level 3 without a reference, level 1'
+     expect=1
+     measure={ DefaultLevel (& $F 'ecoli.fa') } }
 )
 
 # --- runner -------------------------------------------------------------------
 
+# A claim may be stated in more than one document -- the release figures live in
+# docs/batch4.md as the record of the run that produced them AND in README.md as
+# what the codec does now. Re-measuring them twice would double the cost of the
+# most expensive tier for no extra information, so a row carries an optional
+# `also` list of @{doc; anchor}: the same measured value, held against a second
+# sentence in a second file. Every one of them has to match, so editing either
+# copy by hand turns the claim red. The self-test breaks this path too.
 function Check-Anchor($c) {
-    $p = Join-Path $root $c.doc
-    if (-not (Test-Path $p)) { return @{ ok=$false; why="doc '$($c.doc)' not found" } }
-    if ((Get-Content $p -Raw).Contains($c.anchor)) { return @{ ok=$true } }
-    @{ ok=$false; why="anchor text is no longer in $($c.doc): '$($c.anchor)'" }
+    foreach ($a in @(@{ doc=$c.doc; anchor=$c.anchor }) + @($c.also | Where-Object { $_ })) {
+        $p = Join-Path $root $a.doc
+        if (-not (Test-Path $p)) { return @{ ok=$false; why="doc '$($a.doc)' not found" } }
+        if (-not (Get-Content $p -Raw).Contains($a.anchor)) {
+            return @{ ok=$false; why="anchor text is no longer in $($a.doc): '$($a.anchor)'" }
+        }
+    }
+    @{ ok=$true }
 }
 
 function Run-Claim($c) {
@@ -2345,7 +2599,17 @@ if ($SelfTest) {
     $r3 = Run-Claim $fakeErr
     if ($r3.status -ne 'ERROR') { throw "SELF-TEST FAILED: a failing recipe was not detected (got '$($r3.status)')" }
 
-    Write-Host "self-test: ANCHOR, DRIFT and ERROR all detected (3/3)`n" -ForegroundColor Green
+    # Batch 5 let one row hold its value against a SECOND document (`also`), so
+    # the release figures are anchored in README.md as well as in the record that
+    # produced them. A detector nobody has watched go red is decoration, so the
+    # second anchor is broken here exactly like the first.
+    $fakeAlso = @{ id='selftest-also'; tier='fast'; doc='README.md'; unit='B'; tol=0
+                   anchor='# dnac'; expect=1; measure={ 1 }
+                   also=@(@{ doc='docs/batch4.md'; anchor='THIS SENTENCE IS NOT IN BATCH 4' }) }
+    $r4 = Run-Claim $fakeAlso
+    if ($r4.status -ne 'ANCHOR') { throw "SELF-TEST FAILED: a missing SECOND anchor was not detected (got '$($r4.status)')" }
+
+    Write-Host "self-test: ANCHOR, DRIFT, ERROR and the second anchor all detected (4/4)`n" -ForegroundColor Green
     # The cue rows brought four new ways to be wrong that the three detectors
     # above cannot see, because all three assume the MEASUREMENT is of what it
     # says it is. Each is broken here on purpose. Only when a cue tier is

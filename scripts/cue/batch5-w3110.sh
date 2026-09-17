@@ -24,9 +24,19 @@ REL=$(build rel $(defines_for rel))
 
 # The gradient. `dnac mut` puts SNPs at the rate and short indels at a tenth of
 # it, so the rate is also the event-count axis W4 predicts from.
+# `dnac mut` writes the INPUT'S PATH into the FASTA header, and the header is
+# compressed with everything else -- so the same target, from the same seed,
+# gives a different archive depending on whether the caller spelled the
+# reference with forward or backward slashes (2 bytes at level 3, 7 at level 1).
+# Every mut-derived figure here therefore uses a CANONICAL header, written over
+# the first line, so the number does not depend on who called the script.
 for r in 0.05 0.2 1.0 5.0; do
   t=$B/mut_$r.fa
-  [ -s "$t" ] || "$REL" mut "$REF" "$t" "$r" 42 >/dev/null || { echo "FAIL mut $r" >&2; exit 1; }
+  if [ ! -s "$t" ]; then
+    "$REL" mut "$REF" "$t.raw" "$r" 42 >/dev/null || { echo "FAIL mut $r" >&2; exit 1; }
+    { echo ">mut_${r}_seed42"; tail -n +2 "$t.raw"; } > "$t"
+    rm -f "$t.raw"
+  fi
 done
 
 # rt <case> <level> <target> <ref-or-state>: encode, decode, cmp, record

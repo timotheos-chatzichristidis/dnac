@@ -120,12 +120,19 @@ there are to recover from.
 ### What it is not worth
 
 **Without a reference it is worth almost nothing** — −0.11% on chr21, −0.005% on
-E. coli, at level 3. That is a gain on every dataset tried and never a loss, so
-it ships always on; but the mechanism needs a long established match to miss and
-a shifted copy of it to exist, and without a reference that is only the file's
-own repeats, which are rarer and come later
+E. coli, at level 3. It is a gain at level 3 on all four datasets tried (chr21,
+a 10 MB slice of it, E. coli and a 200 Mbase metagenome), which is why it ships
+always on; the mechanism needs a long established match to miss and a shifted
+copy of it to exist, and without a reference that is only the file's own
+repeats, which are rarer and come later
 ([`docs/reference-free.md`](docs/reference-free.md)). The README's reference-free
 headline is not where this mechanism lives.
+
+It is not free everywhere, and the places it costs are small and worth naming:
+**+0.010% on E. coli at level 1** without a reference, **+0.013% at `-j 8`**
+(a block is short, so there is less established match to lose), and **3 bytes on
+1,060** on the plain-ACGT W3110 pair at level 3 — the one reference-mode case
+where it is a loss at all.
 
 It also costs about 3% of encode time, and two ideas that sounded better than
 the plain version measured as nothing: alternating the two decks
@@ -149,9 +156,9 @@ numbers here went stale once already.
 
 | dataset | tool | bits/base | compress | RAM |
 |---------|------|:---------:|---------:|----:|
-| human chr21 (40,088,619 bases) | **dnac `-l 3`** (default) | **@@C21L3@@** | @@C21L3T@@ s | 1.24 GB |
-| | **dnac `-l 2`** | **@@C21L2@@** | @@C21L2T@@ s | |
-| | **dnac `-l 1`** | **@@C21L1@@** | **@@C21L1T@@ s** | |
+| human chr21 (40,088,619 bases) | **dnac `-l 3`** (default) | **1.4964** | @@C21L3T@@ s | 1.24 GB |
+| | **dnac `-l 2`** | **1.5023** | @@C21L2T@@ s | |
+| | **dnac `-l 1`** | **1.5048** | **@@C21L1T@@ s** | |
 | | GeCo3 `-l 14` | 1.5092 | @@G21L14T@@ s | |
 | | GeCo3 `-l 9` | 1.5177 | @@G21L9T@@ s | |
 | | GeCo3 `-l 16` | *did not finish* | — | 8.4 GB, thrashed |
@@ -585,7 +592,7 @@ Bits per base of the target, at the default and at `-l 3`:
 |--------|-----------|:-----:|:-----:|:-----:|:----------:|
 | **CHM13 chr21 (a real second person)** | GRCh38 chr21 | 1.390 | **0.0999** | **0.0971** | 14.3× — 547,019 bytes for a chromosome |
 | E. coli W3110 (real strain) | E. coli MG1655 | 1.880 | 0.0037 | **0.0033** | **570×** — 1,916 bytes for a 4.6 Mbp genome |
-| chr21 of a simulated individual (0.1% SNPs + indels) | chr21 | @@CIALONE@@ | @@CIL1@@ | **@@CIL3@@** | @@CIX@@× |
+| chr21 of a simulated individual (0.1% SNPs + indels) | chr21 | 1.502 | @@CIL1@@ | **@@CIL3@@** | @@CIX@@× |
 | E. coli, simulated individual | E. coli MG1655 | 1.886 | 0.0210 | **0.0208** | 91× |
 | E. coli O157:H7 (real, diverged strain) | E. coli MG1655 | 1.812 | 0.5189 | **0.5176** | 3.5× |
 | E. coli MG1655 | *human chr21* (unrelated!) | 1.885 | @@UNRELL1@@ | @@UNRELL3@@ | @@UNRELX@@ (degrades gracefully) |
@@ -956,6 +963,17 @@ heavier machinery (neural mixing, 2-pass) — a different complexity class. A
 genuinely different game is **reference-based** compression (store a genome as
 differences from a known reference), which reaches ~0.01–0.1 bits/base but solves
 a different problem and needs the reference.
+
+**The one lever v0.9.0 leaves on the table, with its price already measured:**
+four mixer experts at level 1 in reference mode. On a near-identical pair that
+is the *entire* difference between level 1 and level 3 — and it overshoots it,
+landing below both level 3 and v0.8.0 — while the models level 1 drops are worth
+nothing there. On the real human pair it was priced at **+21.1% time for −0.52%
+size** and a rule fixed in advance turned it down
+([`docs/batch3.md`](docs/batch3.md)). Whether *reference mode* should price that
+trade differently from the plain mode the rule was written for is the first
+question of the next release, and it would remove the one loss this one ships
+with.
 
 ## The one principle
 

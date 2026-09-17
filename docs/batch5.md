@@ -109,7 +109,7 @@ they extrapolate it to files and levels that check never touched.
 | | claim | predicted | measured | |
 |---|---|---:|---:|---|
 | **P1** | E. coli `.seq`, level 3 | 1,092,635 ± 6 | **1,092,635** | held, to the byte |
-| **P2** | chr21 `.seq`, level 3 | 7,498,337 ± 8 | **7,498,339** | held (1.4963 bpb, as predicted) |
+| **P2** | chr21 `.seq`, level 3 | 7,498,337 ± 8 | **7,498,339** | held on the bytes, 2 past the centre. The bpb the prediction derived from them, 1.4963, was itself a rounding slip: 7,498,339 bytes is **1.4964** |
 | **P3** | chr21 `.seq`, level 1 | 7,540,777 ± 8 | **7,540,777** | held, to the byte |
 | **P4** | chr21 slice `.seq`, level 3 | 2,103,300–2,104,100 | **2,103,089** | **failed**, 211 B past the band — a bigger gain than predicted (−0.054%, not −0.009% to −0.044%) |
 | **P6** | E. coli `-j 8` | within ±0.05% of 1,116,080 | 1,116,227 (+0.013%) | held |
@@ -167,3 +167,45 @@ second (doc, anchor) pair: one measurement, two sentences, and editing either
 sentence by hand turns the claim red. Twenty rows use it. The self-test breaks
 the second anchor exactly as it breaks the first, and was watched doing it —
 `-SelfTest` now reports 4/4 instead of 3/3 on the always-run detectors.
+
+### The instrument finding: `dnac mut` writes the caller's path into the data
+
+The gradient rows were written to derive their own target -- `dnac mut` at the
+rate and seed the document names -- rather than read a stored file, so that a
+change to `mut` could not slip past them. Running them turned one row red:
+`w5-mut50-penalty-pct` said 1.83% and measured 1.81%. The two targets were the
+same size, and their **sequences hashed identically**. Only the FASTA header
+differed:
+
+    >simulated_individual from=C:\Users\...\ecoli.fa snp_per_mille=5.000 seed=42
+    >simulated_individual from=C:/Users/.../ecoli.fa snp_per_mille=5.000 seed=42
+
+`mut` records its input's path in the header, the header is compressed with
+everything else, and a shell script spelling the reference with forward slashes
+therefore produces a different archive from a PowerShell row spelling it with
+backslashes: **2 bytes at level 3, 7 at level 1** on a 43 kB output. Enough to
+move a published percentage by 0.02.
+
+Both implementations now overwrite the first line with a canonical
+`>mut_<rate>_seed42` before compressing, and the gradient was re-measured with
+it. The general rule this adds, alongside "a figure only ever read rots": **a
+recipe that generates its own input must generate a canonical one.** Two
+implementations disagreeing is what caught it -- the same instrument that caught
+Batch 4's window-split bug, working the same way.
+
+## R: what is green, and what still has to run
+
+The rewrite is a documentation and registry change; `dnac.c` is untouched by
+this batch, so losslessness and the format are exactly Batch 4's and are
+defended by the same 229 round-trips.
+
+| check | state |
+|---|---|
+| `sh scripts/roundtrip.sh ./dnac.exe` | 229/229, at the start of the session |
+| `verify-claims.ps1 -Tier fast` | run with the new rows; see below |
+| `-SelfTest` | four always-run detectors, including the new second-anchor one |
+| `slow`, `extern`, `meta`, `cue`, `cue3`, `b4` | **still to run** |
+
+The registry went **314 → 350 rows**. The tiers that defend the records
+(`cue`, `cue3`, `b4`) compile `4932ffe` and are untouched by this batch except
+for the twenty `also` anchors added to `b4`, which add no measurement.

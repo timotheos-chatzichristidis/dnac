@@ -67,7 +67,7 @@
 # in benchmark.ps1.
 
 param(
-    [ValidateSet('fast','slow','extern','meta','cue','cue3','b4','all')][string]$Tier = 'fast',
+    [ValidateSet('fast','slow','extern','meta','cue','cue3','b4','b5','all')][string]$Tier = 'fast',
     [switch]$SelfTest,
     [switch]$AnchorsOnly,
     [string]$Only
@@ -428,8 +428,18 @@ function MutTarget($rate) {
     if ($script:MutMemo.ContainsKey($rate)) { return $script:MutMemo[$rate] }
     $t = Join-Path $work "mut_$rate.fa"
     if (-not (Test-Path $t) -or (Get-Item $t).Length -eq 0) {
-        & $dnac mut (& $F 'ecoli.fa') $t $rate 42 | Out-Null
-        if ($LASTEXITCODE -ne 0 -or -not (Test-Path $t)) { throw "dnac mut failed at $rate per-mille" }
+        $raw = "$t.raw"
+        & $dnac mut (& $F 'ecoli.fa') $raw $rate 42 | Out-Null
+        if ($LASTEXITCODE -ne 0 -or -not (Test-Path $raw)) { throw "dnac mut failed at $rate per-mille" }
+        # `mut` records the INPUT'S PATH in the FASTA header, and that header is
+        # compressed with the sequence -- so 'C:\...\ecoli.fa' and 'C:/.../ecoli.fa'
+        # are the same genome in a different archive (2 bytes at level 3, 7 at
+        # level 1). The header is overwritten with a canonical one, exactly as
+        # scripts/cue/batch5-w3110.sh does, so this row and that script agree.
+        $lines = [System.IO.File]::ReadAllLines($raw)
+        $lines[0] = ">mut_${rate}_seed42"
+        [System.IO.File]::WriteAllLines($t, $lines)
+        Remove-Item $raw -Force -ErrorAction SilentlyContinue
     }
     $script:MutMemo[$rate] = $t
     $t
@@ -784,8 +794,8 @@ $claims = @(
      measure={ Size (& $S 'ecoli.seq') $null 3 8 } }
 
   @{ id='chr21-ind-alone-bpb'; tier='slow'; doc='README.md'; unit='bpb'; tol=0.0006
-     anchor='(0.1% SNPs + indels) | chr21 | 1.504 |'
-     expect=1.504
+     anchor='(0.1% SNPs + indels) | chr21 | 1.502 |'
+     expect=1.502
      measure={ Bpb (Size (& $F 'chr21_ind.fa') $null 3) (Bases (& $F 'chr21_ind.fa')) } }
 
   @{ id='unrelated-ref-bpb'; tier='slow'; doc='README.md'; unit='bpb'; tol=0.0006
@@ -863,18 +873,18 @@ $claims = @(
      measure={ Size (& $S 'ecoli.seq') $null 3 4 } }
 
   @{ id='chr21-j1-bytes'; tier='slow'; doc='README.md'; unit='B'; tol=0
-     anchor='| 1 | 7,506,264 | 112.6 s | 83.5 s |'
-     expect=7506264
+     anchor='| 1 | 7,498,339 |'
+     expect=7498339
      measure={ Size (& $S 'chr21.seq') $null 3 1 } }
 
   @{ id='chr21-j8-bytes'; tier='slow'; doc='README.md'; unit='B'; tol=0
-     anchor='| 8 | 7,836,217 | **22.2 s** | **22.0 s** |'
-     expect=7836217
+     anchor='| 8 | 7,828,539 |'
+     expect=7828539
      measure={ Size (& $S 'chr21.seq') $null 3 8 } }
 
   @{ id='chr21-seq-l2-bpb'; tier='slow'; doc='README.md'; unit='bpb'; tol=6e-05
-     anchor='| | **dnac `-l 2`** | **1.5039** |'
-     expect=1.5039
+     anchor='| | **dnac `-l 2`** | **1.5023** |'
+     expect=1.5023
      measure={ Bpb (Size (& $S 'chr21.seq') $null 2) (Bases (& $S 'chr21.seq')) } }
 
   @{ id='ram-ecoli-j1'; tier='fast'; doc='README.md'; unit='MB'; tol=65
@@ -953,13 +963,13 @@ $claims = @(
      measure={ Bpb (Size (& $F 'chr21.fa') $null 3) (Bases (& $F 'chr21.fa')) } }
 
   @{ id='chr21-seq-l3-bpb'; tier='slow'; doc='README.md'; unit='bpb'; tol=0.0002
-     anchor='| human chr21 (40,088,619 bases) | **dnac `-l 3`** (default) | **1.4979**'
-     expect=1.4979
+     anchor='| human chr21 (40,088,619 bases) | **dnac `-l 3`** (default) | **1.4964**'
+     expect=1.4964
      measure={ Bpb (Size (& $S 'chr21.seq') $null 3) (Bases (& $S 'chr21.seq')) } }
 
   @{ id='chr21-seq-l1-bpb'; tier='slow'; doc='README.md'; unit='bpb'; tol=0.0002
-     anchor='| | **dnac `-l 1`** | **1.5065**'
-     expect=1.5065
+     anchor='| | **dnac `-l 1`** | **1.5048**'
+     expect=1.5048
      measure={ Bpb (Size (& $S 'chr21.seq') $null 1) (Bases (& $S 'chr21.seq')) } }
 
   @{ id='chr21-ind-bpb'; tier='slow'; doc='README.md'; unit='bpb'; tol=0.00006
@@ -2416,6 +2426,46 @@ $claims = @(
         $g = Bpb (Geco (& $S 'chr21.seq') '-l 14') (Bases (& $S 'chr21.seq'))
         [math]::Round(100.0 * ($g - $d) / $g, 2) } }
 
+  # The three places the cue costs something, named in the README so they are
+  # not rounded away. Each is a level or a mode no other row covers.
+  @{ id='ecoli-cue-l1-plain-pct'; tier='fast'; doc='README.md'; unit='%'; tol=0.0005
+     anchor='**+0.010% on E. coli at level 1**'
+     expect=0.010
+     measure={
+        $b = Size (& $S 'ecoli.seq') $null 1 $null $v08
+        $r = Size (& $S 'ecoli.seq') $null 1
+        [math]::Round(100.0 * ($r / $b - 1.0), 3) } }
+
+  @{ id='ecoli-cue-j8-pct'; tier='fast'; doc='README.md'; unit='%'; tol=0.0005
+     anchor='**+0.013% at `-j 8`**'
+     expect=0.013
+     measure={
+        $b = Size (& $S 'ecoli.seq') $null 3 8 $v08
+        $r = Size (& $S 'ecoli.seq') $null 3 8
+        [math]::Round(100.0 * ($r / $b - 1.0), 3) } }
+
+  @{ id='w3110-seq-cue-loss-bytes'; tier='fast'; doc='README.md'; unit='B'; tol=0
+     anchor='1,060** on the plain-ACGT W3110 pair at level 3'
+     expect=3
+     measure={ (Size (& $S 'w3110.seq') (& $S 'ecoli.seq') 3) - (Size (& $S 'w3110.seq') (& $S 'ecoli.seq') 3 $null $v08) } }
+
+  # The chr21 block table's other three rows. They were published without a row
+  # until Batch 5, like the headline table's E. coli cell.
+  @{ id='chr21-j2-bytes'; tier='slow'; doc='README.md'; unit='B'; tol=0
+     anchor='| 2 | 7,687,850 |'
+     expect=7687850
+     measure={ Size (& $S 'chr21.seq') $null 3 2 } }
+
+  @{ id='chr21-j4-bytes'; tier='slow'; doc='README.md'; unit='B'; tol=0
+     anchor='| 4 | 7,732,528 |'
+     expect=7732528
+     measure={ Size (& $S 'chr21.seq') $null 3 4 } }
+
+  @{ id='chr21-j16-bytes'; tier='slow'; doc='README.md'; unit='B'; tol=0
+     anchor='| 16 | 7,907,062 |'
+     expect=7907062
+     measure={ Size (& $S 'chr21.seq') $null 3 16 } }
+
   # --- Batch 5: the figures the v0.9.0 README added -------------------------
   # Every one of these is measured by the RELEASE build ($dnac), which is what a
   # reader of the README would build. The rows that state a comparison with
@@ -2494,19 +2544,19 @@ $claims = @(
   # The gradient target is derived here, by the release build, from the same
   # reference and seed the document names, so the row re-derives the INPUT as
   # well as the number and a changed `mut` cannot pass unnoticed.
-  @{ id='w5-mut02-penalty-bytes'; tier='fast'; doc='README.md'; unit='B'; tol=0
+  @{ id='w5-mut02-penalty-bytes'; tier='b5'; doc='README.md'; unit='B'; tol=0
      also=@(@{ doc='docs/batch5.md'; anchor='| `mut` 0.2 ‰ | 3,989 | 3,993 | 4 B | **+0.10%** | 928 | 92 |' })
      anchor='the penalty is **4 bytes against W3110''s 205**'
      expect=4
      measure={ MutPenalty '0.2' 'bytes' } }
 
-  @{ id='w5-mut50-penalty-pct'; tier='fast'; doc='README.md'; unit='%'; tol=0.005
+  @{ id='w5-mut50-penalty-pct'; tier='b5'; doc='README.md'; unit='%'; tol=0.005
      also=@(@{ doc='docs/batch5.md'; anchor='| `mut` 5.0 ‰ | 43,149 | 43,937 | 788 B | +1.83% | 23,208 | 2,320 |' })
      anchor='+0.18%, +0.10%, +1.40% and +1.83%'
      expect=1.83
      measure={ MutPenalty '5.0' 'pct' } }
 
-  @{ id='w5-w3110-penalty-bytes'; tier='fast'; doc='README.md'; unit='B'; tol=0
+  @{ id='w5-w3110-penalty-bytes'; tier='b5'; doc='README.md'; unit='B'; tol=0
      also=@(@{ doc='docs/batch5.md'; anchor='| **W3110** | 1,916 | 2,121 | **205 B** | **+10.70%** | | |' })
      anchor='the penalty is **4 bytes against W3110''s 205**'
      expect=205
@@ -2514,13 +2564,13 @@ $claims = @(
 
   # W5: the whole gap is the mixer's expert count. An experimental build, which
   # marks its own archives, so it can never be confused with the release.
-  @{ id='w5-x4-w3110-bytes'; tier='fast'; doc='README.md'; unit='B'; tol=0
+  @{ id='w5-x4-w3110-bytes'; tier='b5'; doc='README.md'; unit='B'; tol=0
      also=@(@{ doc='docs/batch5.md'; anchor='| **four mixer experts (`L1_NMIX=4`)** | **1,907** | **104%** |' })
      anchor='W3110 2,121 → 1,907 B; a simulated E. coli individual 12,204 → 12,051 B,'
      expect=1907
      measure={ Size (& $F 'w3110.fa') (& $F 'ecoli.fa') 1 $null (CueExe 'rel_x4') } }
 
-  @{ id='w5-x4-ecoliind-bytes'; tier='fast'; doc='README.md'; unit='B'; tol=0
+  @{ id='w5-x4-ecoliind-bytes'; tier='b5'; doc='README.md'; unit='B'; tol=0
      also=@(@{ doc='docs/batch5.md'; anchor='| `ecoli_ind` (simulated individual) | 12,204 | **12,051** | 12,051 |' })
      anchor='W3110 2,121 → 1,907 B; a simulated E. coli individual 12,204 → 12,051 B,'
      expect=12051
@@ -2614,7 +2664,7 @@ if ($SelfTest) {
     # above cannot see, because all three assume the MEASUREMENT is of what it
     # says it is. Each is broken here on purpose. Only when a cue tier is
     # actually going to run: these compile and compress, unlike the three above.
-    if ($Tier -in @('cue','cue3','b4','slow','all')) {
+    if ($Tier -in @('cue','cue3','b4','b5','slow','all')) {
         Write-Host "self-test: the cue machinery" -ForegroundColor Cyan
 
         # 1. An unknown build label must stop the run, not quietly measure the

@@ -80,7 +80,11 @@ the lower panel.** The cue is loaded once and, when it drifts, is dropped and
 searched for again — which is the upper panel, and is the same "lift the needle"
 move the cue was built to stop the master from making, one level down. Of the
 three controls on the console, the jog became the nudge (measured, superseded),
-the headphones became the cue, and the pitch fader is not translated yet.*
+the headphones became the cue, and the pitch fader has now been measured both
+ways and shipped neither: slips alternate rather than persist, so there is no
+direction to search in (`docs/after-090.md`), and riding the cue back into place
+does exactly what it claims on the events it was built for while staying short
+of the adoption bar on a real human pair (`docs/after-090-riding.md`).*
 
 That last sentence is not a metaphor added afterwards. The mechanism is
 Timotheos's DJ beatmatching method translated line for line — including the

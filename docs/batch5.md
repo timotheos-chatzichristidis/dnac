@@ -289,6 +289,18 @@ defended by the same 229 round-trips.
 | `-SelfTest` | **4/4** — ANCHOR, DRIFT, ERROR and the new second-anchor detector, each watched going red before it was trusted |
 | `slow`, `extern`, `meta`, `cue`, `cue3`, `b4` | **still to run** |
 
-The registry went **314 → 350 rows**. The tiers that defend the records
+The registry went **314 → 351 rows**. The tiers that defend the records
 (`cue`, `cue3`, `b4`) compile `4932ffe` and are untouched by this batch except
 for the twenty `also` anchors added to `b4`, which add no measurement.
+
+**`cue` and `cue3` are deliberately not re-run, and here is the check that
+licenses that.** This batch repointed `$dnac` from a v0.8.0-configured build to
+the release build, which would silently move any row that reaches for the
+default binary. Every row in those three tiers was searched for a call to
+`Size`, `Bpb (Size ...)`, `State` or `PeakMB` — the four helpers that use
+`$dnac` — and **none uses any of them**: they all go through `CueExe`/`CueSize`
+with an explicit label, which compiles the pinned source. So their values cannot
+have moved, and re-running three hours of them would have measured that fact
+twice. `b4` IS re-run, because this batch added rows to it. An
+`-AnchorsOnly` pass over all 351 rows covers the only thing the `also` change
+could break, and it is green.

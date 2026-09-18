@@ -462,6 +462,25 @@ static TLS double    g_apm2[APM_MAXCTX][APM_BINS]; /* SSE stage 2 (order-2 conte
 #ifndef CUE_ROOM
 #define CUE_ROOM 1
 #endif
+/* RIDE_D: how far, either way, the cue is allowed to CORRECT itself when it
+   misses, instead of decaying towards being thrown away and re-acquired
+   (docs/riding-prediction.md, M1). 0 is v0.9.0's behaviour -- the needle is
+   lifted and dropped somewhere else -- and is the release value, so a build
+   with RIDE_D=0 writes the release's bytes. Anything above 0 rides and is an
+   experimental build. */
+#ifndef RIDE_D
+#define RIDE_D 0
+#endif
+/* RIDE_L: how many bases must agree at the corrected position before the cue is
+   moved there. CUE_L (3) is the load's test, which is the right strength for
+   picking up a phase after the master has already failed; it is NOT obviously
+   the right strength for OVERRIDING a cue that is currently trusted, and the
+   first riding run says so -- a substitution, where there is no phase to
+   correct, found a spurious 3-base agreement often enough to cost +0.43 bits
+   per event (docs/after-090-riding.md). Post-hoc, and disclosed as such. */
+#ifndef RIDE_L
+#define RIDE_L CUE_L
+#endif
 /* CUE_MIXFREE=1: the mixer also stops hearing the cue through the match state
    (see mix_predict). With CUE_ROOM it makes the 2x2 of docs/cue-mix-prediction.md */
 #ifndef CUE_MIXFREE
@@ -788,9 +807,32 @@ static void match_after(int s, uint64_t newhist) {
        With the cue off g_cactive is never set, so this and the mix-in below
        touch nothing -- only the load needs to ask g_cue. */
     if (g_cactive && g_cmp < np) {
-        if (g_seq[g_cmp] == (uint8_t)s) { if (g_clen < MLENCAP) g_clen++; g_cmiss = 0; }
-        else { g_clen >>= 1; if (++g_cmiss > MISS_MAX) g_cactive = 0; }
-        g_cmp++;
+        if (g_seq[g_cmp] == (uint8_t)s) { if (g_clen < MLENCAP) g_clen++; g_cmiss = 0; g_cmp++; }
+        else {
+            uint32_t next = g_cmp + 1;          /* where a miss used to leave it */
+            int rode = 0;
+            /* RIDE (M1): before the confidence is halved, try to CORRECT the
+               phase by up to RIDE_D either way. A cue that has been right for
+               two hundred bases and has slipped by one should be nudged back,
+               not discarded -- the very move the cue exists to stop the master
+               from making, which the cue itself was still making one level
+               down. The test is the load's test (CUE_L bases agreeing at the
+               candidate), and the confidence is KEPT: that is what makes this
+               riding rather than a cheap re-acquire. With RIDE_D=0 the loop
+               does not run and this block is v0.9.0's, byte for byte. */
+            for (int a = 1; a <= RIDE_D && !rode; a++)
+                for (int sg = -1; sg <= 1 && !rode; sg += 2) {
+                    int64_t q = (int64_t)next + sg * a;
+                    if (q < RIDE_L || q > (int64_t)np) continue;
+                    if (back_agree((uint32_t)(q - 1), np, RIDE_L) == RIDE_L) {
+                        g_cmp = (uint32_t)q; g_cmiss = 0; rode = 1;
+                    }
+                }
+            if (!rode) {
+                g_clen >>= 1; if (++g_cmiss > MISS_MAX) g_cactive = 0;
+                g_cmp = next;
+            }
+        }
         if (g_cmp >= g_npos) g_cactive = 0;
     } else {
         g_cactive = 0;
@@ -965,7 +1007,7 @@ static void geometry_for(size_t sizing_n, int *hb, int *mhb) {
    tell each other apart; experiments are compared by the scripts that built
    them (scripts/cue/), never by a decoder. */
 #define DNAC_EXPERIMENTAL (CUE_L != 3 || CUE_D != 12 || CUE_SWITCH != 12 || CUE_MINLEN != 4 \
-                           || CUE_ROOM != 1 || CUE_MIXFREE != 0                             \
+                           || CUE_ROOM != 1 || CUE_MIXFREE != 0 || RIDE_D != 0 || RIDE_L != CUE_L \
                            || L1_NMIX != 2 || L1_IR || L1_STCM || L1_ORDERS)
 
 /* The fourth byte of a stream's magic says which family wrote it. The header

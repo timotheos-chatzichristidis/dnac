@@ -59,8 +59,9 @@ def stats(rows):
 def main(argv):
     if len(argv) < 2:
         raise SystemExit(__doc__)
-    print("%-16s %8s %7s %8s %9s %9s %9s %8s" % (
-        "file", "loads", "tied", "P(neg)", "P(same)", "baseline", "excess", "mean|s|"))
+    print("%-16s %8s %7s %9s %8s %9s %9s %9s %8s" % (
+        "file", "loads", "tied", "P(neg)all", "P(neg)", "P(same)", "baseline",
+        "excess", "mean|s|"))
     for arg in argv[1:]:
         label, _, path = arg.partition("=")
         if not path:
@@ -69,8 +70,8 @@ def main(argv):
         if st is None:
             print("%-16s  too few non-tied loads to say anything" % label)
             continue
-        print("%-16s %8d %6.1f%% %8.3f %9.3f %9.3f %+8.2f%s %8.2f" % (
-            label, st["n_all"], st["tied_frac"] * 100, st["p_neg"],
+        print("%-16s %8d %6.1f%% %9.3f %8.3f %9.3f %9.3f %+8.2f%s %8.2f" % (
+            label, st["n_all"], st["tied_frac"] * 100, st["neg_all"], st["p_neg"],
             st["obs"], st["base"], st["excess"], "pp", st["mean_abs"]))
 
 

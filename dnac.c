@@ -539,6 +539,33 @@ static void cue_reset(void) {
     for (size_t j = 0; j < sizeof(g_c_pr) / sizeof(g_c_pr[0]); j++) g_c_pr[j] = CTR_INIT;
 }
 
+/* -DDNAC_CUEPROF: write one line per cue load -- position, signed shift, and
+   whether the OPPOSITE sign at the same distance would also have matched. It is
+   a measuring instrument for docs/after-090-prediction.md experiment B, not part
+   of the format: it reads what the search already computed and touches no model
+   state, so the archive is byte-identical with and without it (the experiment
+   asserts that). The tie flag exists because the search tries -a before +a at
+   every distance, so ties always go negative; a statistic that ignores that
+   would find "momentum" in pure noise. */
+#ifdef DNAC_CUEPROF
+static FILE *g_cueprof = NULL;
+static int   g_cueprof_tried = 0;
+/* Only the TARGET's loads count. Priming runs the cue over the reference
+   against itself, and those loads are not the slips between two genomes, so
+   logging starts when the target does (see the g_refbase assignment). */
+static int   g_cueprof_on = 0;
+static void cueprof_log(unsigned long long pos, int shift, int tied) {
+    if (!g_cueprof_on) return;
+    if (!g_cueprof_tried) {
+        const char *path = getenv("DNAC_CUEPROF_OUT");
+        g_cueprof_tried = 1;
+        g_cueprof = fopen(path ? path : "cueprof.tsv", "wb");
+        if (g_cueprof) fprintf(g_cueprof, "pos\tshift\ttied\n");
+    }
+    if (g_cueprof) fprintf(g_cueprof, "%llu\t%d\t%d\n", pos, shift, tied);
+}
+#endif
+
 static double stretchd(double p) { return log(p / (1.0 - p)); }
 static double squashd(double x)  { return 1.0 / (1.0 + exp(-x)); }
 
@@ -793,6 +820,14 @@ static void match_after(int s, uint64_t newhist) {
                             if (back_agree((uint32_t)(q - 1), np, CUE_L) == CUE_L) {
                                 g_cmp = (uint32_t)q; g_clen = CUE_L;
                                 g_cactive = 1; g_cmiss = 0; done = 1;
+#ifdef DNAC_CUEPROF
+                                {
+                                    int64_t o = (int64_t)m->mp - sg * a;   /* the other sign, same distance */
+                                    int tied = (o >= CUE_L && o <= (int64_t)np &&
+                                                back_agree((uint32_t)(o - 1), np, CUE_L) == CUE_L);
+                                    cueprof_log((unsigned long long)np, sg * a, tied);
+                                }
+#endif
                             }
                         }
                 }
@@ -1972,6 +2007,9 @@ static int do_compress(const char *inpath, const char *outpath, int k, const cha
        target must not overwrite. Set from refpath, not from `ref`, so a state
        file marks the boundary exactly like a FASTA does. */
     if (refpath) g_refbase = g_npos;
+#ifdef DNAC_CUEPROF
+    g_cueprof_on = 1;                 /* the reference is primed; the target starts here */
+#endif
 
     /* One span per block, each with a MODEL OF ITS OWN -- mix_setup resets every
        table, counter, weight and anchor -- because a decoder working on block j

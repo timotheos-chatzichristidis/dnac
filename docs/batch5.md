@@ -275,11 +275,13 @@ competitor in its own table. It now reads 1.45x against xz *and* 1.47x against
 zstd, so the comparison is against the best of the field and against the one
 people actually run.
 
-## R: what is green, and what still has to run
+## R: what is green
 
 The rewrite is a documentation and registry change; `dnac.c` is untouched by
 this batch, so losslessness and the format are exactly Batch 4's and are
-defended by the same 229 round-trips.
+defended by the same 229 round-trips. **Every tier that this batch could move
+is green: 198 rows executed, none red, none needing an edit after the
+measurements were written in.**
 
 | check | state |
 |---|---|
@@ -291,7 +293,7 @@ defended by the same 229 round-trips.
 | `extern` | **16/16** |
 | `meta` | **13/13** |
 | `b4` | **36/36** |
-| `slow` | running |
+| `slow` | **88/88** |
 
 The registry went **314 → 351 rows**. The tiers that defend the records
 (`cue`, `cue3`, `b4`) compile `4932ffe` and are untouched by this batch except
@@ -308,3 +310,56 @@ have moved, and re-running three hours of them would have measured that fact
 twice. `b4` IS re-run, because this batch added rows to it. An
 `-AnchorsOnly` pass over all 351 rows covers the only thing the `also` change
 could break, and it is green.
+
+## Scoreline
+
+| | prediction | outcome |
+|---|---|---|
+| **P1** | E. coli `.seq` level 3 = 1,092,635 B | **held**, to the byte |
+| **P2** | chr21 `.seq` level 3 = 7,498,337 ± 8 | **held** (7,498,339); the bpb derived from it was a rounding slip |
+| **P3** | chr21 `.seq` level 1 = 7,540,777 B | **held**, to the byte |
+| **P4** | slice `.seq` level 3 in 2,103,300–2,104,100 | **failed**: 2,103,089, a bigger gain than predicted |
+| **P5** | metagenome level 3 in 17,310,000–17,319,000 | **failed**: 17,320,408, outside the band by 1,408 B |
+| **P6** | E. coli `-j 8` within ±0.05% | **held**: +0.013% |
+| **P7** | the state file larger by < 40 MB | **failed backwards**: 22% *smaller*, because the prediction forgot the default level moved |
+| **P8** | W3110 `.fa` 1,916 / 2,121 | **held**, to the byte, and with a FASTA reference where Batch 4 used a state |
+| **P9** | `ecoli_ind` and O157 `.fa`, four figures | **held**, all four to the byte |
+| **P10** | level 4 with the cue, a gain under 0.05% | **part held**: a gain on both, the slice just past the band |
+| **W1** | the gradient stays under 3% | **held**: under 2% everywhere |
+| **W2** | the penalty is not a fixed overhead | **held**: −5 B to 777 B, and it changes sign |
+| **W3** | at a matched output size the simulated penalty is far below 205 B | **held**: −5 B against +205 B |
+| **W4** | the per-event arithmetic within 2.5x | **part held**, 3 of 4; the smallest rate has the wrong sign |
+| **W5a** | one part recovers ≥ 40% of the gap | **held**: 104% |
+| **W5b** | that part is the order set | **failed**: it is the mixer's expert count |
+| **W5c** | the tolerant models recover less than the order set | **failed**: both are inert here |
+
+Ten held, five failed, two part held. Four of the five failures — P4, P5, P10
+and W5b/c — lean the same way: **the cue does slightly more at
+`CUE_MINLEN=4` than an extrapolation from `CUE_MINLEN=16` predicted**, so bands
+drawn from the older parameter were consistently a little too tight. P7 is the
+odd one out, and it is the one that stings: it failed not because the codec
+surprised anyone but because the prediction **forgot a decision the previous
+batch had already taken** — that `prime` defaults to level 1 now. A prediction
+is only as good as its author's memory of the last batch, which is the reason
+this project writes them down.
+
+## What Batch 5 hands over
+
+1. **Nothing is pushed and nothing is tagged.** `CITATION.cff` says 0.9.0 and
+   `date-released: "2026-09-17"`; **if the tag lands on another day, that date
+   is wrong and must be changed with it.**
+2. **The lever this release leaves on the table, priced:** four mixer experts at
+   level 1 in reference mode. It removes the one loss v0.9.0 ships with, gains on
+   every reference-mode pair measured, and costs +21.1% time for −0.52% size on
+   the human pair. Whether *reference mode* should price that differently from
+   the plain mode Batch 3's rule was written for is the first question of the
+   next release. Pre-register a rule for reference mode **before** measuring it.
+3. **Two CI checks have still never run**, because nothing is pushed: the stored
+   v0.8.0 streams decoding on macOS arm64, and the "families never mix" step.
+4. **`cue` and `cue3` were not re-run**, for the reason recorded above. If a
+   future batch touches `CueExe`, `CueSize` or the pinned revision, that
+   reasoning expires and both tiers have to run again.
+5. **The registry is 351 rows and the `fast` tier is now 40 of them**, so the
+   pre-commit gate costs about 25 minutes rather than 7. That is the price of
+   the rule that every published number has a row; if it becomes a burden, split
+   `fast` rather than dropping rows.

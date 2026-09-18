@@ -23,11 +23,12 @@ the measurement rewarded it, reverted when it did not. What the measurement
 [docs/negative-results.md](docs/negative-results.md).
 
 **Read [Where this loses](#where-this-loses) alongside the results below.** It is
-1.47x smaller than `zstd -19` on data with no reference and **635x slower to
-decompress**; on aligned reads CRAM wins on structure, because an aligner hands it
-each read's position for free; its reference mode saturates at about chromosome
-scale; and the new reference-mode default is **9.84% worse than v0.8.0 on the
-tightest bacterial pair**, which one argument fixes. Those figures are measured
+1.45x smaller than `xz -9e`, the best of the general-purpose compressors on data
+with no reference, and **651x slower than `zstd -19` to decompress**; on aligned
+reads CRAM wins on structure, because an aligner hands it each read's position
+for free; its reference mode saturates at about chromosome scale; and the new
+reference-mode default is **9.84% worse than v0.8.0 on the tightest bacterial
+pair**, which one argument fixes. Those figures are measured
 to the same standard as the winning ones.
 
 ## Results (real genomes, bits per ACGT base — lower is better)
@@ -54,9 +55,10 @@ A match model is a needle on an earlier copy of the sequence. A substitution
 makes it wrong about one base. An **insertion or a deletion makes it wrong about
 where it is**, and every base after that is out of phase — which is why one
 extra letter between two human genomes used to cost more than three
-substitutions put together (48.25 bits against 14.64). Until v0.9.0 the codec handled that the only way it knew: keep
-playing out of time until confidence collapsed, then re-anchor from a fresh hash
-lookup, throwing away the alignment it had.
+substitutions put together (48.25 bits against 14.64). Until v0.9.0 the codec
+handled that the only way it knew: keep playing out of time until confidence
+collapsed, then re-anchor from a fresh hash lookup, throwing away the alignment
+it had.
 
 The cue is the other answer. When a match that was established (four bases or
 more) misses, dnac looks a few positions either side of where the needle is
@@ -278,10 +280,11 @@ that the output is small: a controlled divergence gradient (`dnac mut` at 0.05,
 W3110's (2,018 bytes against 1,916), **level 1 is 5 bytes smaller, where W3110
 is 205 bytes larger**. Nor is it the smaller model set that level 1 drops:
 switching level 1's mixer from two experts to level 3's four, and changing
-nothing else, gives 1,907 B — the whole gap, and then some. On a simulated E. coli individual the same switch recovers the gap
-exactly (12,204 → 12,051, which *is* level 3's size); on the diverged pair only
-a fifth of it. **On near-identical pairs the cost of level 1 is the mixer's
-context, not its models.** That fix was priced on the human pair and rejected by
+nothing else, gives 1,907 B — the whole gap, and then some. On a simulated
+E. coli individual the same switch recovers the gap exactly (12,204 → 12,051,
+which *is* level 3's size); on the diverged pair only a fifth of it. **On
+near-identical pairs the cost of level 1 is the mixer's context, not its
+models.** That fix was priced on the human pair and rejected by
 a rule fixed in advance: +21.1% time for −0.52% size ([`docs/batch3.md`](docs/batch3.md)).
 It is the first candidate for the next release, and it is recorded here rather
 than in a drawer.

@@ -70,6 +70,18 @@ does a master match that is still missing, and is less sure than the cue, move
 to its position. One ear stays on the room, one stays in the headphones, and the
 headphones never come off.
 
+![Two ways to hold two decks together: a single coarse correction that overshoots and parks, and the practised version — a continuous small oscillation around the steady deck that never settles.](docs/how-to-mix.png)
+
+*Timotheos drew this years before this project existed. The upper panel is one
+coarse correction — too slow at B, overshooting past the line at C, parked at D.
+The lower panel is the practised version: a continuous small oscillation around
+the steady deck that never comes to rest. **v0.9.0 implements the headphones, not
+the lower panel.** The cue is loaded once and, when it drifts, is dropped and
+searched for again — which is the upper panel, and is the same "lift the needle"
+move the cue was built to stop the master from making, one level down. Of the
+three controls on the console, the jog became the nudge (measured, superseded),
+the headphones became the cue, and the pitch fader is not translated yet.*
+
 That last sentence is not a metaphor added afterwards. The mechanism is
 Timotheos's DJ beatmatching method translated line for line — including the
 details that carried the gain, which were his and not the obvious ones

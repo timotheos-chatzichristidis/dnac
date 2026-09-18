@@ -21,6 +21,57 @@ with the first. An insertion or deletion *is* a slipped beat. v0.8.0 dealt with
 a slip the way a DJ never would: it kept playing out of time, then lifted the
 needle and dropped it somewhere else.
 
+## Where the technique came from: a third deck, 2015
+
+Asked in 2026-09-18 where the habit itself started, Timotheos gave an account
+that explains why the technique has the shape it has, and it is mechanical
+rather than biographical. It is recorded here because two details of it turn out
+to be load-bearing.
+
+He took a **third deck** in 2015 and worked on three-deck mixing. That means
+**two tracks are always playing to the room at once**, and the third is prepared
+in cue: A and B playing; bring C up while pulling A down, since A started first
+and is ending; now B and C; prepare A so B can leave; now A and C; and round
+again. The roles rotate, and whichever track is ending is the one replaced while
+the other two carry.
+
+Two consequences, both of which the codec either uses or does not:
+
+1. **The headphones cannot go on and off.** With two tracks live in the room
+   that must stay aligned continuously, there is no moment free to lift them.
+   The ear has to acclimatise to that environment permanently and mix the third
+   in when needed. *This is the half v0.9.0 implements*: the cue is a permanent
+   mixer input, never switched in or out.
+2. **The decks were CDJ-100s, whose pitch has no decimal precision.** You cannot
+   dial the correct tempo and leave it. Drift is therefore **guaranteed, not
+   exceptional**, and the only way to hold two tracks together is to ride the
+   pitch continuously — small corrections that never settle. *This is the half
+   v0.9.0 does not implement.*
+
+![the diagram](how-to-mix.png)
+
+His diagram, drawn years before this project, is exactly that distinction: the
+upper panel is one coarse correction that overshoots and parks; the lower is the
+practised version, a continuous alternation around the steady deck.
+
+**And the codec does the upper panel.** The cue is loaded by a single search and
+then sits at that offset; when it starts missing, its confidence is halved and
+after `MISS_MAX` it is deactivated, so the next master miss starts a completely
+fresh search. That is lifting the needle — the exact move the cue was invented
+to stop the master from making, performed by the cue itself one level down. It
+went unnoticed for five batches because the cue's own failures are invisible:
+they surface only as the master's next miss.
+
+**Nor do the roles rotate.** dnac has two forward match models, a 13-base anchor
+and a 16-base anchor, both permanently live — the two-decks-in-the-room half of
+the picture. But only the short one can *cause* a cue to load. The long one can
+be handed the cue's phase once the cue is trusted; it can never call for one.
+
+Both are written up as pre-registered experiments in
+`docs/riding-prediction.md`. The point for this file is narrower and is the
+reason the account is here at all: **the mechanism that shipped is one of three
+controls, and the practice it came from rests on the one that did not ship.**
+
 ## The record
 
 | when | what happened | where |

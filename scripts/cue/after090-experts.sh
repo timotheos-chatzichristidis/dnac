@@ -94,8 +94,8 @@ if [ "$SECT" = time ]; then
   awk -F'\t' '{ if (m[$1] == "" || $3 < m[$1]) m[$1] = $3; b[$1] = $4 }
     END {
       printf "  v0.8.0 default      %7.2f s  %10d B\n", m["v08"], b["v08"]
-      printf "  v0.9.0 default      %7.2f s  %10d B   %.2fx faster\n", m["rel"], b["rel"], m["v08"]/m["rel"]
-      printf "  + four experts      %7.2f s  %10d B   %.2fx faster   (%+.1f%% time vs v0.9.0)\n",
+      printf "  v0.9.0 default      %7.2f s  %10d B   %.4fx faster\n", m["rel"], b["rel"], m["v08"]/m["rel"]
+      printf "  + four experts      %7.2f s  %10d B   %.4fx faster   (%+.1f%% time vs v0.9.0)\n",
              m["rel_x4"], b["rel_x4"], m["v08"]/m["rel_x4"], 100*(m["rel_x4"]/m["rel"]-1)
     }' "$B/time.tsv"
   echo "ALL_DONE  ->  $B/time.tsv"

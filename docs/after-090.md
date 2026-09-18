@@ -137,3 +137,63 @@ alternate" from "our search overshoots and comes back" needs a second
 measurement — the distribution of `|shift|` conditioned on whether the previous
 load was adopted by a master — and until that is run, **the anti-correlation is
 a property of this codec on this data, not a claim about genomes.**
+
+### Condition 3: the speed win does not survive, and the printout nearly hid it
+
+`sh scripts/cue/after090-experts.sh time`. Three rounds, the three labels
+alternating inside each round, minimum quoted per label — the standing rule, and
+the reason the labels alternate is that a ratio taken across separate
+invocations is not a ratio on a machine with this much noise.
+
+| build | round 1 | round 2 | round 3 | minimum | bytes |
+|---|---:|---:|---:|---:|---:|
+| v0.8.0 default (`-l 3`) | 219.39 s | 193.46 s | 212.32 s | **193.46 s** | 586,615 |
+| v0.9.0 default (`-l 1`) | 91.35 s | 90.84 s | 100.18 s | **90.84 s** | 563,031 |
+| + four experts | 116.57 s | 114.09 s | 123.98 s | **114.09 s** | 560,096 |
+
+- v0.9.0's default is **2.1297x** faster than v0.8.0's, which is the 2.1x the
+  README claims, re-confirmed on a third occasion.
+- Four experts cost **+25.6%** time against the current default. **A3 failed**,
+  narrowly: the band was 15–25%.
+- Against v0.8.0's default the ratio is **1.6957x**. **A4 failed** (the band was
+  1.75–1.95x), and **D-A condition 3, which required ≥ 1.7x, fails.**
+
+**The margin is 0.25%, and the script's own summary rounded it the wrong way.**
+It printed `1.70x faster`; read off that line the condition passes, and read off
+the arithmetic it does not (193.46 / 114.09 = 1.6957). A threshold and a rounded
+display should never meet — the script now prints four decimals. This is the
+same class as every other finding in this project's logs: **a number that was
+displayed rather than computed.**
+
+**And the estimator matters at this margin, which is stated rather than
+exploited.** Per-round ratios are 1.882, 1.696 and 1.713; their median is 1.713
+and their mean 1.764, both of which would pass. The minimum-of-minimums is
+1.6957, which does not. The standing rule is the minimum, fixed long before this
+run, so the minimum is what decides — **choosing an estimator after seeing three
+numbers is the same error as choosing a reading of condition 1 after seeing nine
+bytes.**
+
+## D-A: the default does not change
+
+| condition | verdict |
+|---|---|
+| 1. no regression against v0.8.0's default | **ambiguous** — passes on five pairs, +9 bytes on O157, and the rule's wording admits two readings |
+| 2. never costs size against v0.9.0's default | **passes**, all six pairs |
+| 3. speed stays ≥ 1.7x against v0.8.0's default | **fails**: 1.6957x |
+| 4. replicates on the held-out set | **passes**: chr22 −0.43% against chr21 −0.52% |
+
+**Condition 3 fails cleanly, so the answer is no and the ambiguity in condition 1
+never has to be resolved.** Four mixer experts at level 1 do not become the
+reference-mode default in this release or the next one without a different
+argument.
+
+**A6 — my own prediction that all four conditions would hold — failed.** That is
+the routine working: the rule was written before the numbers, it was written by
+the same person who expected it to pass, and it said no anyway.
+
+**What survives for whoever revisits this.** The size case is genuinely strong:
+four experts reverse the W3110 regression, cost size on nothing, and hold on the
+held-out chromosome. What kills it is a quarter of a percent of speed against a
+threshold chosen in advance. A future argument that wants this change should
+argue about **the threshold** — openly, before measuring again — and not about
+the measurement.

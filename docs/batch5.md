@@ -290,7 +290,8 @@ defended by the same 229 round-trips.
 | `b5` | **5/5** |
 | `extern` | **16/16** |
 | `meta` | **13/13** |
-| `b4`, `slow` | running |
+| `b4` | **36/36** |
+| `slow` | running |
 
 The registry went **314 → 351 rows**. The tiers that defend the records
 (`cue`, `cue3`, `b4`) compile `4932ffe` and are untouched by this batch except

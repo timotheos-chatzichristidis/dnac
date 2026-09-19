@@ -5,7 +5,7 @@
 # marks its archives experimental so they can never be confused with release
 # files; `rel` is the release itself.
 #
-#   sh scripts/cue/after090-ride.sh [targets|human|heldout|time]...
+#   sh scripts/cue/after090-ride.sh [targets|pairs|human|heldout|time]...
 #   LABELS="rel ride_l8" sh scripts/cue/after090-ride.sh targets human
 #
 # LABELS chooses which builds to run (default "rel ride"). `ride_l8` is the
@@ -30,7 +30,7 @@ for lb in $LABELS; do
   exe=$(build "$lb" $(defines_for "$lb"))
   eval "$(echo "$lb" | tr a-z A-Z)"='$exe'
 done
-SECTIONS=${*:-targets human heldout time}
+SECTIONS=${*:-targets pairs human heldout time}
 has() { case " $SECTIONS " in *" $1 "*) return 0 ;; esac; return 1; }
 
 now() { ${PYTHON:-python} -c 'import time; print("%.3f" % time.time())'; }
@@ -67,6 +67,16 @@ if has targets; then
   done
 fi
 
+if has pairs; then
+  need "$REF" "sh scripts/get-data.sh"
+  # M2b: the DIVERGED bacterial pair, where long exact anchors are scarce -- the
+  # case rotation is registered against separately (docs/riding-prediction.md).
+  echo "== M2b: O157:H7 and ecoli_ind against MG1655, level 3"
+  for lb in $LABELS; do
+    for pr in o157 ecoli_ind; do rt "$lb" "$pr" 3 "$ROOT/$pr.fa" "$REF"; done
+  done
+fi
+
 if has human; then
   need "$HUM/chm13_chr21.fa" "sh scripts/get-data.sh --cue"
   echo "== M1b: CHM13 chr21 against GRCh38 chr21, level 3"
@@ -79,7 +89,7 @@ if has heldout; then
   for lb in $LABELS; do rt "$lb" chm13_chr22 3 "$HUM/chm13_chr22.fa" "$HUM/grch38_chr22.fa"; done
 fi
 
-if has targets || has human || has heldout; then
+if has targets || has pairs || has human || has heldout; then
   echo
   echo "== per event (target - ctl) x 8 / 2000, mean of three seeds, and the pairs"
   awk -F'\t' '{ S[$1 FS $2] = $4; if (!($1 in L)) { L[$1] = 1; ord[++nl] = $1 } }
@@ -98,8 +108,9 @@ if has targets || has human || has heldout; then
       }
       print ""
       printf "%-14s %-8s %10s %9s\n", "pair", "build", "bytes", "vs rel"
-      for (p = 1; p <= 2; p++) {
-        cs = (p == 1) ? "chm13_chr21" : "chm13_chr22"
+      split("chm13_chr21 chm13_chr22 o157 ecoli_ind", P, " ")
+      for (p = 1; p <= 4; p++) {
+        cs = P[p]
         if (S["rel" FS cs] == "") continue
         for (i = 1; i <= nl; i++) {
           lb = ord[i]

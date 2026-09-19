@@ -84,7 +84,11 @@ the headphones became the cue, and the pitch fader has now been measured both
 ways and shipped neither: slips alternate rather than persist, so there is no
 direction to search in (`docs/after-090.md`), and riding the cue back into place
 does exactly what it claims on the events it was built for while staying short
-of the adoption bar on a real human pair (`docs/after-090-riding.md`).*
+of the adoption bar on a real human pair (`docs/after-090-riding.md`). The
+three-deck rotation behind the diagram — letting either master call for a cue —
+is measured too (`docs/after-090-rotation.md`), and lands just short of the same
+bar. Every control on that console has now been translated and tested; the cue
+is the one that shipped.*
 
 That last sentence is not a metaphor added afterwards. The mechanism is
 Timotheos's DJ beatmatching method translated line for line — including the

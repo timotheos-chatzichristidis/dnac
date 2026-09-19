@@ -481,6 +481,17 @@ static TLS double    g_apm2[APM_MAXCTX][APM_BINS]; /* SSE stage 2 (order-2 conte
 #ifndef RIDE_L
 #define RIDE_L CUE_L
 #endif
+/* CUE_ROTATE: which forward master may CALL for a cue. 0 is v0.9.0's rule --
+   only the 13-base anchor, `mi == 0` -- so one deck is watched and the other is
+   only ever rescued. 1 lets either master that loses an established run load
+   the cue, which is the three-deck rotation of docs/riding-prediction.md (M2):
+   whichever deck is ending is the one replaced while the other carries. A cue
+   loaded by the short anchor still cannot be overwritten by the long one on the
+   same base, because the load guard already refuses a healthy cue. 0 is the
+   release value and compiles to exactly v0.9.0's expression. */
+#ifndef CUE_ROTATE
+#define CUE_ROTATE 0
+#endif
 /* CUE_MIXFREE=1: the mixer also stops hearing the cue through the match state
    (see mix_predict). With CUE_ROOM it makes the 2x2 of docs/cue-mix-prediction.md */
 #ifndef CUE_MIXFREE
@@ -854,7 +865,7 @@ static void match_after(int s, uint64_t newhist) {
                 /* the room ear just lost the beat: put a candidate shifted phase in
                    the headphones (if they are free or the one there is failing). It
                    only SPEAKS through the mixer; it takes nothing over. */
-                if (g_cue && mi == 0 && m->mlen_pre >= CUE_MINLEN && (!g_cactive || g_cmiss > 0)) {
+                if (g_cue && (CUE_ROTATE || mi == 0) && m->mlen_pre >= CUE_MINLEN && (!g_cactive || g_cmiss > 0)) {
                     for (int a = 1, done = 0; a <= CUE_D && !done; a++)
                         for (int sg = -1; sg <= 1 && !done; sg += 2) {
                             int64_t q = (int64_t)m->mp + sg * a;
@@ -1007,7 +1018,8 @@ static void geometry_for(size_t sizing_n, int *hb, int *mhb) {
    tell each other apart; experiments are compared by the scripts that built
    them (scripts/cue/), never by a decoder. */
 #define DNAC_EXPERIMENTAL (CUE_L != 3 || CUE_D != 12 || CUE_SWITCH != 12 || CUE_MINLEN != 4 \
-                           || CUE_ROOM != 1 || CUE_MIXFREE != 0 || RIDE_D != 0 || RIDE_L != CUE_L \
+                           || CUE_ROOM != 1 || CUE_MIXFREE != 0 || RIDE_D != 0                \
+                           || RIDE_L != CUE_L || CUE_ROTATE != 0                              \
                            || L1_NMIX != 2 || L1_IR || L1_STCM || L1_ORDERS)
 
 /* The fourth byte of a stream's magic says which family wrote it. The header

@@ -122,6 +122,20 @@ seen is the one move that is ruled out either way.
 
 Nothing pre-registered. The jog (the nudge), the headphones (the cue) and the
 pitch fader (directional search, and riding) are all measured and written up; the
-three-deck rotation is measured here. **Every mechanism the DJ console offered
-has now been translated and tested.** The cue is the one that shipped, and it
+three-deck rotation is measured here. The cue is the one that shipped, and it
 carried v0.9.0 by itself.
+
+**One unregistered mechanism was named after this was written**, when Timotheos
+corrected the account of his own practice (`docs/origin.md`, 2026-09-19). The
+cue button is not permanent — it is opened on exactly one deck, closed as that
+deck's fader goes up, and then **opened straight away on the deck that is now
+leaving**. dnac does the first two: one cue at a time, closed the instant a
+master takes its phase. It does not do the third. It waits for the leaving deck
+to miss.
+
+What was measured here is the weaker, reactive version of that: either master
+may *call* for a cue **when it misses**. The proactive version — re-open the cue
+on the other master the moment the mix completes, before it has missed anything
+— is a different mechanism and is **unbuilt**. Whether it is worth building
+against a bar that three mechanisms have now failed by a whisker is the same
+open question as the rest of this document.

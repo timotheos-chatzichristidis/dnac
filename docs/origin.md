@@ -37,16 +37,44 @@ the other two carry.
 
 Two consequences, both of which the codec either uses or does not:
 
-1. **The headphones cannot go on and off.** With two tracks live in the room
-   that must stay aligned continuously, there is no moment free to lift them.
-   The ear has to acclimatise to that environment permanently and mix the third
-   in when needed. *This is the half v0.9.0 implements*: the cue is a permanent
-   mixer input, never switched in or out.
+1. **The headphones cannot go on and off — but the cue button moves.** Those
+   are two different controls, and this document confused them until Timotheos
+   corrected it on 2026-09-19. The *ear* is permanent: with two tracks live in
+   the room that must stay aligned continuously, there is no moment free to lift
+   the headphones, so the ear acclimatises to that environment and stays in it.
+   The *cue* is opened on exactly one channel — the one about to come in, fader
+   down — and you pitch that deck against what the room is playing. Once it
+   holds (acceptably, and sometimes exactly) you **close the cue as you raise
+   its fader**, so that for half a minute all three are in the room together;
+   then you **open the cue on the deck that is now leaving**, because that is
+   the one being replaced next.
+
+   The exclusivity is the point. Many DJs open the cue on every channel, to hear
+   the differences better; his claim is that doing so costs both halves of the
+   structure at once — the acclimatisation, which needs one environment outside
+   and one inside, and the osmosis between them.
+
+   *What v0.9.0 implements is more of this than the sentence that used to stand
+   here claimed.* The cue's **slot** in the mixer is permanent — that is the
+   ear, and when no deck is loaded into it, it predicts nothing. The cue's
+   **deck** is not permanent: one at a time (`NCUE` is 1), loaded when a master
+   loses the beat, and closed the instant a master takes its phase
+   (`if (mixed) g_cactive = 0`), which is closing the cue as the fader goes up.
+   *What it does not implement* is the move after that — re-opening the cue
+   straight away on the deck that is now leaving. dnac waits for that deck to
+   miss first. That is a mechanism rather than a tuning idea, and it is
+   **unbuilt** — the nearest thing measured is its weaker relative, letting
+   either master *call* for a cue once it misses, which is −0.2653% on a real
+   human pair and just short of its adoption bar
+   (`docs/after-090-rotation.md`).
 2. **The decks were CDJ-100s, whose pitch has no decimal precision.** You cannot
    dial the correct tempo and leave it. Drift is therefore **guaranteed, not
    exceptional**, and the only way to hold two tracks together is to ride the
    pitch continuously — small corrections that never settle. *This is the half
-   v0.9.0 does not implement.*
+   v0.9.0 does not implement* — and since 2026-09-19 it is the half that has
+   been built and measured anyway: riding gains 3.3% on exactly the event it
+   was designed for and loses on a real human pair, and both readings of the
+   pitch fader are closed (`docs/after-090-riding.md`, `docs/after-090.md`).
 
 ![the diagram](how-to-mix.png)
 
@@ -104,7 +132,7 @@ controls, and the practice it came from rests on the one that did not ship.**
   predictions written before every run, thousands of measurements checked
   byte for byte, and the prior-art reading.
 
-## His position, in his words (translated)
+## His position, in his words: AI as a tool for imagination (translated)
 
 > Something new and unique rests on me, not on you. Whatever has been built is
 > already out there, and already inside your LLM. Only through an intuitive idea

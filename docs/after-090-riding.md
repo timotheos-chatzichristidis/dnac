@@ -136,10 +136,10 @@ chromosome named in advance and the adoption bar left where it is.
 The same applies to the bar itself. D-M's 0.3% was written before any of this
 was built, and this is the second mechanism on this branch to die just short of
 a pre-registered threshold — four experts at 1.6957x against 1.7x, and now
-riding missing two bars at once, 0.2532% against 0.3% and 45.7% against 50%. If that pattern
-means the bars are set too high, **that is an argument to have openly, before the
-next measurement, and not one to settle by moving a bar onto a number already
-seen.**
+riding missing two bars at once, 0.2532% against 0.3% and 45.7% against 50%. If
+that pattern means the bars are set too high, **that is an argument to have
+openly, before the next measurement, and not one to settle by moving a bar onto
+a number already seen.**
 
 ## Where this leaves the console, and M2
 
@@ -157,3 +157,9 @@ Its predicted effect was 0.0 to −0.3% on chr21, which is the same size as what
 riding just failed to clear — so it is registered against the same bar and
 should be expected to have the same trouble. It is the last of the pre-registered
 mechanisms on this branch.
+
+**It was run the same day** (`docs/after-090-rotation.md`), and that sentence is
+left standing because it was written before the measurement and turned out to be
+right: rotation gains −0.2653% on chr21, holds both of its registered
+predictions, replicates at 83.9% on chr22 — and misses the same bar by 0.035
+percentage points.

@@ -203,6 +203,19 @@ static TLS uint16_t flag_cnt[(RUNCAP + 1) * 2];
 /* literal model: order-0 over 256 byte values, for escaped (non-ACGT) bytes  */
 static TLS uint16_t lit_cnt[256];
 
+/* The case bit's own model. It never feeds a base model: the bases of a
+   soft-masked file are predicted exactly as the bases of its uppercase twin.
+   Context = previous base's case x log2 of the current case run x the case at
+   the position the 13-base match model is pointing to (none / upper / lower). */
+#define CASE_RUNB 16
+static TLS uint16_t g_case_ctr[2 * CASE_RUNB * 3];
+static TLS uint8_t *g_cbits = NULL;     /* one bit per position of g_seq: 1 = lowercase */
+#ifdef DNAC_CASEPROF
+static TLS double g_case_cost = 0.0;    /* instrument: sum of -log2 p over case bits */
+#endif
+typedef struct { int cur; uint32_t run; } CaseRun;
+static int lower_base(int c) { return c == 'a' || c == 'c' || c == 'g' || c == 't'; }
+
 static int base_to_sym(int c) {
     switch (c) { case 'A': return 0; case 'C': return 1; case 'G': return 2; case 'T': return 3; }
     return -1; /* not a base */
@@ -942,16 +955,32 @@ static const char STREAM_LETTER[4][3] = {       /* plain, reference, blocks (-j)
     { 'c', 'u', 'p' },                          /* experimental build, no cue    */
     { 'e', 'v', 'q' },                          /* experimental build, the cue   */
 };
+/* THE CASE MASK (docs/case-mask-prediction.md). A file with at least one
+   lowercase a/c/g/t is written with one more bit after every base -- its case --
+   and gets one of these letters instead. A file without one is written with the
+   letters above, byte for byte as v0.9.0 wrote it. Reference mode has no case
+   family: a lowercase target base there stays on the literal path (0 = none). */
+static const char CASE_LETTER[4][3] = {
+    { 'F', 0, 'H' },
+    { 'K', 0, 'M' },
+    { 'f', 0, 'h' },
+    { 'k', 0, 'm' },
+};
+static int g_casemode = 0;      /* configuration, like g_level: read, not written, while coding */
 static int stream_letter(int ref, int blocked) {
-    return STREAM_LETTER[(DNAC_EXPERIMENTAL ? 2 : 0) + (g_cue ? 1 : 0)][ref ? 1 : (blocked ? 2 : 0)];
+    int f = (DNAC_EXPERIMENTAL ? 2 : 0) + (g_cue ? 1 : 0), j = ref ? 1 : (blocked ? 2 : 0);
+    return g_casemode ? CASE_LETTER[f][j] : STREAM_LETTER[f][j];
 }
-/* 0 and the four properties for a letter this build knows, -1 otherwise */
-static int stream_family(int m3, int *exper, int *cue, int *ref, int *blocked) {
-    for (int f = 0; f < 4; f++)
-        for (int j = 0; j < 3; j++)
-            if (STREAM_LETTER[f][j] == m3) {
-                *exper = f >= 2; *cue = f & 1; *ref = (j == 1); *blocked = (j == 2);
-                return 0;
+/* 0 and the properties for a letter this build knows, -1 otherwise */
+static int stream_family(int m3, int *exper, int *cue, int *ref, int *blocked, int *casem) {
+    for (int c = 0; c < 2; c++)
+        for (int f = 0; f < 4; f++)
+            for (int j = 0; j < 3; j++) {
+                int l = c ? CASE_LETTER[f][j] : STREAM_LETTER[f][j];
+                if (l != 0 && l == m3) {
+                    *exper = f >= 2; *cue = f & 1; *ref = (j == 1); *blocked = (j == 2); *casem = c;
+                    return 0;
+                }
             }
     return -1;
 }
@@ -1073,11 +1102,16 @@ static int mix_setup(int maxorder, size_t sizing_n, size_t seq_alloc, int hb, in
     cue_reset();
     g_seq =(uint8_t *)malloc(seq_alloc ? seq_alloc : 1);
     if (!g_seq) { fprintf(stderr, "out of memory for match model\n"); return -1; }
+    if (g_casemode) {
+        g_cbits = (uint8_t *)calloc((seq_alloc >> 3) + 1, 1);
+        if (!g_cbits) { fprintf(stderr, "out of memory for the case mask\n"); return -1; }
+    }
     return 0;
 }
 static void mix_free(void) {
     for (int i = 0; i < g_nmodels; i++) { free(g_tab[i]); g_tab[i] = NULL; }
     free(g_seq);   g_seq = NULL;
+    free(g_cbits); g_cbits = NULL;
     for (int mi = 0; mi < NMATCH; mi++) { free(g_mm[mi].hash); g_mm[mi].hash = NULL; }
 }
 
@@ -1793,6 +1827,42 @@ static int run_workers(Worker *ws, int nthreads) {
 }
 #endif
 
+/* The case bit, coded after a base's two bits and before match_after(), so
+   g_mm[0].mp is still the position that predicted THIS base. */
+static void case_reset(CaseRun *cr) {
+    for (size_t j = 0; j < sizeof(g_case_ctr) / sizeof(g_case_ctr[0]); j++) g_case_ctr[j] = CTR_INIT;
+    cr->cur = 0; cr->run = 0;
+}
+static uint16_t *case_slot(const CaseRun *cr) {
+    int rb = 0; uint32_t r = cr->run;
+    while (r > 1 && rb < CASE_RUNB - 1) { r >>= 1; rb++; }
+    const MatchModel *m = &g_mm[0];
+    int mc = 2;
+    if (m->active && m->mp < g_npos) mc = (g_cbits[m->mp >> 3] >> (m->mp & 7)) & 1;
+    return &g_case_ctr[(cr->cur * CASE_RUNB + rb) * 3 + mc];
+}
+static uint32_t case_p1(uint16_t v) { return ((uint32_t)(v >> 4) << (PBITS - 12)) + (1u << (PBITS - 13)); }
+static void case_after(CaseRun *cr, uint16_t *slot, int lc) {
+    ctr_upd(slot, lc);
+    if (lc) g_cbits[g_npos >> 3] |= (uint8_t)(1u << (g_npos & 7));
+    if (lc == cr->cur) cr->run++; else { cr->cur = lc; cr->run = 1; }
+}
+static void case_enc(REnc *e, CaseRun *cr, int lc) {
+    uint16_t *slot = case_slot(cr);
+    uint32_t p1 = case_p1(*slot);
+#ifdef DNAC_CASEPROF
+    g_case_cost -= log2(lc ? (double)p1 / PSCALE : 1.0 - (double)p1 / PSCALE);
+#endif
+    renc_bit(e, lc, p1);
+    case_after(cr, slot, lc);
+}
+static int case_dec(RDec *d, CaseRun *cr) {
+    uint16_t *slot = case_slot(cr);
+    int lc = rdec_bit(d, case_p1(*slot));
+    case_after(cr, slot, lc);
+    return lc;
+}
+
 /* Code one span of bytes with the CURRENT model state.
  The caller builds the
    models; a block-parallel encoder calls this once per block, each with its own
@@ -1804,10 +1874,14 @@ static void encode_span(const uint8_t *buf, long n, Buf *out) {
     REnc e; renc_init(&e, out);
     uint64_t hist = 0;
     int run = 0;
+    CaseRun crun; case_reset(&crun);
+    int inhdr = 0;   /* inside a '>' line: its lowercase letters are text, not bases */
 
     for (long p = 0; p < n; p++) {
         int b = buf[p];
-        int s = base_to_sym(b);
+        int s = base_to_sym(b), lc = 0;
+        if (b == '>') inhdr = 1; else if (b == '\n') inhdr = 0;
+        if (s < 0 && g_casemode && !inhdr && lower_base(b)) { s = base_to_sym(b - 32); lc = 1; }
         int rc = run < RUNCAP ? run : RUNCAP;
         uint16_t *fc = &flag_cnt[rc * 2];
         uint32_t f0 = (uint32_t)fc[0] + 1, f1 = (uint32_t)fc[1] + 1, ft = f0 + f1;
@@ -1823,6 +1897,7 @@ static void encode_span(const uint8_t *buf, long n, Buf *out) {
             renc_encode(&e, 0, f0, ft));
             fc[0]++;
             code_base_enc(&e, ctxv, hist, s);
+            if (g_casemode) case_enc(&e, &crun, lc);
             hist = (hist << 2) | (uint64_t)s;
             ir_prefetch(hist);        /* overlaps match_after/stcm_after below */
             PT(7, match_after(s, hist));
@@ -1846,6 +1921,9 @@ static void encode_span(const uint8_t *buf, long n, Buf *out) {
         if (ft + 1 >= CAP) { fc[0] >>= 1; fc[1] >>= 1; }
     }
     renc_flush(&e);
+#ifdef DNAC_CASEPROF
+    if (g_casemode) fprintf(stderr, "CASEPROF case bits cost %.1f bytes\n", g_case_cost / 8.0);
+#endif
 #ifdef DNAC_PROF
     {
         static const char *nm[12] = { "order-model table lookups (inside mix)",
@@ -1891,6 +1969,17 @@ static int do_compress(const char *inpath, const char *outpath, int k, const cha
     uint8_t *buf = (uint8_t *)malloc((size_t)n ? (size_t)n : 1);
     if (n && fread(buf, 1, (size_t)n, in) != (size_t)n) { perror("read"); fclose(in); return 1; }
     fclose(in);
+    /* The case mask exists only if it is needed, so a file without a lowercase
+       base is written exactly as v0.9.0 wrote it. No reference mode: see
+       CASE_LETTER. */
+    g_casemode = 0;
+    if (!refpath) {
+        int inhdr = 0;   /* the same rule encode_span applies: a header's text is not a base */
+        for (int64_t i = 0; i < n && !g_casemode; i++) {
+            if (buf[i] == '>') inhdr = 1; else if (buf[i] == '\n') inhdr = 0;
+            else if (!inhdr && lower_base(buf[i])) g_casemode = 1;
+        }
+    }
 
     memset(lit_cnt, 0, sizeof(lit_cnt));
     memset(flag_cnt, 0, sizeof(flag_cnt));
@@ -2041,6 +2130,7 @@ static void decode_span(const uint8_t *cs, size_t cs_len, uint64_t n, uint8_t *d
     RDec d; rdec_init(&d, cs, cs_len);
     uint64_t hist = 0;
     int run = 0;
+    CaseRun crun; case_reset(&crun);
 
     for (uint64_t p = 0; p < n; p++) {
         /* ctxv depends only on history, so it is known before the flag is
@@ -2061,7 +2151,8 @@ static void decode_span(const uint8_t *cs, size_t cs_len, uint64_t n, uint8_t *d
 
         if (isbase) {
             int s = code_base_dec(&d, ctxv, hist);
-            dst[p] = (uint8_t)SYM_TO_BASE[s];
+            int lc = g_casemode ? case_dec(&d, &crun) : 0;
+            dst[p] = (uint8_t)(SYM_TO_BASE[s] | (lc ? 0x20 : 0));
             hist = (hist << 2) | (uint64_t)s;
             ir_prefetch(hist);        /* overlaps match_after/stcm_after below */
             match_after(s, hist);
@@ -2106,8 +2197,8 @@ static int do_decompress(const char *inpath, const char *outpath, const char *re
                         " build's and it cannot be read safely\n");
         fclose(in); return 1;
     }
-    int exper = 0, cue = 0, need_ref = 0, blocked = 0;   /* blocked: plain, cut into spans */
-    if (m0 != 'D' || m1 != 'N' || m2 != 'C' || stream_family(m3, &exper, &cue, &need_ref, &blocked)) {
+    int exper = 0, cue = 0, need_ref = 0, blocked = 0, casem = 0;   /* blocked: plain, cut into spans */
+    if (m0 != 'D' || m1 != 'N' || m2 != 'C' || stream_family(m3, &exper, &cue, &need_ref, &blocked, &casem)) {
         fprintf(stderr, "not a dnac file\n"); fclose(in); return 1;
     }
     if (exper != (DNAC_EXPERIMENTAL != 0)) {
@@ -2119,6 +2210,7 @@ static int do_decompress(const char *inpath, const char *outpath, const char *re
         fclose(in); return 1;
     }
     g_cue = cue;                  /* before any table is built: it decides the mixer's inputs */
+    g_casemode = casem;           /* before any table is built: it allocates the case mask */
     if (need_ref && !refpath) {
         fprintf(stderr, "this file was compressed against a reference: use  dnac dr <in> <out> <ref.fa>\n");
         fclose(in); return 1;

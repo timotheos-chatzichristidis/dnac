@@ -203,19 +203,6 @@ static TLS uint16_t flag_cnt[(RUNCAP + 1) * 2];
 /* literal model: order-0 over 256 byte values, for escaped (non-ACGT) bytes  */
 static TLS uint16_t lit_cnt[256];
 
-/* The case bit's own model. It never feeds a base model: the bases of a
-   soft-masked file are predicted exactly as the bases of its uppercase twin.
-   Context = previous base's case x log2 of the current case run x the case at
-   the position the 13-base match model is pointing to (none / upper / lower). */
-#define CASE_RUNB 16
-static TLS uint16_t g_case_ctr[2 * CASE_RUNB * 3];
-static TLS uint8_t *g_cbits = NULL;     /* one bit per position of g_seq: 1 = lowercase */
-#ifdef DNAC_CASEPROF
-static TLS double g_case_cost = 0.0;    /* instrument: sum of -log2 p over case bits */
-#endif
-typedef struct { int cur; uint32_t run; } CaseRun;
-static int lower_base(int c) { return c == 'a' || c == 'c' || c == 'g' || c == 't'; }
-
 static int base_to_sym(int c) {
     switch (c) { case 'A': return 0; case 'C': return 1; case 'G': return 2; case 'T': return 3; }
     return -1; /* not a base */
@@ -955,18 +942,19 @@ static const char STREAM_LETTER[4][3] = {       /* plain, reference, blocks (-j)
     { 'c', 'u', 'p' },                          /* experimental build, no cue    */
     { 'e', 'v', 'q' },                          /* experimental build, the cue   */
 };
-/* THE CASE MASK (docs/case-mask-prediction.md). A file with at least one
-   lowercase a/c/g/t is written with one more bit after every base -- its case --
-   and gets one of these letters instead. A file without one is written with the
-   letters above, byte for byte as v0.9.0 wrote it. Reference mode has no case
-   family: a lowercase target base there stays on the literal path (0 = none). */
+/* THE CASE MASK (docs/case-list-prediction.md). A file with at least one
+   lowercase a/c/g/t outside a '>' line is coded as its uppercase twin, and its
+   case travels beside it as a list of run lengths (case_list_*). It gets one of
+   these letters instead. A file without one is written with the letters above,
+   byte for byte as v0.9.0 wrote it. Reference mode has no case family: a
+   lowercase target base there stays on the literal path (0 = none). */
 static const char CASE_LETTER[4][3] = {
     { 'F', 0, 'H' },
     { 'K', 0, 'M' },
     { 'f', 0, 'h' },
     { 'k', 0, 'm' },
 };
-static int g_casemode = 0;      /* configuration, like g_level: read, not written, while coding */
+static int g_casemode = 0;      /* configuration, like g_level */
 static int stream_letter(int ref, int blocked) {
     int f = (DNAC_EXPERIMENTAL ? 2 : 0) + (g_cue ? 1 : 0), j = ref ? 1 : (blocked ? 2 : 0);
     return g_casemode ? CASE_LETTER[f][j] : STREAM_LETTER[f][j];
@@ -1102,16 +1090,11 @@ static int mix_setup(int maxorder, size_t sizing_n, size_t seq_alloc, int hb, in
     cue_reset();
     g_seq =(uint8_t *)malloc(seq_alloc ? seq_alloc : 1);
     if (!g_seq) { fprintf(stderr, "out of memory for match model\n"); return -1; }
-    if (g_casemode) {
-        g_cbits = (uint8_t *)calloc((seq_alloc >> 3) + 1, 1);
-        if (!g_cbits) { fprintf(stderr, "out of memory for the case mask\n"); return -1; }
-    }
     return 0;
 }
 static void mix_free(void) {
     for (int i = 0; i < g_nmodels; i++) { free(g_tab[i]); g_tab[i] = NULL; }
     free(g_seq);   g_seq = NULL;
-    free(g_cbits); g_cbits = NULL;
     for (int mi = 0; mi < NMATCH; mi++) { free(g_mm[mi].hash); g_mm[mi].hash = NULL; }
 }
 
@@ -1827,40 +1810,104 @@ static int run_workers(Worker *ws, int nthreads) {
 }
 #endif
 
-/* The case bit, coded after a base's two bits and before match_after(), so
-   g_mm[0].mp is still the position that predicted THIS base. */
-static void case_reset(CaseRun *cr) {
-    for (size_t j = 0; j < sizeof(g_case_ctr) / sizeof(g_case_ctr[0]); j++) g_case_ctr[j] = CTR_INIT;
-    cr->cur = 0; cr->run = 0;
+/* ---- The case list ---------------------------------------------------------
+   Base positions are A/C/G/T bytes (after uppercasing) outside a '>' line; the
+   rule is applied identically by the prescan, the encoder and the decoder. The
+   case of those positions is a sequence of alternating runs, uppercase first
+   (that one may be empty). Each run length v = len + 1 is coded as an adaptive
+   Elias-gamma code: unary bit count, context (parity, index); mantissa bits,
+   context (parity, bit count, index, up to two leading mantissa bits). */
+#define CL_NB 34
+static uint16_t g_cl_un[2][CL_NB];
+static uint16_t g_cl_mt[2][CL_NB][32][8];
+static int lower_base(int c) { return c == 'a' || c == 'c' || c == 'g' || c == 't'; }
+static uint32_t cl_p1(uint16_t v) { return ((uint32_t)(v >> 4) << (PBITS - 12)) + (1u << (PBITS - 13)); }
+static void cl_reset(void) {
+    for (int a = 0; a < 2; a++) {
+        for (int b = 0; b < CL_NB; b++) {
+            g_cl_un[a][b] = CTR_INIT;
+            for (int c = 0; c < 32; c++) for (int d = 0; d < 8; d++) g_cl_mt[a][b][c][d] = CTR_INIT;
+        }
+    }
 }
-static uint16_t *case_slot(const CaseRun *cr) {
-    int rb = 0; uint32_t r = cr->run;
-    while (r > 1 && rb < CASE_RUNB - 1) { r >>= 1; rb++; }
-    const MatchModel *m = &g_mm[0];
-    int mc = 2;
-    if (m->active && m->mp < g_npos) mc = (g_cbits[m->mp >> 3] >> (m->mp & 7)) & 1;
-    return &g_case_ctr[(cr->cur * CASE_RUNB + rb) * 3 + mc];
+static void cl_put(REnc *e, int par, uint64_t len) {
+    uint64_t v = len + 1;
+    int nb = 0; while ((v >> (nb + 1)) != 0) nb++;
+    for (int i = 0; i <= nb; i++) {
+        int bit = i < nb;
+        uint16_t *c = &g_cl_un[par][i];
+        renc_bit(e, bit, cl_p1(*c)); ctr_upd(c, bit);
+    }
+    int pre = 1;
+    for (int j = 0; j < nb; j++) {
+        int bit = (int)((v >> (nb - 1 - j)) & 1);
+        uint16_t *c = &g_cl_mt[par][nb][j][pre];
+        renc_bit(e, bit, cl_p1(*c)); ctr_upd(c, bit);
+        if (j < 2) pre = pre * 2 + bit;
+    }
 }
-static uint32_t case_p1(uint16_t v) { return ((uint32_t)(v >> 4) << (PBITS - 12)) + (1u << (PBITS - 13)); }
-static void case_after(CaseRun *cr, uint16_t *slot, int lc) {
-    ctr_upd(slot, lc);
-    if (lc) g_cbits[g_npos >> 3] |= (uint8_t)(1u << (g_npos & 7));
-    if (lc == cr->cur) cr->run++; else { cr->cur = lc; cr->run = 1; }
+static int cl_get(RDec *d, int par, uint64_t *len) {
+    int nb = 0;
+    for (;;) {
+        if (nb >= CL_NB - 1) return -1;               /* corrupt: longer than any length */
+        uint16_t *c = &g_cl_un[par][nb];
+        int bit = rdec_bit(d, cl_p1(*c)); ctr_upd(c, bit);
+        if (!bit) break;
+        nb++;
+    }
+    if (nb > 32) return -1;
+    uint64_t v = 1; int pre = 1;
+    for (int j = 0; j < nb; j++) {
+        uint16_t *c = &g_cl_mt[par][nb][j][pre];
+        int bit = rdec_bit(d, cl_p1(*c)); ctr_upd(c, bit);
+        v = (v << 1) | (uint64_t)bit;
+        if (j < 2) pre = pre * 2 + bit;
+    }
+    *len = v - 1;
+    return 0;
 }
-static void case_enc(REnc *e, CaseRun *cr, int lc) {
-    uint16_t *slot = case_slot(cr);
-    uint32_t p1 = case_p1(*slot);
-#ifdef DNAC_CASEPROF
-    g_case_cost -= log2(lc ? (double)p1 / PSCALE : 1.0 - (double)p1 / PSCALE);
-#endif
-    renc_bit(e, lc, p1);
-    case_after(cr, slot, lc);
+/* Uppercase buf in place and code its case into out. Returns the run count. */
+static uint64_t case_list_enc(uint8_t *buf, int64_t n, Buf *out) {
+    cl_reset();
+    REnc e; renc_init(&e, out);
+    int inhdr = 0, cur = 0; uint64_t run = 0, nruns = 0;
+    for (int64_t i = 0; i < n; i++) {
+        int b = buf[i];
+        if (b == '>') { inhdr = 1; continue; }
+        if (b == '\n') { inhdr = 0; continue; }
+        if (inhdr) continue;
+        int lc = lower_base(b);
+        if (lc) buf[i] = (uint8_t)(b - 32);
+        else if (base_to_sym(b) < 0) continue;
+        if (lc == cur) run++;
+        else { cl_put(&e, cur, run); nruns++; cur = lc; run = 1; }
+    }
+    cl_put(&e, cur, run); nruns++;
+    renc_flush(&e);
+    return nruns;
 }
-static int case_dec(RDec *d, CaseRun *cr) {
-    uint16_t *slot = case_slot(cr);
-    int lc = rdec_bit(d, case_p1(*slot));
-    case_after(cr, slot, lc);
-    return lc;
+/* Apply a coded case list to the decoded (uppercase) output. */
+static int case_list_dec(const uint8_t *cs, size_t cs_len, uint64_t nruns, uint8_t *dst, uint64_t n) {
+    cl_reset();
+    RDec d; rdec_init(&d, cs, cs_len);
+    int inhdr = 0, cur = 0; uint64_t rem = 0, got = 0;
+    if (nruns == 0 || cl_get(&d, 0, &rem)) return -1;
+    got = 1;
+    for (uint64_t i = 0; i < n; i++) {
+        int b = dst[i];
+        if (b == '>') { inhdr = 1; continue; }
+        if (b == '\n') { inhdr = 0; continue; }
+        if (inhdr || base_to_sym(b) < 0) continue;
+        while (rem == 0) {
+            if (got >= nruns) return -1;
+            cur ^= 1;
+            if (cl_get(&d, cur, &rem)) return -1;
+            got++;
+        }
+        if (cur) dst[i] = (uint8_t)(b + 32);
+        rem--;
+    }
+    return (got == nruns && rem == 0) ? 0 : -1;
 }
 
 /* Code one span of bytes with the CURRENT model state.
@@ -1874,14 +1921,10 @@ static void encode_span(const uint8_t *buf, long n, Buf *out) {
     REnc e; renc_init(&e, out);
     uint64_t hist = 0;
     int run = 0;
-    CaseRun crun; case_reset(&crun);
-    int inhdr = 0;   /* inside a '>' line: its lowercase letters are text, not bases */
 
     for (long p = 0; p < n; p++) {
         int b = buf[p];
-        int s = base_to_sym(b), lc = 0;
-        if (b == '>') inhdr = 1; else if (b == '\n') inhdr = 0;
-        if (s < 0 && g_casemode && !inhdr && lower_base(b)) { s = base_to_sym(b - 32); lc = 1; }
+        int s = base_to_sym(b);
         int rc = run < RUNCAP ? run : RUNCAP;
         uint16_t *fc = &flag_cnt[rc * 2];
         uint32_t f0 = (uint32_t)fc[0] + 1, f1 = (uint32_t)fc[1] + 1, ft = f0 + f1;
@@ -1897,7 +1940,6 @@ static void encode_span(const uint8_t *buf, long n, Buf *out) {
             renc_encode(&e, 0, f0, ft));
             fc[0]++;
             code_base_enc(&e, ctxv, hist, s);
-            if (g_casemode) case_enc(&e, &crun, lc);
             hist = (hist << 2) | (uint64_t)s;
             ir_prefetch(hist);        /* overlaps match_after/stcm_after below */
             PT(7, match_after(s, hist));
@@ -1921,9 +1963,6 @@ static void encode_span(const uint8_t *buf, long n, Buf *out) {
         if (ft + 1 >= CAP) { fc[0] >>= 1; fc[1] >>= 1; }
     }
     renc_flush(&e);
-#ifdef DNAC_CASEPROF
-    if (g_casemode) fprintf(stderr, "CASEPROF case bits cost %.1f bytes\n", g_case_cost / 8.0);
-#endif
 #ifdef DNAC_PROF
     {
         static const char *nm[12] = { "order-model table lookups (inside mix)",
@@ -1969,15 +2008,21 @@ static int do_compress(const char *inpath, const char *outpath, int k, const cha
     uint8_t *buf = (uint8_t *)malloc((size_t)n ? (size_t)n : 1);
     if (n && fread(buf, 1, (size_t)n, in) != (size_t)n) { perror("read"); fclose(in); return 1; }
     fclose(in);
-    /* The case mask exists only if it is needed, so a file without a lowercase
-       base is written exactly as v0.9.0 wrote it. No reference mode: see
-       CASE_LETTER. */
+    /* The case list exists only when it is needed, so a file without a
+       lowercase base is written exactly as v0.9.0 wrote it. When it is needed,
+       buf becomes the uppercase twin here, before any model sees it. */
     g_casemode = 0;
+    Buf clb = { NULL, 0, 0, 0 };
+    uint64_t cl_runs = 0;
     if (!refpath) {
-        int inhdr = 0;   /* the same rule encode_span applies: a header's text is not a base */
+        int inhdr = 0;
         for (int64_t i = 0; i < n && !g_casemode; i++) {
             if (buf[i] == '>') inhdr = 1; else if (buf[i] == '\n') inhdr = 0;
             else if (!inhdr && lower_base(buf[i])) g_casemode = 1;
+        }
+        if (g_casemode) {
+            cl_runs = case_list_enc(buf, n, &clb);
+            if (clb.err) { fprintf(stderr, "out of memory while coding the case list\n"); free(buf); return 1; }
         }
     }
 
@@ -2055,6 +2100,14 @@ static int do_compress(const char *inpath, const char *outpath, int k, const cha
     fputc(g_mhb, out);
     put64(out, (uint64_t)n);
     if (refpath) { put64(out, (uint64_t)refn); put64(out, reffp); }
+    if (g_casemode) {
+        put64(out, cl_runs); put64(out, (uint64_t)clb.len);
+        if (clb.len && fwrite(clb.p, 1, clb.len, out) != clb.len) {
+            perror("write output"); buf_free(&clb); fclose(out); free(buf); mix_free(); return 1; }
+        fprintf(stderr, "case list: %llu runs, %llu bytes\n",
+                (unsigned long long)cl_runs, (unsigned long long)clb.len);
+    }
+    buf_free(&clb);
 
     if (ref) { prime_with_reference(ref, refn); free(ref); ref = NULL; }
     /* Everything primed so far is the reference; its anchors are the ones the
@@ -2130,7 +2183,6 @@ static void decode_span(const uint8_t *cs, size_t cs_len, uint64_t n, uint8_t *d
     RDec d; rdec_init(&d, cs, cs_len);
     uint64_t hist = 0;
     int run = 0;
-    CaseRun crun; case_reset(&crun);
 
     for (uint64_t p = 0; p < n; p++) {
         /* ctxv depends only on history, so it is known before the flag is
@@ -2151,8 +2203,7 @@ static void decode_span(const uint8_t *cs, size_t cs_len, uint64_t n, uint8_t *d
 
         if (isbase) {
             int s = code_base_dec(&d, ctxv, hist);
-            int lc = g_casemode ? case_dec(&d, &crun) : 0;
-            dst[p] = (uint8_t)(SYM_TO_BASE[s] | (lc ? 0x20 : 0));
+            dst[p] = (uint8_t)SYM_TO_BASE[s];
             hist = (hist << 2) | (uint64_t)s;
             ir_prefetch(hist);        /* overlaps match_after/stcm_after below */
             match_after(s, hist);
@@ -2210,7 +2261,6 @@ static int do_decompress(const char *inpath, const char *outpath, const char *re
         fclose(in); return 1;
     }
     g_cue = cue;                  /* before any table is built: it decides the mixer's inputs */
-    g_casemode = casem;           /* before any table is built: it allocates the case mask */
     if (need_ref && !refpath) {
         fprintf(stderr, "this file was compressed against a reference: use  dnac dr <in> <out> <ref.fa>\n");
         fclose(in); return 1;
@@ -2238,6 +2288,17 @@ static int do_decompress(const char *inpath, const char *outpath, const char *re
     uint64_t len = get64(in);
     uint64_t refn_hdr = 0, refhash_hdr = 0;
     if (need_ref) { refn_hdr = get64(in); refhash_hdr = get64(in); }
+    uint64_t cl_runs = 0; uint8_t *clbuf = NULL; size_t cl_len = 0;
+    if (casem) {
+        cl_runs = get64(in);
+        uint64_t cl64 = get64(in);
+        if (cl64 > ((uint64_t)1 << 40)) { fprintf(stderr, "bad case list size\n"); fclose(in); return 1; }
+        cl_len = (size_t)cl64;
+        clbuf = (uint8_t *)malloc(cl_len ? cl_len : 1);
+        if (!clbuf) { fprintf(stderr, "out of memory\n"); fclose(in); return 1; }
+        if (cl_len && fread(clbuf, 1, cl_len, in) != cl_len) {
+            fprintf(stderr, "truncated case list\n"); free(clbuf); fclose(in); return 1; }
+    }
     /* Both sizes are known from the header here, before any table is built, so
        refuse a stream this build cannot represent instead of wrapping g_npos
        part-way through the decode. Mirrors the encoder-side check. */
@@ -2362,6 +2423,12 @@ static int do_decompress(const char *inpath, const char *outpath, const char *re
                     free(dst); free(blen_c); free(cs); fclose(out); fclose(in); mix_free(); return 1; }
     }
     free(blen_c);
+    if (casem) {
+        int bad = case_list_dec(clbuf, cl_len, cl_runs, dst, len);
+        free(clbuf); clbuf = NULL;
+        if (bad) { fprintf(stderr, "corrupt case list\n");
+                   free(dst); free(cs); fclose(out); fclose(in); mix_free(); return 1; }
+    }
     if (len && fwrite(dst, 1, (size_t)len, out) != (size_t)len) {
         perror("write output"); free(dst); free(cs); fclose(out); fclose(in); mix_free(); return 1; }
     free(dst);

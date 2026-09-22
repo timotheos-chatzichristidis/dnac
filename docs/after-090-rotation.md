@@ -139,3 +139,23 @@ on the other master the moment the mix completes, before it has missed anything
 — is a different mechanism and is **unbuilt**. Whether it is worth building
 against a bar that three mechanisms have now failed by a whisker is the same
 open question as the rest of this document.
+
+## Correction, 2026-09-22: the proactive version was built, and it failed
+
+The paragraph above is wrong. Re-opening the cue on the leaving deck the moment
+the mix completes is `CUE_BACK`, measured on 2026-09-10 against the single-deck
+cue (`docs/cue-back.md`): **−0.01%** on the real pair's whole file (551,539 B
+against 551,594), an extra **0.1%** on its shared windows, and prediction B3
+failed. It was removed from `dnac.c` in v0.9.0 and re-derives from `4932ffe`.
+
+It was measured with `CUE_MINLEN = 16` and without rotation, so it has not been
+run under v0.9.0's parameters. Running it there would be re-tuning a measured
+mechanism, not testing a new one, and the rule on this branch is that a tuning
+idea does not re-open a closed question. The bar agreed on 2026-09-22 before
+this was found asked for **≥ 0.10%** from the proactive half alone, over the
+rotation build; the one measurement that exists is a tenth of that.
+
+**So nothing unbuilt is left on this branch, and the decision agreed for that
+case applies: dnac closes at v0.9.0.** Rotation is not adopted on its own, since
+it missed its bar. This branch stays public and unmerged as the record of four
+post-release mechanisms measured against bars fixed before they ran.

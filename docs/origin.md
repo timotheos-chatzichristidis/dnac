@@ -67,6 +67,19 @@ Two consequences, both of which the codec either uses or does not:
    either master *call* for a cue once it misses, which is −0.2653% on a real
    human pair and just short of its adoption bar
    (`docs/after-090-rotation.md`).
+
+   **Corrected 2026-09-22: it is not unbuilt.** Re-opening the cue on the
+   leaving deck is `CUE_BACK`, pre-registered and measured on 2026-09-10
+   (`docs/cue-back-prediction.md`, `docs/cue-back.md`, source `4932ffe`): at the
+   mix-in the headphones go to the phase the master just left, and come back by
+   the same rule if that phase is the one that holds. Timotheos confirmed on
+   2026-09-22 that this is what the ear hears: the rest of the old track. It
+   measured −0.01% on the real pair's whole file and an extra 0.1% on its shared
+   windows, failed, and was removed in v0.9.0. This file's own timeline records
+   it (the row "the cue alternates decks", below). The claim above was written
+   from the prose of his correction without searching the branch's record, and
+   was found only when its prediction document was about to be written. Left in
+   place rather than rewritten, for the reason `docs/cue-back.md` gives.
 2. **The decks were CDJ-100s, whose pitch has no decimal precision.** You cannot
    dial the correct tempo and leave it. Drift is therefore **guaranteed, not
    exceptional**, and the only way to hold two tracks together is to ride the

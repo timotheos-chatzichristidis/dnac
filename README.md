@@ -16,6 +16,12 @@ another person's is **6.75% smaller** (19.36% on the sequence they share). The
 idea is not from the compression literature; it is Timotheos's own beatmatching
 method, and [`docs/origin.md`](docs/origin.md) records how it arrived.
 
+**v0.10.0 reads soft-masked genomes as genomes.** Lowercase bases, which is how
+Ensembl and UCSC mark repeats, used to bypass every model; they are now coded as
+bases, with their case stored beside them
+([Soft-masked genomes](#soft-masked-genomes--the-case-list-v0100)). Files without
+lowercase bases are written exactly as before.
+
 No dependencies beyond libc. Builds clean with `-Wall -Wextra` on gcc and clang.
 Every design decision was a falsifiable experiment on real genomes — kept when
 the measurement rewarded it, reverted when it did not. What the measurement
@@ -862,11 +868,39 @@ symbol with a clean 4-symbol base model + the run-length flag removed a hidden
 These are not failures; a falsifiable experiment that says "no" is the method
 working. *Measured beats plausible.*
 
+## Soft-masked genomes — the case list (v0.10.0)
+
+Ensembl's `dna_sm` files and UCSC's genome FASTA write repeats in lowercase. Until
+v0.10.0 a lowercase base was not a base to dnac: it went through the order-0
+literal path and left a hole in the history, so the repeats — what the match
+models exist for — were coded blind. v0.10.0 codes such a file as its uppercase
+twin, with v0.9.0's unchanged model, and stores the case beside it as a list of
+alternating run lengths:
+
+| GRCh38 (Ensembl release 110, `dna_sm`) | v0.9.0 | v0.10.0 | change |
+|---|---:|---:|---:|
+| chr21 | 10,847,678 B | 7,890,480 B | −27.26% |
+| chr22 | 10,741,570 B | 7,574,755 B | −29.48% |
+
+chr21's case changes 119,986 times, and the list that records it costs
+**143,081 B**. That is 8.74% less than the lazy alternative, the same run
+lengths written as text and compressed with `bzip2 -9` (156,777 B). The body of
+the archive is byte for byte v0.9.0's stream of the uppercase twin, and both
+round-trip suites assert that, so the case costs its section and nothing else.
+**A file with no lowercase base outside a `>` line is written exactly as v0.9.0
+wrote it**, which is why no other figure in this README moved. Lowercase `n`
+and reference-mode targets still use the literal path.
+
+A first design coded one case bit per base, predicted from the case at the
+position the match model points to. It lost to that `bzip2` list and was not
+adopted. Both runs, pre-registered, are in
+[docs/case-mask.md](docs/case-mask.md) and [docs/case-list.md](docs/case-list.md).
+
 ## Lossless on anything
 
-Every byte round-trips. Non-`ACGT` bytes (headers, newlines, `N`, lowercase
-soft-masking) go through the flag + literal path and never disturb the base
-history. Encoder and decoder run **identical floating-point code in the same
+Every byte round-trips. Non-`ACGT` bytes (headers, newlines, `N`) go through the
+flag + literal path and never disturb the base history; lowercase `a/c/g/t`
+outside a header line is a base with its case in the case list. Encoder and decoder run **identical floating-point code in the same
 order**, so the integer probability fed to the coder is bit-identical on both
 sides. Verified by SHA-256 on real genomes *and* adversarial inputs (empty file,
 all 256 byte values, messy CRLF/lowercase/N FASTA, pure newlines, random binary,
@@ -878,7 +912,7 @@ exact/diverged/inverted repeats), across many values of `k`.
 
 ```sh
 make                              # cc -O2 -Wall -Wextra -o dnac dnac.c -lm
-make test                         # 229 SHA-256 round-trips (plain, reference, level, state, blocks, the cue, v0.8.0 streams)
+make test                         # 264 SHA-256 round-trips (plain, reference, level, state, blocks, the cue, v0.8.0 streams)
 sh scripts/get-data.sh --human    # fetch the exact genomes benchmarked below
 make bench                        # bits/base on whatever is in ./data
 ```
@@ -906,7 +940,7 @@ make bench                        # bits/base on whatever is in ./data
 # measurement
 ./bench.ps1 -Exe .\dnac.exe -File .\chr21.fa -K 22   # round-trip + bits/base
 ./bench.ps1 ... -Fast                                # compress only (param sweeps)
-./adversarial.ps1 -Exe .\dnac.exe                    # 155 losslessness round-trips
+./adversarial.ps1 -Exe .\dnac.exe                    # 169 losslessness round-trips
 ./sweep-tables.ps1 -Macro MHBITS_MAX -Caps 26,25      # table size vs bits/base vs RAM
 ```
 
@@ -927,17 +961,18 @@ Try a **real** genome: download a `.fa` from NCBI/Ensembl and
 - `build.ps1`, `test.ps1` — Windows build & demo.
 - `bench.ps1` — round-trip + bits/base for one build on one file (`-Fast` to
   compress only, for parameter sweeps).
-- `adversarial.ps1` — 155 SHA-256-verified round-trips: 10 nasty inputs × 6
+- `adversarial.ps1` — 169 SHA-256-verified round-trips: 10 nasty inputs × 6
   values of `k`, × 4 compression levels, plus reference mode (unrelated/short/
   messy references, primed state files, FASTA↔state interchange), the refusals
   (the wrong reference, a state file from an older dnac) and the check that
-  `-map` leaves the compressed bytes byte-identical.
+  `-map` leaves the compressed bytes byte-identical, and the case list.
   `scripts/roundtrip.sh` is the POSIX port CI runs; it covers the same ground
   plus an out-of-range level, the reference path at every level, a state/stream
   level mismatch, the block modes, the cue's own cases (indel- and
   homopolymer-dense pairs, target = reference, the default levels, the stream
-  families of streams and states) and the stored v0.8.0 streams in `tests/v080`,
-  for 229.
+  families of streams and states), the stored v0.8.0 streams in `tests/v080`,
+  and the case list (its families, the uppercase-twin body, a truncated list,
+  and v0.9.0's own lowercase streams in `tests/v090`), for 264.
 - `ablate.ps1` — what each of v0.8.0's 15 prediction inputs is worth
   (`-Mode loo|diag|mask`). Drives `-DDNAC_ABLATE` / `-DDNAC_DIAG` in `dnac.c`:
   the first zeroes an input inside the mixer without touching table geometry, so
@@ -977,7 +1012,7 @@ Try a **real** genome: download a `.fa` from NCBI/Ensembl and
   knowing where a technique *stops* working is worth as much as knowing where it
   starts.
 - `.github/workflows/ci.yml` — every push builds on gcc and clang, Linux and
-  macOS, and must pass all 229 round-trips on the release build, the cue
+  macOS, and must pass all 264 round-trips on the release build, the cue
   switched off and an experimental build, plus a cross-build portability check
   that compresses with one table geometry and decodes with another, and a check
   that the cue switched off writes the v0.8.0 tag's bytes.

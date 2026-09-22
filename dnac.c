@@ -2104,8 +2104,6 @@ static int do_compress(const char *inpath, const char *outpath, int k, const cha
         put64(out, cl_runs); put64(out, (uint64_t)clb.len);
         if (clb.len && fwrite(clb.p, 1, clb.len, out) != clb.len) {
             perror("write output"); buf_free(&clb); fclose(out); free(buf); mix_free(); return 1; }
-        fprintf(stderr, "case list: %llu runs, %llu bytes\n",
-                (unsigned long long)cl_runs, (unsigned long long)clb.len);
     }
     buf_free(&clb);
 

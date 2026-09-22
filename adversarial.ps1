@@ -151,6 +151,37 @@ if ((Get-FileHash $m1 -Algorithm SHA256).Hash -ne (Get-FileHash $m2 -Algorithm S
 }
 Remove-Item $m1, $m2, $mt -Force -ErrorAction SilentlyContinue
 
+# --- the case list (v0.10.0): lowercase a/c/g/t outside a '>' line is coded as ---
+# --- its uppercase twin plus a list of run lengths (docs/case-list.md). ----------
+$lines = for ($i = 0; $i -lt 400; $i++) { $dna.Substring($i * 60, 60) }
+$mix = ">soft masked test`n" + (($lines | ForEach-Object -Begin { $j = 0 } -Process {
+    $j++; if ($j % 4 -eq 2) { $_.ToLower() } elseif ($j % 4 -eq 3) { $_.Substring(0, 20).ToLower() + $_.Substring(20) } else { $_ } }) -join "`n") + "`n"
+$cases = @()
+$cases += W "case_mix.fa"   ([System.Text.Encoding]::ASCII.GetBytes($mix))
+$cases += W "case_lower.fa" ([System.Text.Encoding]::ASCII.GetBytes(">all lower`n" + $dna.Substring(0, 30000).ToLower() + "`n"))
+$cases += W "case_n.fa"     ([System.Text.Encoding]::ASCII.GetBytes(">x`nACGTnnnnNNNNacgtNnNn`r`nacgtacgtACGT`r`n"))
+foreach ($f in $cases) {
+    foreach ($a in @(@("22"), @("22", "1"), @("22", "4"), @("16", "-j", "3"))) {
+        $c = "$f.cl.dnac"; $r = "$f.cl.rt"
+        & $Exe c $f $c @a | Out-Null
+        & $Exe d $c $r    | Out-Null
+        $h1 = (Get-FileHash $f -Algorithm SHA256).Hash
+        $h2 = if (Test-Path $r) { (Get-FileHash $r -Algorithm SHA256).Hash } else { "MISSING" }
+        $n++
+        if ($h1 -ne $h2) { $fail++; Write-Host ("FAIL case {0} {1}" -f (Split-Path $f -Leaf), ($a -join " ")) -ForegroundColor Red }
+        Remove-Item $c, $r -Force -ErrorAction SilentlyContinue
+    }
+}
+# lowercase only in a header is NOT a case file: same letter as an uppercase file;
+# a case file gets a different one
+$hdr = W "case_hdr.fa" ([System.Text.Encoding]::ASCII.GetBytes(">lowercase header acgt`n" + $dna.Substring(0, 3000) + "`n"))
+$cu = Join-Path $dir "cu.dnac"; $ch = Join-Path $dir "ch.dnac"; $cm = Join-Path $dir "cm.dnac"
+& $Exe c $files[-1] $cu | Out-Null; & $Exe c $hdr $ch | Out-Null; & $Exe c $cases[0] $cm | Out-Null
+$lu = [System.IO.File]::ReadAllBytes($cu)[3]; $lh = [System.IO.File]::ReadAllBytes($ch)[3]; $lm = [System.IO.File]::ReadAllBytes($cm)[3]
+$n++; if ($lh -ne $lu) { $fail++; Write-Host "FAIL: header-only lowercase changed the stream family" -ForegroundColor Red }
+$n++; if ($lm -eq $lu) { $fail++; Write-Host "FAIL: a case file was written in the uppercase family" -ForegroundColor Red }
+Remove-Item $cu, $ch, $cm -Force -ErrorAction SilentlyContinue
+
 if ($fail -ne 0) { Write-Host "$fail of $n FAILED" -ForegroundColor Red; exit 1 }
 Write-Host "$n/$n adversarial roundtrips lossless" -ForegroundColor Green
 exit 0   # the wrong-reference test leaves $LASTEXITCODE=1 on purpose

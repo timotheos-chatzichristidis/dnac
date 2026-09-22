@@ -706,11 +706,125 @@ $F = { param($n)
         $p = Join-Path $root $n
         if (Test-Path $p) { $p } else { Join-Path $root "data\$n" } }
 
+# --- v0.10.0: the case list ---------------------------------------------------
+# The soft-masked figures compare two releases on one file, so the other side is
+# the v0.9.0 TAG's source, not a flag on this one: v0.9.0 has no switch that
+# turns the case list off, because it never had one.
+$script:CaseMemo = @{}
+function CaseFile($n) {
+    $p = & $F $n
+    if (-not (Test-Path $p)) { throw "missing $n - run: sh scripts/get-data.sh --case" }
+    $p
+}
+function V090Exe {
+    if ($script:CaseMemo.ContainsKey('exe')) { return $script:CaseMemo['exe'] }
+    New-Item -ItemType Directory -Force $cueWork | Out-Null
+    $src = Join-Path $cueWork 'pin_v0.9.0_dnac.c'
+    if (-not (Test-Path $src) -or (Get-Item $src).Length -eq 0) {
+        cmd /c "git -C `"$root`" show v0.9.0:dnac.c > `"$src`""
+        if ($LASTEXITCODE -ne 0 -or (Get-Item $src).Length -eq 0) { throw 'git show v0.9.0:dnac.c failed' }
+    }
+    $cc  = if ($env:DNAC_CC) { $env:DNAC_CC } else { 'gcc' }
+    $exe = Join-Path $cueWork 'dnac_v090.exe'
+    $log = & $cc -O3 -o $exe $src -lm 2>&1
+    if ($LASTEXITCODE -ne 0) { throw "$cc failed building v0.9.0 (set DNAC_CC):`n$log" }
+    $script:CaseMemo['exe'] = $exe
+    $exe
+}
+function CaseSize($which, $n) {
+    $key = "size|$which|$n"
+    if (-not $script:CaseMemo.ContainsKey($key)) {
+        $exe = if ($which -eq 'v090') { V090Exe } else { $dnac }
+        $script:CaseMemo[$key] = Size (CaseFile $n) $null 3 $null $exe
+    }
+    $script:CaseMemo[$key]
+}
+# Run count and section size, read out of the archive's own header (bytes 16-31,
+# little-endian), from a run that round-trips. Refuses a stream without a case
+# list, so a build that quietly stopped writing one cannot report a size.
+function CaseSection($n) {
+    $key = "sec|$n"
+    if ($script:CaseMemo.ContainsKey($key)) { return $script:CaseMemo[$key] }
+    $in = CaseFile $n
+    $out = Join-Path $work 'vc_case.dnac'; $rt = Join-Path $work 'vc_case.rt'
+    Remove-Item $out, $rt -Force -ErrorAction SilentlyContinue
+    & $dnac c $in $out 22 3 | Out-Null
+    if ($LASTEXITCODE -ne 0 -or -not (Test-Path $out)) { throw "compress failed: $in" }
+    & $dnac d $out $rt | Out-Null
+    if ($LASTEXITCODE -ne 0 -or -not (Test-Path $rt)) { throw "decompress failed: $in" }
+    if ((Get-FileHash $in -Algorithm SHA256).Hash -ne (Get-FileHash $rt -Algorithm SHA256).Hash) {
+        throw "NOT LOSSLESS on $in - stop everything else and fix this"
+    }
+    $b = [System.IO.File]::ReadAllBytes($out)
+    $letter = [char]$b[3]
+    if ('FKHMfkhm'.IndexOf($letter) -lt 0) { throw "$n was not written as a case stream (letter '$letter')" }
+    $r = @{ runs = [BitConverter]::ToUInt64($b, 16); bytes = [BitConverter]::ToUInt64($b, 24) }
+    Remove-Item $out, $rt -Force -ErrorAction SilentlyContinue
+    $script:CaseMemo[$key] = $r
+    $r
+}
+# The lazy opponent: the same alternating run lengths as decimal text, one per
+# line, compressed with bzip2 -9 (docs/case-mask.md). awk and bzip2 via sh.
+function BzipRuns($n) {
+    $key = "bz|$n"
+    if ($script:CaseMemo.ContainsKey($key)) { return $script:CaseMemo[$key] }
+    $sh = Resolve-Sh
+    if (-not $sh) { throw 'no POSIX sh found (set DNAC_SH)' }
+    $awk = Join-Path $work 'case_runs.awk'
+    Set-Content -Path $awk -Encoding ascii -Value @'
+/^>/ { next }
+{ n = length($0)
+  for (i = 1; i <= n; i++) {
+    c = substr($0, i, 1)
+    if (index("ACGT", c)) lc = 0; else if (index("acgt", c)) lc = 1; else continue
+    if (lc == cur) run++; else { print run; cur = lc; run = 1 } } }
+END { print run }
+'@
+    $fa = (CaseFile $n) -replace '\\', '/'
+    $af = $awk -replace '\\', '/'
+    $v = & $sh -c "awk -v cur=0 -v run=0 -f '$af' '$fa' | bzip2 -9 | wc -c"
+    if ($LASTEXITCODE -ne 0 -or -not $v) { throw "awk | bzip2 failed on $n" }
+    $script:CaseMemo[$key] = [long]("$v".Trim())
+    $script:CaseMemo[$key]
+}
+
 # --- the registry -------------------------------------------------------------
 # anchor = a substring that must appear verbatim in doc. Keep it tight enough
 # that editing the number breaks it, loose enough to survive reflowing prose.
 
 $claims = @(
+
+  # --- v0.10.0: soft-masked genomes, the case list (docs/case-list.md) ----------
+  @{ id='case-chr21-v090'; tier='slow'; doc='README.md'; unit='B'; tol=0
+     anchor='| chr21 | 10,847,678 B | 7,890,480 B | −27.26% |'; expect=10847678
+     measure={ CaseSize 'v090' 'chr21_sm.fa' } }
+  @{ id='case-chr21'; tier='slow'; doc='README.md'; unit='B'; tol=0
+     anchor='| chr21 | 10,847,678 B | 7,890,480 B | −27.26% |'; expect=7890480
+     measure={ CaseSize 'new' 'chr21_sm.fa' } }
+  @{ id='case-chr21-pct'; tier='slow'; doc='README.md'; unit='%'; tol=0
+     anchor='| chr21 | 10,847,678 B | 7,890,480 B | −27.26% |'; expect=-27.26
+     measure={ CuePct (CaseSize 'v090' 'chr21_sm.fa') (CaseSize 'new' 'chr21_sm.fa') } }
+  @{ id='case-chr22-v090'; tier='slow'; doc='README.md'; unit='B'; tol=0
+     anchor='| chr22 | 10,741,570 B | 7,574,755 B | −29.48% |'; expect=10741570
+     measure={ CaseSize 'v090' 'chr22_sm.fa' } }
+  @{ id='case-chr22'; tier='slow'; doc='README.md'; unit='B'; tol=0
+     anchor='| chr22 | 10,741,570 B | 7,574,755 B | −29.48% |'; expect=7574755
+     measure={ CaseSize 'new' 'chr22_sm.fa' } }
+  @{ id='case-chr22-pct'; tier='slow'; doc='README.md'; unit='%'; tol=0
+     anchor='| chr22 | 10,741,570 B | 7,574,755 B | −29.48% |'; expect=-29.48
+     measure={ CuePct (CaseSize 'v090' 'chr22_sm.fa') (CaseSize 'new' 'chr22_sm.fa') } }
+  @{ id='case-chr21-runs'; tier='slow'; doc='README.md'; unit='runs'; tol=0
+     anchor="chr21's case changes 119,986 times"; expect=119986
+     measure={ (CaseSection 'chr21_sm.fa').runs } }
+  @{ id='case-chr21-section'; tier='slow'; doc='README.md'; unit='B'; tol=0
+     anchor='**143,081 B**'; expect=143081
+     measure={ (CaseSection 'chr21_sm.fa').bytes } }
+  @{ id='case-chr21-bzip2'; tier='slow'; doc='README.md'; unit='B'; tol=0
+     anchor='compressed with `bzip2 -9` (156,777 B)'; expect=156777
+     measure={ BzipRuns 'chr21_sm.fa' } }
+  @{ id='case-chr21-vs-bzip2'; tier='slow'; doc='README.md'; unit='%'; tol=0
+     anchor='That is 8.74% less than the lazy alternative'; expect=8.74
+     measure={ [math]::Round(100.0 * (1.0 - (CaseSection 'chr21_sm.fa').bytes / (BzipRuns 'chr21_sm.fa')), 2) } }
 
   # --- "Where this loses": the metagenome bake-off. 200,000,000 bases of ENA
   # DRR003618, fetched by `sh scripts/get-data.sh --meta` and copied to

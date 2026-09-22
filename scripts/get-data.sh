@@ -8,6 +8,8 @@
 #   sh scripts/get-data.sh --meta   # the metagenome for "Where this loses" (~300 MB)
 #   sh scripts/get-data.sh --cue    # the real human pairs the cue was measured on
 #                                   # (~190 MB) -- CHM13 chr21/chr22 + GRCh38 chr22
+#   sh scripts/get-data.sh --case   # GRCh38 chr21/chr22 soft-masked (Ensembl dna_sm,
+#                                   # ~25 MB gz), for the case-list figures
 #   sh scripts/get-data.sh --sim    # rebuild the two SIMULATED individuals that
 #                                   # many reference-mode figures use (seconds)
 set -eu
@@ -161,6 +163,24 @@ if [ "${1:-}" = "--cue" ]; then
   # script finds its own reference, and checks what it rebuilt against
   # scripts/cue/targets.sha256.
   sh ../scripts/cue/make-targets.sh
+fi
+
+if [ "${1:-}" = "--case" ]; then
+  # The soft-masked twins of the chromosomes the README benchmarks: same bases,
+  # same N runs and line layout, repeats in lowercase. Ensembl release 110,
+  # pinned like chr22 above, and checked against the bytes the figures used.
+  echo "Soft-masked GRCh38 (Ensembl release 110, dna_sm):"
+  for c in 21 22; do
+    if [ -s chr${c}_sm.fa ]; then echo "  have chr${c}_sm.fa"; continue; fi
+    echo "  fetching chr$c"
+    curl -fsSL -o chr${c}_sm.fa.gz "https://ftp.ensembl.org/pub/release-110/fasta/homo_sapiens/dna/Homo_sapiens.GRCh38.dna_sm.chromosome.$c.fa.gz"
+    gzip -dc chr${c}_sm.fa.gz > chr${c}_sm.fa && rm -f chr${c}_sm.fa.gz
+  done
+  printf '%s\n' \
+    'e2c339f107718c961674e7afa4ca93fd9bac79f7fa1db9fba8ffbd7b56a78d12 *chr21_sm.fa' \
+    '10f715be1d29887acdaa0506b501b755eadd047e612868a66a07b011b91db18b *chr22_sm.fa' > case.sha256
+  sha256sum -c case.sha256 || { echo "  SOFT-MASKED FILES DIFFER from what the figures were measured on" >&2; exit 1; }
+  rm -f case.sha256
 fi
 
 if [ "${1:-}" = "--sim" ]; then

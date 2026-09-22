@@ -68,3 +68,46 @@ Timotheos as they are. The two readings are:
 - **Lowercase `n` is the next 6.7 KB** (0.09% of chr21). Putting `n` into the
   case runs is a new design and needs its own pre-registration. It is not
   folded into this one after the fact.
+
+## Decision, 2026-09-22
+
+**Timotheos adopted the case list**, on the reading *as intended*. The size bar
+(D-L 1) is not the condition that failed, and it was not moved. It passes on
+both chromosomes by more than 8%. The condition that failed, L2, was
+re-checked against the twin the design defines and holds to the byte. That
+check is now an invariant in `scripts/roundtrip.sh`, the suite CI runs
+(`case: body == uppercase twin`, plain and `-j 3`), so the premise error cannot
+recur unnoticed. The figures above are
+published in README.md, where `verify-claims.ps1` (the `case-*` rows, slow
+tier) re-derives each one.
+
+## Correction, 2026-09-22: the opponent's list had Windows line endings
+
+When `verify-claims.ps1` re-derived the opponent, it got **156,777 B** instead
+of 156,305. The list measured in `docs/case-mask.md` was written by Python in
+text mode on Windows, so every line ended in `
+`. The recipe writes what
+the documents describe, one number per line with `
+`:
+
+| run list, chr21 | bzip2 -9 | xz -9e | zstd -19 |
+|---|---:|---:|---:|
+| CRLF, as first measured | 156,305 | 166,388 | 172,956 |
+| **LF, as described** | **156,777** | 162,496 | 166,107 |
+
+chr22 with LF: bzip2 161,603 B (first measured 161,224). bzip2 is still the
+best of the three on both.
+
+**No verdict changes, and the bar is left where it was written.** D-L's bar
+(156,305 / 161,224) turns out to have been 472 / 379 B *stricter* than the
+honest opponent, and the list passes both. Measured against the LF opponent,
+the list is 0.9126× on chr21 (**8.74% smaller**, the figure README.md now
+publishes) and 0.9097× on chr22. `docs/case-mask.md`'s C2 becomes 2.025% of
+the uppercase archive, still inside its band. The bit model's ratio in C4 was
+computed against the CRLF list, and against LF it is 1.1976×, still a loss.
+
+This is the third class of instrument error on this project, after a figure
+that was only ever read and a threshold that met a rounded display: **an
+artefact of the platform that wrote the input to a measurement.** It was caught
+the way the rule says it should be. The number was executed by a second,
+independent recipe instead of being copied from the first.

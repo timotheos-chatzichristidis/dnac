@@ -335,6 +335,90 @@ else
   fi
 fi
 
+# ------------------------------------------- v0.10.0: the case list
+# A lowercase a/c/g/t outside a '>' line makes a file a case-list stream: it is
+# coded as its uppercase twin and its case travels beside it as run lengths
+# (docs/case-list.md). No rand() here: tests/v090 depends on these inputs, and
+# awk implementations disagree about rand().
+"$EXE" gen cg.fa 40000 3 >/dev/null
+casify() { awk 'NR==1{print $0 " soft-masked test"; next}
+  NR%4==2{print tolower($0); next}
+  NR%4==3{s=""; for(i=1;i<=length($0);i++){c=substr($0,i,1); s=s ((i%9)<4?tolower(c):c)} print s; next}
+  {print}' "$1"; }
+casify cg.fa > case_mix.fa
+awk 'NR==1{print ">all lower"; next}{print tolower($0)}' cg.fa > case_lower.fa
+{ printf '>lowercase header acgt only\n'; awk 'NR>1' cg.fa; } > case_hdr.fa
+{ awk 'NR>1' cg.fa | tr -d '\n' | head -c 20000; printf 'a'; } > case_last.fa
+{ printf 'c'; awk 'NR>1' cg.fa | tr -d '\n' | head -c 20000; } > case_first.fa
+printf '>x\nACGTnnnnNNNNacgtNnNn\nacgtacgtACGT\n' > case_n.fa
+for f in case_mix.fa case_lower.fa case_last.fa case_first.fa case_n.fa; do
+  for a in "22" "22 1" "22 4" "16 -j 3" "22 -j 8"; do
+    "$EXE" c "$f" rt.dnac $a >/dev/null
+    "$EXE" d rt.dnac rt.out >/dev/null
+    report "case $f $a" "$(hash_of "$f")" "$(hash_of rt.out)"
+    rm -f rt.dnac rt.out
+  done
+done
+# The family letter: a case file gets the case letter of this build's family, and
+# a file whose only lowercase is in its header is NOT a case file -- it must be
+# written exactly as v0.9.0 wrote it, with v0.9.0's letter.
+case $LET in E) CL=K ;; C) CL=F ;; e) CL=k ;; c) CL=f ;; *) CL=? ;; esac
+"$EXE" c case_mix.fa cm.dnac >/dev/null
+"$EXE" c case_hdr.fa ch.dnac >/dev/null
+report "case: letter of a case file" "$CL" "$(dd if=cm.dnac bs=1 skip=3 count=1 2>/dev/null)"
+report "case: letter of a header-only-lowercase file" "$LET" "$(dd if=ch.dnac bs=1 skip=3 count=1 2>/dev/null)"
+rm -f ch.dnac
+# The separation: the body of a case stream is byte for byte the stream of its
+# uppercase twin (a/c/g/t uppercased outside '>' lines, n untouched), in plain and
+# block mode. Header 16 B; then run count and section size, 8 B each, LE.
+twin() { awk '/^>/{print; next}{gsub(/a/,"A");gsub(/c/,"C");gsub(/g/,"G");gsub(/t/,"T");print}' "$1"; }
+for f in case_mix.fa case_n.fa; do
+  twin "$f" > tw.fa
+  for a in "22" "16 -j 3"; do
+    "$EXE" c "$f" cs.dnac $a >/dev/null
+    "$EXE" c tw.fa tw.dnac $a >/dev/null
+    SEC=$(od -An -tu8 -j24 -N8 cs.dnac | tr -d ' ')
+    # a stream that is not a case stream has no section there: read garbage as
+    # "no section", so the comparison fails instead of aborting the suite
+    case $SEC in ''|*[!0-9]*) SEC=0 ;; esac
+    [ ${#SEC} -le 12 ] && [ "$SEC" -le "$(wc -c < cs.dnac)" ] || SEC=0
+    tail -c +17 tw.dnac > b_tw
+    tail -c +$((33 + SEC)) cs.dnac > b_cs
+    report "case: body == uppercase twin, $f $a" "$(hash_of b_tw)" "$(hash_of b_cs)"
+    rm -f cs.dnac tw.dnac b_tw b_cs
+  done
+  rm -f tw.fa
+done
+# A truncated case list must be refused, and nothing written.
+head -c 40 cm.dnac > cut.dnac
+n=$((n+1))
+if "$EXE" d cut.dnac cut.out >/dev/null 2>&1 || [ -e cut.out ]; then
+  fail=$((fail+1)); echo "FAIL: a truncated case list was accepted"
+fi
+rm -f cut.dnac cut.out cm.dnac
+# Stored v0.9.0 streams of a file WITH lowercase (tests/v090/make.sh, written by
+# the v0.9.0 tag build, where lowercase was a literal): a release build must
+# still decode them byte for byte, an experimental build must refuse them.
+FIX9=$SRCROOT/tests/v090
+if [ ! -s "$FIX9/inputs.sha256" ]; then
+  n=$((n+1)); fail=$((fail+1)); echo "FAIL: no stored v0.9.0 streams at $FIX9"
+else
+  n=$((n+1))
+  if ! $SHA -c "$FIX9/inputs.sha256" >/dev/null 2>&1; then
+    fail=$((fail+1)); echo "FAIL: gen/casify no longer reproduce the v0.9.0 fixture inputs"
+  fi
+  for f in case_l3 case_j3; do
+    "$EXE" d "$FIX9/$f.dnac" v9.out >/dev/null 2>&1 || true
+    if [ "$EXPER" -eq 0 ]; then
+      if [ -e v9.out ]; then report "v0.9.0 stream $f" "$(hash_of case_mix.fa)" "$(hash_of v9.out)"
+      else n=$((n+1)); fail=$((fail+1)); echo "FAIL: v0.9.0 stream $f was refused"; fi
+    else
+      n=$((n+1)); [ -e v9.out ] && { fail=$((fail+1)); echo "FAIL: an experimental build read v0.9.0 stream $f"; }
+    fi
+    rm -f v9.out
+  done
+fi
+
 # ------------------------------------------------------------------- verdict
 if [ "$fail" -ne 0 ]; then echo "$fail of $n FAILED"; exit 1; fi
 echo "$n/$n adversarial round-trips lossless"

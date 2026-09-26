@@ -1,0 +1,45 @@
+--- a/dnac.c
++++ b/dnac.c
+@@ -752,6 +752,18 @@
+ 
+ /* After a base symbol s is known: append it, follow/break every match, and    */
+ /* refresh the hash anchors (newhist already includes s).                       */
++/* PILOT-WAVE PROBE (scratch only) */
++static uint64_t pw_n, pw_agree, pw_dis, pw_da, pw_df, pw_both, pw_none, pw_ha[64], pw_hr[64];
++static int pw_pend, pw_pa, pw_pf, pw_reg;
++static void pw_report(void) {
++    double tv = 0; for (int i = 0; i < 64; i++) { double a = pw_n ? (double)pw_ha[i]/pw_n : 0, r = pw_n ? (double)pw_hr[i]/pw_n : 0; tv += fabs(a - r); }
++    fprintf(stderr, "PW n=%llu agree=%.4f dis=%llu anchor_hit=%.4f fresh_hit=%.4f both=%.4f none=%.4f TV=%.4f\n",
++        (unsigned long long)pw_n, pw_n ? (double)pw_agree/pw_n : 0, (unsigned long long)pw_dis,
++        pw_dis ? (double)pw_da/pw_dis : 0, pw_dis ? (double)pw_df/pw_dis : 0,
++        pw_dis ? (double)pw_both/pw_dis : 0, pw_dis ? (double)pw_none/pw_dis : 0, tv / 2);
++    fprintf(stderr, "PW bins(log2 lag): A / R\n");
++    for (int i = 0; i < 64; i++) if (pw_ha[i] || pw_hr[i]) fprintf(stderr, "PW %2d %.4f %.4f\n", i, (double)pw_ha[i]/pw_n, (double)pw_hr[i]/pw_n);
++}
+ static void match_after(int s, uint64_t newhist) {
+     uint32_t np = g_npos;
+     g_seq[np] = (uint8_t)s;
+@@ -805,6 +817,23 @@
+ 
+         uint64_t ctxm = newhist & (((uint64_t)1 << (2 * m->minlen)) - 1);
+         hidx[mi] = mhash(ctxm, m->hbits) * MWAYS;
++        if (mi == 0) {                                   /* PILOT-WAVE PROBE */
++            if (pw_pend) {
++                int ha = (pw_pa == s), hf = (pw_pf == s);
++                pw_da += ha; pw_df += hf; pw_both += ha && hf; pw_none += !ha && !hf;
++                pw_pend = 0;
++            }
++            uint32_t fr = m->hash[hidx[mi]];
++            if (m->active && m->mlen > 0 && m->mp < g_npos && fr != MATCH_EMPTY && fr + 1 < g_npos) {
++                uint32_t fs = fr + 1;
++                uint64_t la = (uint64_t)g_npos - m->mp, lf = (uint64_t)g_npos - fs;
++                int ba = 0, bf = 0; while ((la >> ba) > 1) ba++; while ((lf >> bf) > 1) bf++;
++                pw_ha[ba]++; pw_hr[bf]++; pw_n++;
++                if (fs == m->mp) pw_agree++;
++                else { pw_dis++; pw_pa = g_seq[m->mp]; pw_pf = g_seq[fs]; pw_pend = 1; }
++            }
++            if (!pw_reg) { pw_reg = 1; atexit(pw_report); }
++        }
+         /* (Re)anchor only when idle or confidence has collapsed. We deliberately do NOT
+            re-anchor on every miss: on real (repetitive) genomes the post-SNP context
+            often hash-hits, and re-anchoring there abandons good diverged matches and

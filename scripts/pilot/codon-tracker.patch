@@ -1,0 +1,168 @@
+--- a/dnac.c
++++ b/dnac.c
+@@ -735,6 +735,88 @@
+     }
+ }
+ 
++/* CODON ORACLE (scratch only, docs/codon-oracle-prediction.md). DNAC_CODON = a label
++   per history base (0-2 + gene codon position, 3-5 - gene, 6 non-coding), DNAC_CODON_SEQ
++   = the same history as 0..3 bytes, asserted base by base. Unset: nothing changes. */
++static int g_cl_on = -1; static uint8_t *g_cl = NULL, *g_clseq = NULL; static size_t g_cln = 0;
++static uint8_t *cl_read(const char *path, size_t *n) {
++    FILE *f = path ? fopen(path, "rb") : NULL;
++    if (!f) { fprintf(stderr, "codon: cannot open %s\n", path ? path : "(null)"); exit(2); }
++    dnac_fseek64(f, 0, SEEK_END); *n = (size_t)dnac_ftell64(f); dnac_fseek64(f, 0, SEEK_SET);
++    uint8_t *b = malloc(*n);
++    if (!b || fread(b, 1, *n, f) != *n) { fprintf(stderr, "codon: short read\n"); exit(2); }
++    fclose(f); return b;
++}
++/* CODON TRACKER (docs/codon-tracker-prediction.md): DNAC_CODON=track. Seven fixed
++   hypotheses (+ strand offset 0..2, - strand offset 0..2, non-coding); a shared
++   P(base | 5 previous bases, label) table; decayed log-loss scores; hysteresis. */
++#define TRK_ORD 5
++#define TRK_DECAY (1.0 - 1.0 / 128.0)
++#define TRK_MARGIN 4.0
++static uint16_t *g_tk_tab = NULL; static double g_tk_sc[7]; static int g_tk_cur = 0;
++static uint8_t *g_tk_hist = NULL; static size_t g_tk_cap = 0, g_tk_n = 0;
++static int trk_label(int h, size_t t) {
++    if (h < 3) return (int)((t + (size_t)h) % 3);
++    if (h < 6) return 3 + (int)(((size_t)(h - 3) + 3 - t % 3) % 3);
++    return 6;
++}
++static void trk_dump(void) {
++    const char *p = getenv("DNAC_CODON_LOG");
++    FILE *f = p ? fopen(p, "wb") : NULL;
++    if (f) { fwrite(g_tk_hist, 1, g_tk_n, f); fclose(f); }
++}
++static void trk_update(uint32_t np, int s) {
++    if (np >= g_tk_cap) {
++        g_tk_cap = g_tk_cap ? g_tk_cap * 2 : (1u << 20);
++        g_tk_hist = realloc(g_tk_hist, g_tk_cap);
++        if (!g_tk_hist) { fprintf(stderr, "tracker: out of memory\n"); exit(2); }
++    }
++    int ctx = 0;
++    for (int j = TRK_ORD; j >= 1; j--) ctx = ctx * 4 + (np >= (uint32_t)j ? g_seq[np - j] : 0);
++    int used = trk_label(g_tk_cur, np);
++    g_tk_hist[np] = (uint8_t)used; g_tk_n = (size_t)np + 1;
++    for (int h = 0; h < 7; h++) {
++        uint16_t *c = &g_tk_tab[((size_t)trk_label(h, np) * 1024 + ctx) * 4];
++        double p = (c[s] + 0.5) / (c[0] + c[1] + c[2] + c[3] + 2.0);
++        g_tk_sc[h] = g_tk_sc[h] * TRK_DECAY + log2(p);
++    }
++    uint16_t *c = &g_tk_tab[((size_t)used * 1024 + ctx) * 4];
++    if (++c[s] == 65535) for (int k = 0; k < 4; k++) c[k] >>= 1;
++    int best = 0;
++    for (int h = 1; h < 7; h++) if (g_tk_sc[h] > g_tk_sc[best]) best = h;
++    if (best != g_tk_cur && g_tk_sc[best] > g_tk_sc[g_tk_cur] + TRK_MARGIN) g_tk_cur = best;
++}
++
++static int codon_on(void) {
++    if (g_cl_on < 0) {
++        const char *p = getenv("DNAC_CODON");
++        g_cl_on = 0;
++        if (p && !strcmp(p, "track")) {
++            g_tk_tab = calloc((size_t)7 * 1024 * 4, sizeof(uint16_t));
++            g_cl_on = 2; atexit(trk_dump);
++            fprintf(stderr, "codon: tracker on\n");
++        } else if (p) {
++            size_t n2; g_cl = cl_read(p, &g_cln); g_clseq = cl_read(getenv("DNAC_CODON_SEQ"), &n2);
++            if (n2 != g_cln) { fprintf(stderr, "codon: label/seq length differ\n"); exit(2); }
++            g_cl_on = 1; fprintf(stderr, "codon: %zu labels from %s\n", g_cln, p);
++        }
++    }
++    return g_cl_on;
++}
++static int codon_lab(size_t pos) {
++    if (g_cl_on == 2) return pos < g_tk_n ? g_tk_hist[pos] : trk_label(g_tk_cur, pos);
++    return pos < g_cln ? g_cl[pos] : 6;
++}
++static uint64_t codon_ctx(int i, uint64_t ctx, int lab) {
++    if (g_direct[i]) return ctx | ((uint64_t)lab << (2 * g_order[i]));
++    return ctx ^ ((uint64_t)(lab + 1) << 56);
++}
++static void codon_apply(uint64_t *ctxv) {
++    if (!g_cl_on) return;
++    int lab = codon_lab(g_npos);
++    for (int i = 0; i < g_nmodels; i++) if (!g_tol[i]) ctxv[i] = codon_ctx(i, ctxv[i], lab);
++}
++
+ static void ir_train(uint64_t newhist, uint64_t tolhist) {
+     for (int i = 0; i < g_nmodels; i++) {
+         if (!g_ir[i]) continue;
+@@ -742,6 +824,11 @@
+         if (g_npos < (uint32_t)o + 1) continue;
+         uint64_t h = g_tol[i] ? tolhist : newhist;
+         uint64_t rctx = rc_context(h, o);           /* the other strand's context */
++        if (g_cl_on && !g_tol[i]) {                 /* the other strand reads a + gene as a - gene */
++            int lab = codon_lab((size_t)g_npos - 1 - o);
++            if (lab < 6) lab = lab < 3 ? lab + 3 : lab - 3;
++            rctx = codon_ctx(i, rctx, lab);
++        }
+         int sym = 3 - (int)((h >> (2 * o)) & 3);          /* ...and what follows it     */
+         int b1 = sym >> 1, b0 = sym & 1;
+         uint16_t *b = mix_slot(i, rctx, 0);               /* both nodes, one bucket     */
+@@ -755,6 +842,9 @@
+ static void match_after(int s, uint64_t newhist) {
+     uint32_t np = g_npos;
+     g_seq[np] = (uint8_t)s;
++    if (g_cl_on == 2) trk_update(np, s);
++    if (g_cl_on == 1 && (np >= g_cln || g_clseq[np] != (uint8_t)s)) {
++        fprintf(stderr, "codon: history misaligned at %u\n", np); exit(2); }
+     g_npos = np + 1;
+ 
+     /* the headphone ear follows its own phase, exactly as a match model does.
+@@ -973,6 +1063,7 @@
+     return -1;
+ }
+ static int mix_setup(int maxorder, size_t sizing_n, size_t seq_alloc, int hb, int mhb) {
++    codon_on();
+ 
+     stretch_tab_init();
+     /* g_hashbits counts BUCKETS of BUCKETW uint16, so the byte footprint of a
+@@ -1008,6 +1099,7 @@
+         if (o <= DIRECT_MAXORDER) {
+             g_direct[i] = 1;
+             g_size[i]   = (size_t)(1ull << (2 * o)) * NNODES;
++            if (g_cl_on) g_size[i] *= 8;
+         } else {
+             g_direct[i] = 0;
+             g_size[i]   = ((size_t)1 << g_hashbits) * BUCKETW;
+@@ -1167,7 +1259,7 @@
+     int conf = (!m->active || m->mlen == 0) ? 0
+              : (m->mlen >= 32 ? 3 : (m->mlen >= 12 ? 2 : 1));
+     mc[2] = conf * 4 + (g_nstcm > 0 ? (g_tfail > 0 ? 2 : 0) : 0) + (g_mm[1].active ? 1 : 0);
+-    mc[3] = 0;                                             /* one global expert    */
++    mc[3] = g_cl_on ? codon_lab(g_npos) : 0;               /* one global expert    */
+ }
+ 
+ /* ---------------------------------------------------- model ablation --------
+@@ -1362,7 +1454,8 @@
+     for (size_t p = 0; p < n; p++) {
+         int s = ref[p];
+         for (int i = 0; i < g_nmodels; i++)
+-            ctxv[i] = (g_tol[i] ? g_thist : hist) & g_ctxmask[i];
++            ctxv[i] = (g_tol[i] ? g_thist : hist) & g_ctxmask[i]; /*CODON*/
++        codon_apply(ctxv);
+         train_base(ctxv, hist, s);
+         hist = (hist << 2) | (uint64_t)s;
+         ir_prefetch(hist);            /* overlaps match_after/stcm_after below */
+@@ -1935,7 +2028,8 @@
+ #endif
+             uint64_t ctxv[MAXIN];
+             PT(11, for (int i = 0; i < g_nmodels; i++)
+-                ctxv[i] = (g_tol[i] ? g_thist : hist) & g_ctxmask[i];
++                ctxv[i] = (g_tol[i] ? g_thist : hist) & g_ctxmask[i]; /*CODON*/
++            codon_apply(ctxv);
+             mix_prefetch(ctxv);       /* fetch overlaps the flag coder below */
+             renc_encode(&e, 0, f0, ft));
+             fc[0]++;
+@@ -2188,7 +2282,8 @@
+            latency cover. A hint only: no model state is touched. */
+         uint64_t ctxv[MAXIN];
+         for (int i = 0; i < g_nmodels; i++)
+-            ctxv[i] = (g_tol[i] ? g_thist : hist) & g_ctxmask[i];
++            ctxv[i] = (g_tol[i] ? g_thist : hist) & g_ctxmask[i]; /*CODON*/
++        codon_apply(ctxv);
+         mix_prefetch(ctxv);
+ 
+         int rc = run < RUNCAP ? run : RUNCAP;

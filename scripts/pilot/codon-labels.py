@@ -40,11 +40,25 @@ def main(fa, ft, out):
             c = (k + np.arange(len(xs))) % 3; k += len(xs)
             free = lab[xs] == 6; over += int((~free).sum())
             lab[xs[free]] = base + c[free]
+    # controls (docs/codon-oracle-control-prediction.md)
+    nph = np.where(lab < 3, 0, np.where(lab < 6, 3, 6)).astype(np.uint8)
+    rrt = lab.copy(); rng = np.random.default_rng(20260927)
+    gid = np.full(n, -1, dtype=np.int64)
+    for gi, segs in enumerate(parse_ft(ft)):
+        for a, b in segs:
+            lo, hi = (a - 1, b) if a <= b else (b - 1, a)
+            sel = np.arange(lo, hi); gid[sel[gid[sel] < 0]] = gi
+    rot = rng.integers(0, 3, size=gid.max() + 2)
+    m2 = (rrt < 6) & (gid >= 0)
+    rrt[m2] = (rrt[m2] // 3) * 3 + (rrt[m2] % 3 + rot[gid[m2]]) % 3
     shf = lab.copy(); m = shf < 6
     shf[m] = (shf[m] // 3) * 3 + (shf[m] % 3 + 1) % 3
     pre = np.full(len(hb), 6, dtype=np.uint8)
     np.concatenate((pre, lab)).tofile(out + ".lab")
     np.concatenate((pre, shf)).tofile(out + ".shf")
+    np.concatenate((pre, nph)).tofile(out + ".nph")
+    np.concatenate((pre, rrt)).tofile(out + ".rrt")
+    print("  randrot: %.1f%% of coding bases moved" % (100 * (rrt != lab)[lab < 6].mean()))
     np.concatenate((hb, body)).astype(np.uint8).tofile(out + ".seq")
     print("%s: %d bases (+%d header bases), %d CDS, coding %.1f%% (+ %.1f%%, - %.1f%%), overlap bases %d"
           % (out, n, len(hb), ncds, 100 * (lab < 6).mean(), 100 * (lab < 3).mean(),

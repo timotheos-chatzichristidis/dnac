@@ -13,6 +13,7 @@ run() {  # run <label> <genome-name> <fasta> <exe> <labels|none>
 }
 for pair in "ecoli ecoli.fa" "bsub $C/bsub.fa"; do
   set -- $pair; g=$1; fa=$2
+  if [ "${CONTROLS:-0}" = 1 ]; then run nophase "$g" "$fa" "$COD" nph & run randrot "$g" "$fa" "$COD" rrt & wait; continue; fi
   run rel "$g" "$fa" "$REL" none & run none "$g" "$fa" "$COD" none & run oracle "$g" "$fa" "$COD" lab & run shifted "$g" "$fa" "$COD" shf & wait
   cmp -s "$O/none.$g.dnac" "$O/rel.$g.dnac" && echo "none $g: byte-identical to rel" || echo "FAIL none $g differs from rel"
 done

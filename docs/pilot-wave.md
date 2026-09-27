@@ -80,3 +80,19 @@ anything is built.
 
 The mapping holds row for row, and every row that fits is a part dnac already has. The
 analogy finds nothing to add.
+
+## References (checked against the sources on 2026-09-27; the text above cited them from memory)
+- Heraclitus B51 DK (via Hippolytus, *Refutatio* IX.9). The text is disputed between
+  παλίντονος and παλίντροπος. B54 (ἁρμονίη ἀφανὴς φανερῆς κρείττων) is also Heraclitus.
+- E. Fort, A. Eddi, A. Boudaoud, J. Moukhtar, Y. Couder, *Path-memory induced quantization of
+  classical orbits*, PNAS 107(41):17515 (2010).
+- D. M. Harris, J. Moukhtar, E. Fort, Y. Couder, J. W. M. Bush, *Wavelike statistics from
+  pilot-wave dynamics in a circular corral*, Phys. Rev. E 88, 011001 (2013).
+- A. Andersen et al., *Double-slit experiment with single wave-driven particles and its
+  relation to quantum mechanics*, Phys. Rev. E 92, 013006 (2015).
+- G. Pucci, D. M. Harris, L. M. Faria, J. W. M. Bush, *Walking droplets interacting with
+  single and double slits*, J. Fluid Mech. 835:1136 (2018).
+- G. Nave, A. Cohen, *ECG compression using long-term prediction*, IEEE TBME 40(9):877 (1993).
+- D. Centola, J. Becker, D. Brackbill, A. Baronchelli, *Experimental evidence for tipping
+  points in social convention*, Science 360:1116 (2018). The committed minority tips the
+  group at about 25%.

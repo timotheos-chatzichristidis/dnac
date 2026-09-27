@@ -8,6 +8,7 @@
 #   sh scripts/get-data.sh --meta   # the metagenome for "Where this loses" (~300 MB)
 #   sh scripts/get-data.sh --cue    # the real human pairs the cue was measured on
 #                                   # (~190 MB) -- CHM13 chr21/chr22 + GRCh38 chr22
+#   sh scripts/get-data.sh --codon  # three more bacteria for the codon-tracker figures (~13 MB)
 #   sh scripts/get-data.sh --case   # GRCh38 chr21/chr22 soft-masked (Ensembl dna_sm,
 #                                   # ~25 MB gz), for the case-list figures
 #   sh scripts/get-data.sh --sim    # rebuild the two SIMULATED individuals that
@@ -181,6 +182,23 @@ if [ "${1:-}" = "--case" ]; then
     '10f715be1d29887acdaa0506b501b755eadd047e612868a66a07b011b91db18b *chr22_sm.fa' > case.sha256
   sha256sum -c case.sha256 || { echo "  SOFT-MASKED FILES DIFFER from what the figures were measured on" >&2; exit 1; }
   rm -f case.sha256
+fi
+
+if [ "${1:-}" = "--codon" ]; then
+  # The codon tracker's three further bacteria (docs/codon-gate.md): B. subtilis
+  # 168, and two genomes nobody had looked at when the gate was fixed,
+  # P. aeruginosa PAO1 (high GC) and S. aureus NCTC 8325 (low GC). Kept exactly as
+  # NCBI served them on 2026-09-27 (70 columns, no re-wrap), and checked.
+  echo "Codon-tracker bacteria:"
+  fetch_ncbi NC_000964.3 bsub.fa "Bacillus subtilis 168"
+  fetch_ncbi NC_002516.2 paer.fa "Pseudomonas aeruginosa PAO1"
+  fetch_ncbi NC_007795.1 saur.fa "Staphylococcus aureus NCTC 8325"
+  printf '%s\n' \
+    'a334e891ffc0e307f23f48842775d3383177a9d9cb5d5075b552a2cccddfe139 *bsub.fa' \
+    '902fa552c8c25aaaf82eccfed000e359d6a04c8744d9ec0a8134699cb6ba53e6 *paer.fa' \
+    '04b865e316d64ee393dcffcf1cc31c7eaa14a38f4a74c04e385d2acb8e819731 *saur.fa' > codon.sha256
+  sha256sum -c codon.sha256 || { echo "  CODON GENOMES DIFFER from what the figures were measured on" >&2; exit 1; }
+  rm -f codon.sha256
 fi
 
 if [ "${1:-}" = "--sim" ]; then

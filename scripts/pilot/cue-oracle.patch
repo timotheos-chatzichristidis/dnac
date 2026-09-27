@@ -1,0 +1,46 @@
+--- a/dnac.c
++++ b/dnac.c
+@@ -752,6 +752,34 @@
+ 
+ /* After a base symbol s is known: append it, follow/break every match, and    */
+ /* refresh the hash anchors (newhist already includes s).                       */
++/* CUE ORACLE (scratch only, docs/cue-oracle-prediction.md): target positions of real
++   indels from DNAC_ORACLE; DNAC_ORACLE_MODE=at|not. Priming (g_refbase == 0) is ungated. */
++static uint32_t *g_orc = NULL; static size_t g_orcn = 0; static int g_orc_mode = -1;
++static int oracle_ok(uint32_t np) {
++    if (g_orc_mode < 0) {
++        const char *f = getenv("DNAC_ORACLE"), *m = getenv("DNAC_ORACLE_MODE");
++        g_orc_mode = 0;
++        if (f && m) {
++            FILE *fp = fopen(f, "r"); size_t cap = 1 << 16; unsigned long v;
++            if (!fp) { fprintf(stderr, "oracle: cannot open %s\n", f); exit(2); }
++            g_orc = malloc(cap * sizeof *g_orc);
++            while (fscanf(fp, "%lu", &v) == 1) {
++                if (g_orcn == cap) g_orc = realloc(g_orc, (cap *= 2) * sizeof *g_orc);
++                g_orc[g_orcn++] = (uint32_t)v;
++            }
++            fclose(fp);
++            g_orc_mode = strcmp(m, "at") == 0 ? 1 : 2;
++            fprintf(stderr, "oracle: %zu indels, mode %s\n", g_orcn, m);
++        }
++    }
++    if (g_orc_mode == 0 || g_refbase == 0 || np < g_refbase) return 1;
++    int64_t off = (int64_t)np - g_refbase;
++    size_t lo = 0, hi = g_orcn;                     /* first entry >= off - 20 */
++    while (lo < hi) { size_t mid = (lo + hi) / 2; if ((int64_t)g_orc[mid] < off - 20) lo = mid + 1; else hi = mid; }
++    int near = lo < g_orcn && (int64_t)g_orc[lo] <= off + 20;
++    return g_orc_mode == 1 ? near : !near;
++}
++
+ static void match_after(int s, uint64_t newhist) {
+     uint32_t np = g_npos;
+     g_seq[np] = (uint8_t)s;
+@@ -785,7 +813,7 @@
+                 /* the room ear just lost the beat: put a candidate shifted phase in
+                    the headphones (if they are free or the one there is failing). It
+                    only SPEAKS through the mixer; it takes nothing over. */
+-                if (g_cue && mi == 0 && m->mlen_pre >= CUE_MINLEN && (!g_cactive || g_cmiss > 0)) {
++                if (g_cue && mi == 0 && m->mlen_pre >= CUE_MINLEN && (!g_cactive || g_cmiss > 0) && oracle_ok(np)) {
+                     for (int a = 1, done = 0; a <= CUE_D && !done; a++)
+                         for (int sg = -1; sg <= 1 && !done; sg += 2) {
+                             int64_t q = (int64_t)m->mp + sg * a;

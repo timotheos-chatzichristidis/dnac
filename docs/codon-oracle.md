@@ -44,7 +44,7 @@ What the oracle does not include: the tracker will pay for its mistakes, above a
 boundaries and on the strand choice. The ceiling is 3.75%. Where a real tracker lands
 under it is the next measurement.
 
-## Prior art (searched 2026-09-27; read at the abstract level only, not the full papers)
+## Prior art (searched 2026-09-27)
 - **A. J. Pinho, A. J. R. Neves, V. Afreixo, C. A. C. Bastos, P. J. S. G. Ferreira, "A three-state
   model for DNA protein-coding regions", IEEE TBME 53(11):2148-2155 (2006)**, from the Aveiro
   group behind GeCo. Three DETERMINISTIC states, each a finite-context model, cycling with
@@ -56,3 +56,19 @@ under it is the next measurement.
   is phase ALIGNED to the genes, with strand. No compressor was found that infers it. That
   is the question a real tracker has to answer, and the full paper must be read before the
   tracker's pre-registration, in case it infers more than the abstract says.
+
+**Update, same day, after reading further.** The TBME paper itself is paywalled, and no free
+copy was found. The same group's open chapter (A. J. Pinho, A. J. R. Neves, D. A. Martins,
+C. A. C. Bastos, P. J. S. G. Ferreira, "Finite-context models for DNA coding", in *Signal
+Processing*, InTech 2010, cdn.intechopen.com/pdfs/9756.pdf) describes the three-state model
+as one "for DNA protein-coding regions, i.e., for the parts of the DNA that carry information
+regarding how proteins are synthesized". The companion ICASSP 2006 paper (Ferreira, Neves,
+Afreixo, Pinho, "Exploring three-base periodicity for DNA compression and modeling") says it
+uses the periodicity "usually found in exons". For "unrestricted DNA (coding and non-coding)"
+the chapter moves to plain finite-context models with inverted-repeat updating, and drops the
+three-state model. **Reading: the three-state model was applied to sequences that are
+already coding regions, where the phase is known by construction. It was not applied to whole
+genomes, where the phase must be found.** This rests on the chapter's wording, not on the
+TBME paper's methods section. Two further searches found no compressor that infers reading
+frame or phase on a whole genome. So "a whole-genome compressor that infers the aligned phase
+and strand" appears unoccupied, stated with that limit.

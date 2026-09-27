@@ -3,8 +3,8 @@
 Written 2026-09-27 after the first codon-oracle run, before the controls below were run.
 
 ## What happened
-The oracle gained 3.7506% (E. coli) and 3.0723% (B. subtilis). The "shifted" control
-gained 3.7508% and 3.0736%: the same, to 2 and 13 bytes. **The control was void by
+The oracle gained 3.7504% (E. coli) and 3.0721% (B. subtilis). The "shifted" control
+gained 3.7506% and 3.0734%: the same, to 2 and 13 bytes. **The control was void by
 construction, not failed.** Moving every codon position by one (c -> c+1 mod 3) in every
 gene is a consistent RENAMING of the three phases. The model never sees the names, only
 which bases share a label. So the control carried exactly the oracle's information. This

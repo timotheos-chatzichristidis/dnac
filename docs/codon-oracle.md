@@ -43,3 +43,16 @@ is the beatmatching problem again: lock onto period 3, and decide which strand.
 What the oracle does not include: the tracker will pay for its mistakes, above all at gene
 boundaries and on the strand choice. The ceiling is 3.75%. Where a real tracker lands
 under it is the next measurement.
+
+## Prior art (searched 2026-09-27; read at the abstract level only, not the full papers)
+- **A. J. Pinho, A. J. R. Neves, V. Afreixo, C. A. C. Bastos, P. J. S. G. Ferreira, "A three-state
+  model for DNA protein-coding regions", IEEE TBME 53(11):2148-2155 (2006)**, from the Aveiro
+  group behind GeCo. Three DETERMINISTIC states, each a finite-context model, cycling with
+  position mod 3. They report gains over a single model and find that per-codon-position
+  entropy differs between organisms. So the use of period 3 in DNA compression is occupied.
+- The difference that matters here: a fixed mod-3 cycle does not know where genes start or
+  which strand they are on. Across genes in random frames that is close to our **randrot**
+  control (1.13% / 0.88%). The part our oracle adds on top of that, about 2.6 / 2.2 points,
+  is phase ALIGNED to the genes, with strand. No compressor was found that infers it. That
+  is the question a real tracker has to answer, and the full paper must be read before the
+  tracker's pre-registration, in case it infers more than the abstract says.

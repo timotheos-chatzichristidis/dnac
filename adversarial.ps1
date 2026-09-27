@@ -182,6 +182,53 @@ $n++; if ($lh -ne $lu) { $fail++; Write-Host "FAIL: header-only lowercase change
 $n++; if ($lm -eq $lu) { $fail++; Write-Host "FAIL: a case file was written in the uppercase family" -ForegroundColor Red }
 Remove-Item $cu, $ch, $cm -Force -ErrorAction SilentlyContinue
 
+# --- the codon tracker (docs/codon-impl-prediction.md): a gene-like file whose ----
+# --- gate opens is coded with it at level 1 (default) or with -codon at 2-4. -------
+# The generator is scripts/genes.awk, ported: same integer LCG, same output bytes.
+function Genes([int]$seed, [int]$genes, [int]$bias, [int]$junk) {
+    $script:gx = [double]($seed + 1)
+    function PmR([int]$m) { $script:gx = ($script:gx * 16807) % 2147483647; return [int][math]::Floor($script:gx / 2147483647 * $m) }
+    function Rnd([int]$len) { $sb = [System.Text.StringBuilder]::new(); for ($i = 0; $i -lt $len; $i++) { [void]$sb.Append("ACGT"[(PmR 4)]) }; $sb.ToString() }
+    $fav = "GCG CTG AAA GAA ATT GGC CGT ACC GAT CAG AAC GTG TTC CCG TAT CAT TGG AGC ATG TGC".Split(" ")
+    $seq = [System.Text.StringBuilder]::new()
+    for ($g = 0; $g -lt $genes; $g++) {
+        $s = [System.Text.StringBuilder]::new("ATG")
+        for ($c = 0; $c -lt 300; $c++) {
+            if ((PmR 100) -lt $bias) { [void]$s.Append($fav[(PmR 20)]) }
+            else { do { $cd = "" + "ACGT"[(PmR 4)] + "ACGT"[(PmR 4)] + "ACGT"[(PmR 4)] } while ($cd -eq "TAA" -or $cd -eq "TAG" -or $cd -eq "TGA"); [void]$s.Append($cd) }
+        }
+        [void]$s.Append("TAA"); $gs = $s.ToString()
+        if ((PmR 1000) -lt $junk) { $gs = Rnd $gs.Length }
+        if ((PmR 2) -eq 1) { $a = $gs.ToCharArray(); [array]::Reverse($a)
+            $gs = -join ($a | ForEach-Object { switch ($_) { 'A' {'T'} 'T' {'A'} 'C' {'G'} default {'C'} } }) }
+        [void]$seq.Append((Rnd 100)); [void]$seq.Append($gs)
+    }
+    $all = $seq.ToString()
+    $out = [System.Text.StringBuilder]::new(">synthetic gene-like genome seed=$seed junk=$junk`n")
+    for ($i = 0; $i -lt $all.Length; $i += 60) { [void]$out.Append($all.Substring($i, [math]::Min(60, $all.Length - $i))).Append("`n") }
+    [System.Text.Encoding]::ASCII.GetBytes($out.ToString())
+}
+$gon = W "g_on.fa" (Genes 1 300 97 0)
+$gbelow = W "g_below.fa" (Genes 2 300 97 300)
+foreach ($a in @(@("22"), @("22", "1"), @("22", "3", "-codon"), @("16", "1", "-j", "3"))) {
+    $c = "$gon.cd.dnac"; $r = "$gon.cd.rt"
+    & $Exe c $gon $c @a | Out-Null
+    & $Exe d $c $r      | Out-Null
+    $h1 = (Get-FileHash $gon -Algorithm SHA256).Hash
+    $h2 = if (Test-Path $r) { (Get-FileHash $r -Algorithm SHA256).Hash } else { "MISSING" }
+    $n++
+    if ($h1 -ne $h2) { $fail++; Write-Host ("FAIL codon g_on.fa {0}" -f ($a -join " ")) -ForegroundColor Red }
+    Remove-Item $c, $r -Force -ErrorAction SilentlyContinue
+}
+$c1 = Join-Path $dir "c1.dnac"; $c3 = Join-Path $dir "c3.dnac"; $cn = Join-Path $dir "cn.dnac"
+& $Exe c $gon $c1 22 1 | Out-Null; & $Exe c $gon $c3 22 3 | Out-Null; & $Exe c $gon $cn 22 1 -nocodon | Out-Null
+$l1 = [System.IO.File]::ReadAllBytes($c1)[3]; $l3 = [System.IO.File]::ReadAllBytes($c3)[3]; $ln = [System.IO.File]::ReadAllBytes($cn)[3]
+$n++; if ($l1 -eq $l3) { $fail++; Write-Host "FAIL: a codon stream was written in the plain family" -ForegroundColor Red }
+$n++; if ($ln -ne $l3) { $fail++; Write-Host "FAIL: -nocodon at level 1 did not write the plain family" -ForegroundColor Red }
+& $Exe c $gbelow $c1 22 3 | Out-Null; & $Exe c $gbelow $c3 22 3 -codon | Out-Null
+$n++; if ((Get-FileHash $c1).Hash -ne (Get-FileHash $c3).Hash) { $fail++; Write-Host "FAIL: -codon changed a file whose gate is shut" -ForegroundColor Red }
+Remove-Item $c1, $c3, $cn -Force -ErrorAction SilentlyContinue
+
 if ($fail -ne 0) { Write-Host "$fail of $n FAILED" -ForegroundColor Red; exit 1 }
 Write-Host "$n/$n adversarial roundtrips lossless" -ForegroundColor Green
 exit 0   # the wrong-reference test leaves $LASTEXITCODE=1 on purpose

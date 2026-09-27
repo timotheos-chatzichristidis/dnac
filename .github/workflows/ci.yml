@@ -128,6 +128,24 @@ jobs:
           # evolve bit-identical models, which in turn forces identical output.
           cmp g.dnac c.dnac
 
+      # The codon tracker (docs/codon-impl-prediction.md) adds float scoring that
+      # decides the model's contexts, so it gets the same test on a file whose gate
+      # opens: identical bytes from both compilers, decoded both ways.
+      - name: The codon tracker across compilers
+        run: |
+          awk -v seed=1 -v genes=300 -v bias=97 -v junk=0 -f scripts/genes.awk > gon.fa
+          for a in "22 1" "22 3 -codon" "16 1 -j 3"; do
+            ./dnac_gcc   c gon.fa g.dnac $a
+            ./dnac_clang c gon.fa c.dnac $a
+            cmp g.dnac c.dnac
+            L=$(dd if=g.dnac bs=1 skip=3 count=1 2>/dev/null)
+            case $L in I|J) ;; *) echo "not a codon stream: letter $L"; exit 1 ;; esac
+            ./dnac_clang d g.dnac fg.fa
+            ./dnac_gcc   d c.dnac fc.fa
+            cmp gon.fa fg.fa
+            cmp gon.fa fc.fa
+          done
+
       - name: Cross-decode both directions, every level
         run: |
           for lvl in 1 2 3 4; do

@@ -15,4 +15,4 @@ for p in sys.argv[1:]:
     s = C[b]; s = s[s != 255]
     on = np.mean([mi(s, d) for d in (3, 6, 9, 12)]); off = np.mean([mi(s, d) for d in (4, 5, 7, 8, 10, 11)])
     G = on / off
-    print("%-40s G = %.4f  -> tracker %s" % (p, G, "ON" if G >= 2.0 else "OFF"))
+    print("%-40s G = %.12f  -> tracker %s" % (p, G, "ON" if G >= 2.0 else "OFF"))

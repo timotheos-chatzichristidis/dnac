@@ -912,7 +912,7 @@ exact/diverged/inverted repeats), across many values of `k`.
 
 ```sh
 make                              # cc -O2 -Wall -Wextra -o dnac dnac.c -lm
-make test                         # 264 SHA-256 round-trips (plain, reference, level, state, blocks, the cue, v0.8.0 streams)
+make test                         # 286 SHA-256 round-trips (plain, reference, level, state, blocks, the cue, v0.8.0 streams, the codon tracker)
 sh scripts/get-data.sh --human    # fetch the exact genomes benchmarked below
 make bench                        # bits/base on whatever is in ./data
 ```
@@ -940,7 +940,7 @@ make bench                        # bits/base on whatever is in ./data
 # measurement
 ./bench.ps1 -Exe .\dnac.exe -File .\chr21.fa -K 22   # round-trip + bits/base
 ./bench.ps1 ... -Fast                                # compress only (param sweeps)
-./adversarial.ps1 -Exe .\dnac.exe                    # 169 losslessness round-trips
+./adversarial.ps1 -Exe .\dnac.exe                    # 176 losslessness round-trips
 ./sweep-tables.ps1 -Macro MHBITS_MAX -Caps 26,25      # table size vs bits/base vs RAM
 ```
 
@@ -961,18 +961,22 @@ Try a **real** genome: download a `.fa` from NCBI/Ensembl and
 - `build.ps1`, `test.ps1` — Windows build & demo.
 - `bench.ps1` — round-trip + bits/base for one build on one file (`-Fast` to
   compress only, for parameter sweeps).
-- `adversarial.ps1` — 169 SHA-256-verified round-trips: 10 nasty inputs × 6
+- `adversarial.ps1` — 176 SHA-256-verified round-trips: 10 nasty inputs × 6
   values of `k`, × 4 compression levels, plus reference mode (unrelated/short/
   messy references, primed state files, FASTA↔state interchange), the refusals
   (the wrong reference, a state file from an older dnac) and the check that
-  `-map` leaves the compressed bytes byte-identical, and the case list.
+  `-map` leaves the compressed bytes byte-identical, the case list, and the
+  codon tracker (a gene-like file from `scripts/genes.awk`, its family letters,
+  and `-codon` on a file whose gate stays shut).
   `scripts/roundtrip.sh` is the POSIX port CI runs; it covers the same ground
   plus an out-of-range level, the reference path at every level, a state/stream
   level mismatch, the block modes, the cue's own cases (indel- and
   homopolymer-dense pairs, target = reference, the default levels, the stream
   families of streams and states), the stored v0.8.0 streams in `tests/v080`,
   and the case list (its families, the uppercase-twin body, a truncated list,
-  and v0.9.0's own lowercase streams in `tests/v090`), for 264.
+  and v0.9.0's own lowercase streams in `tests/v090`), and the codon tracker
+  (every level, `-codon`/`-nocodon`, blocks, case x codon, both sides of the
+  gate, reference mode), for 286.
 - `ablate.ps1` — what each of v0.8.0's 15 prediction inputs is worth
   (`-Mode loo|diag|mask`). Drives `-DDNAC_ABLATE` / `-DDNAC_DIAG` in `dnac.c`:
   the first zeroes an input inside the mixer without touching table geometry, so
@@ -1012,7 +1016,7 @@ Try a **real** genome: download a `.fa` from NCBI/Ensembl and
   knowing where a technique *stops* working is worth as much as knowing where it
   starts.
 - `.github/workflows/ci.yml` — every push builds on gcc and clang, Linux and
-  macOS, and must pass all 264 round-trips on the release build, the cue
+  macOS, and must pass all 286 round-trips on the release build, the cue
   switched off and an experimental build, plus a cross-build portability check
   that compresses with one table geometry and decodes with another, and a check
   that the cue switched off writes the v0.8.0 tag's bytes.

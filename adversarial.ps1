@@ -229,6 +229,25 @@ $n++; if ($ln -ne $l3) { $fail++; Write-Host "FAIL: -nocodon at level 1 did not 
 $n++; if ((Get-FileHash $c1).Hash -ne (Get-FileHash $c3).Hash) { $fail++; Write-Host "FAIL: -codon changed a file whose gate is shut" -ForegroundColor Red }
 Remove-Item $c1, $c3, $cn -Force -ErrorAction SilentlyContinue
 
+# --- truncation (v0.11.0, docs/truncation-prediction.md): a stream cut inside its --
+# --- coded body is refused and leaves no output file (it used to decode to wrong --
+# --- bytes at exit 0). --------------------------------------------------------------
+$cutcases = @(@{ f = $files[-1]; a = @("22") }, @{ f = $gon; a = @("22", "1") }, @{ f = $files[-1]; a = @("16", "-j", "3") })
+foreach ($t in $cutcases) {
+    $src = $t.f; $a = $t.a
+    $c = Join-Path $dir "tc.dnac"; $cut = Join-Path $dir "tcut.dnac"; $o = Join-Path $dir "tcut.out"
+    & $Exe c $src $c @a | Out-Null
+    $bytes = [System.IO.File]::ReadAllBytes($c)
+    foreach ($len in @([int]($bytes.Length / 2), ($bytes.Length - 1))) {
+        [System.IO.File]::WriteAllBytes($cut, $bytes[0..($len - 1)])
+        Remove-Item $o -Force -ErrorAction SilentlyContinue
+        & $Exe d $cut $o 2>$null | Out-Null
+        $n++
+        if ($LASTEXITCODE -eq 0 -or (Test-Path $o)) { $fail++; Write-Host ("FAIL: truncated stream accepted ({0} of {1}, {2})" -f $len, $bytes.Length, ($a -join " ")) -ForegroundColor Red }
+    }
+    Remove-Item $c, $cut, $o -Force -ErrorAction SilentlyContinue
+}
+
 if ($fail -ne 0) { Write-Host "$fail of $n FAILED" -ForegroundColor Red; exit 1 }
 Write-Host "$n/$n adversarial roundtrips lossless" -ForegroundColor Green
 exit 0   # the wrong-reference test leaves $LASTEXITCODE=1 on purpose

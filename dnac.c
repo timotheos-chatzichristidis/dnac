@@ -109,10 +109,17 @@ static void buf_put(Buf *b, int c) {
 static void buf_free(Buf *b) { free(b->p); b->p = NULL; b->len = b->cap = 0; }
 
 typedef struct { uint32_t low, range; Buf *out; } REnc;
-typedef struct { uint32_t low, range, code; const uint8_t *in; size_t pos, len; } RDec;
+typedef struct { uint32_t low, range, code; const uint8_t *in; size_t pos, len, over; } RDec;
 
+/* The encoder's flush writes exactly the bytes the decoder will still read, so a
+   complete stream is never read past its end. A read past it means the file was
+   cut short: it still returns 0xFF so decoding can finish, but it is COUNTED, and
+   the caller refuses the archive (docs/truncation-prediction.md). Until v0.11.0
+   this was silent, and a truncated archive decoded to wrong bytes at exit 0. */
 static uint32_t rdec_byte(RDec *d) {
-    return d->pos < d->len ? (uint32_t)d->in[d->pos++] : 0xFFu;   /* EOF read as 0xFF */
+    if (d->pos < d->len) return (uint32_t)d->in[d->pos++];
+    d->over++;
+    return 0xFFu;
 }
 
 static void renc_init(REnc *e, Buf *out) { e->low = 0; e->range = 0xFFFFFFFFu; e->out = out; }
@@ -138,7 +145,7 @@ static void renc_flush(REnc *e) {
 }
 
 static void rdec_init(RDec *d, const uint8_t *in, size_t len) {
-    d->low = 0; d->range = 0xFFFFFFFFu; d->code = 0; d->in = in; d->pos = 0; d->len = len;
+    d->low = 0; d->range = 0xFFFFFFFFu; d->code = 0; d->in = in; d->pos = 0; d->len = len; d->over = 0;
     for (int i = 0; i < 4; i++) d->code = (d->code << 8) | rdec_byte(d);
 }
 
@@ -1931,6 +1938,7 @@ static int do_prime(const char *refpath, const char *statepath, int k) {
 
 static void encode_span(const uint8_t *buf, long n, Buf *out);
 static void decode_span(const uint8_t *cs, size_t cs_len, uint64_t n, uint8_t *dst);
+static TLS int g_span_short = 0;   /* the last decode_span read past its data */
 
 typedef struct {
     int tid, nthreads, nb, k, hb, mhb, decode, err;
@@ -1947,7 +1955,10 @@ static void worker_run(Worker *w) {
         uint64_t blen  = (start + (uint64_t)w->bsz <= total) ? (uint64_t)w->bsz
                        : (start < total ? total - start : 0);
         if (mix_setup(w->k, (size_t)w->bsz, (size_t)blen + 1, w->hb, w->mhb)) { w->err = 1; return; }
-        if (w->decode) decode_span(w->cs + w->coff[b], (size_t)w->clen[b], blen, w->dst + start);
+        if (w->decode) {
+            decode_span(w->cs + w->coff[b], (size_t)w->clen[b], blen, w->dst + start);
+            if (g_span_short) w->err = 1;
+        }
         else {
             encode_span(w->src + start, (long)blen, &w->bufs[b]);
             if (w->bufs[b].err) w->err = 1;
@@ -2089,7 +2100,7 @@ static int case_list_dec(const uint8_t *cs, size_t cs_len, uint64_t nruns, uint8
         if (cur) dst[i] = (uint8_t)(b + 32);
         rem--;
     }
-    return (got == nruns && rem == 0) ? 0 : -1;
+    return (got == nruns && rem == 0 && d.over == 0) ? 0 : -1;
 }
 
 /* Code one span of bytes with the CURRENT model state.
@@ -2376,6 +2387,7 @@ static void decode_span(const uint8_t *cs, size_t cs_len, uint64_t n, uint8_t *d
     memset(lit_cnt, 0, sizeof(lit_cnt));
     memset(flag_cnt, 0, sizeof(flag_cnt));
     RDec d; rdec_init(&d, cs, cs_len);
+    g_span_short = 0;
     uint64_t hist = 0;
     int run = 0;
 
@@ -2420,6 +2432,7 @@ static void decode_span(const uint8_t *cs, size_t cs_len, uint64_t n, uint8_t *d
         }
         if (ft + 1 >= CAP) { fc[0] >>= 1; fc[1] >>= 1; }
     }
+    g_span_short = d.over != 0;
 }
 
 static int do_decompress(const char *inpath, const char *outpath, const char *refpath) {
@@ -2578,31 +2591,36 @@ static int do_decompress(const char *inpath, const char *outpath, const char *re
        thread its own slice, and even single-block decode no longer needs the
        handle. */
     int64_t cs_start = dnac_ftell64(in);
-    if (cs_start < 0 || dnac_fseek64(in, 0, SEEK_END) != 0) { perror("seek input"); fclose(in); mix_free(); return 1; }
+    if (cs_start < 0 || dnac_fseek64(in, 0, SEEK_END) != 0) { perror("seek input"); fclose(out); remove(outpath); fclose(in); mix_free(); return 1; }
     int64_t cs_end = dnac_ftell64(in);
     size_t cs_len = (size_t)(cs_end - cs_start);
     uint8_t *cs = (uint8_t *)malloc(cs_len ? cs_len : 1);
-    if (!cs) { fprintf(stderr, "out of memory\n"); fclose(in); mix_free(); return 1; }
+    if (!cs) { fprintf(stderr, "out of memory\n"); fclose(out); remove(outpath); fclose(in); mix_free(); return 1; }
     if (dnac_fseek64(in, cs_start, SEEK_SET) != 0 || (cs_len && fread(cs, 1, cs_len, in) != cs_len)) {
-        perror("read input"); free(cs); fclose(in); mix_free(); return 1; }
+        perror("read input"); free(cs); fclose(out); remove(outpath); fclose(in); mix_free(); return 1; }
     uint8_t *dst = (uint8_t *)malloc(len ? (size_t)len : 1);
-    if (!dst) { fprintf(stderr, "out of memory\n"); free(blen_c); free(cs); fclose(out); fclose(in); mix_free(); return 1; }
+    if (!dst) { fprintf(stderr, "out of memory\n"); free(blen_c); free(cs); fclose(out); remove(outpath); fclose(in); mix_free(); return 1; }
     if (!blocked) {
         decode_span(cs, cs_len, len, dst);
+        if (g_span_short) {
+            fprintf(stderr, "truncated archive: the coded data ends before the %llu bytes"
+                            " its header promises\n", (unsigned long long)len);
+            free(dst); free(blen_c); free(cs); fclose(out); remove(outpath); fclose(in); mix_free(); return 1;
+        }
     } else {
         /* Mirror the encoder exactly: block b gets a model built from scratch,
            sized from the block, and sees only its own slice of the stream. */
         uint64_t bsz = ((uint64_t)len + (uint64_t)nb - 1) / (uint64_t)nb;
         size_t *coff = (size_t *)malloc((size_t)nb * sizeof(size_t));
         if (!coff) { fprintf(stderr, "out of memory\n");
-                     free(dst); free(blen_c); free(cs); fclose(out); fclose(in); mix_free(); return 1; }
+                     free(dst); free(blen_c); free(cs); fclose(out); remove(outpath); fclose(in); mix_free(); return 1; }
         size_t off = 0;
         for (int b = 0; b < nb; b++) {
             /* Every offset is checked BEFORE any thread runs: a truncated file must
                be a clean refusal, not a worker reading past the buffer. */
             if (blen_c[b] > cs_len || off + (size_t)blen_c[b] > cs_len) {
                 fprintf(stderr, "truncated block %d of %d\n", b + 1, nb);
-                free(coff); free(dst); free(blen_c); free(cs); fclose(out); fclose(in); mix_free(); return 1;
+                free(coff); free(dst); free(blen_c); free(cs); fclose(out); remove(outpath); fclose(in); mix_free(); return 1;
             }
             coff[b] = off; off += (size_t)blen_c[b];
         }
@@ -2617,18 +2635,18 @@ static int do_decompress(const char *inpath, const char *outpath, const char *re
         }
         int werr = run_workers(ws, nt);
         free(coff);
-        if (werr) { fprintf(stderr, "a block failed to decompress\n");
-                    free(dst); free(blen_c); free(cs); fclose(out); fclose(in); mix_free(); return 1; }
+        if (werr) { fprintf(stderr, "a block failed to decompress (truncated or corrupt archive)\n");
+                    free(dst); free(blen_c); free(cs); fclose(out); remove(outpath); fclose(in); mix_free(); return 1; }
     }
     free(blen_c);
     if (casem) {
         int bad = case_list_dec(clbuf, cl_len, cl_runs, dst, len);
         free(clbuf); clbuf = NULL;
         if (bad) { fprintf(stderr, "corrupt case list\n");
-                   free(dst); free(cs); fclose(out); fclose(in); mix_free(); return 1; }
+                   free(dst); free(cs); fclose(out); remove(outpath); fclose(in); mix_free(); return 1; }
     }
     if (len && fwrite(dst, 1, (size_t)len, out) != (size_t)len) {
-        perror("write output"); free(dst); free(cs); fclose(out); fclose(in); mix_free(); return 1; }
+        perror("write output"); free(dst); free(cs); fclose(out); remove(outpath); fclose(in); mix_free(); return 1; }
     free(dst);
     free(cs);
     fclose(out); fclose(in);

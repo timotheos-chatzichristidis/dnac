@@ -462,16 +462,36 @@ report "codon: reference mode round-trip with -codon" "$(hash_of g_on.fa)" "$(ha
 RL=$(dd if=rt.dnac bs=1 skip=3 count=1 2>/dev/null)
 n=$((n+1)); case $RL in U|V|u|v) ;; *) fail=$((fail+1)); echo "FAIL: reference mode wrote codon letter $RL" ;; esac
 rm -f rt.dnac rt.out
-# a codon stream cut inside its header is refused, and nothing written. (A cut
-# inside the CODED BODY is not detected by any family: v0.10.0 decodes a truncated
-# plain stream to wrong bytes at exit 0. Found 2026-09-27 while writing this case;
-# it needs a checksum, which is a format change of its own.)
+# a codon stream cut inside its header is refused, and nothing written
 "$EXE" c g_on.fa cg.dnac 22 1 >/dev/null; head -c 10 cg.dnac > cut.dnac
 n=$((n+1))
 if "$EXE" d cut.dnac cut.out >/dev/null 2>&1 || [ -e cut.out ]; then
   fail=$((fail+1)); echo "FAIL: a truncated codon stream was accepted"
 fi
 rm -f cg.dnac cut.dnac cut.out
+
+# ------------------------------------------- v0.11.0: truncation (docs/truncation-prediction.md)
+# A stream cut inside its CODED BODY used to decode to wrong bytes at exit 0 (every
+# family, v0.10.0 included). The decoder now counts reads past the end of the data
+# and refuses. Cut to half and to one byte short: plain, blocks, codon, case list.
+cutcheck() {  # cutcheck <label> <input> <args...>
+  lb=$1; in=$2; shift 2
+  "$EXE" c "$in" tc.dnac "$@" >/dev/null
+  sz=$(wc -c < tc.dnac)
+  for cut in $((sz / 2)) $((sz - 1)); do
+    head -c "$cut" tc.dnac > tcut.dnac; rm -f tcut.out
+    n=$((n+1))
+    if "$EXE" d tcut.dnac tcut.out >/dev/null 2>&1 || [ -e tcut.out ]; then
+      fail=$((fail+1)); echo "FAIL: truncated ($cut of $sz) accepted or output left: $lb"
+    fi
+  done
+  rm -f tc.dnac tcut.dnac tcut.out
+}
+cutcheck "plain level 3" diverged.fa 22
+cutcheck "plain level 1" random_dna.fa 22 1
+cutcheck "blocks -j 3"   diverged.fa 16 -j 3
+cutcheck "codon"         g_on.fa 22 1
+cutcheck "case list"     case_mix.fa 22
 
 # ------------------------------------------------------------------- verdict
 if [ "$fail" -ne 0 ]; then echo "$fail of $n FAILED"; exit 1; fi

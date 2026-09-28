@@ -1,0 +1,35 @@
+--- a/dnac.c
++++ b/dnac.c
+@@ -752,6 +752,19 @@
+ 
+ /* After a base symbol s is known: append it, follow/break every match, and    */
+ /* refresh the hash anchors (newhist already includes s).                       */
++/* CUE SOURCE LOG (scratch only, docs/cue-source-prediction.md): one line per TARGET
++   cue load -- np, shift, tie flag, master source mp. Touches no model state. */
++static FILE *g_ll = NULL; static int g_ll_tried = 0;
++static void ll_close(void) { if (g_ll) fclose(g_ll); }
++static void loadlog(uint32_t np, int shift, int tied, uint32_t mp) {
++    if (g_refbase == 0 || np < g_refbase) return;
++    if (!g_ll_tried) {
++        const char *p = getenv("DNAC_LOADLOG"); g_ll_tried = 1;
++        if (p && (g_ll = fopen(p, "wb")) != NULL) { fprintf(g_ll, "pos\tshift\ttied\tmp\n"); atexit(ll_close); }
++    }
++    if (g_ll) fprintf(g_ll, "%u\t%d\t%d\t%u\n", np, shift, tied, mp);
++}
++
+ static void match_after(int s, uint64_t newhist) {
+     uint32_t np = g_npos;
+     g_seq[np] = (uint8_t)s;
+@@ -793,6 +806,12 @@
+                             if (back_agree((uint32_t)(q - 1), np, CUE_L) == CUE_L) {
+                                 g_cmp = (uint32_t)q; g_clen = CUE_L;
+                                 g_cactive = 1; g_cmiss = 0; done = 1;
++                                {
++                                    int64_t o = (int64_t)m->mp - sg * a;
++                                    int tied = (o >= CUE_L && o <= (int64_t)np &&
++                                                back_agree((uint32_t)(o - 1), np, CUE_L) == CUE_L);
++                                    loadlog(np, sg * a, tied, m->mp);
++                                }
+                             }
+                         }
+                 }

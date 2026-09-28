@@ -22,6 +22,13 @@ bases, with their case stored beside them
 ([Soft-masked genomes](#soft-masked-genomes--the-case-list-v0100)). Files without
 lowercase bases are written exactly as before.
 
+**v0.11.0 finds the reading frame in bacterial genomes.** The codon tracker infers,
+from the sequence alone, where each base sits in its codon and on which strand, and
+the models use it: 1.61-3.88% smaller at the default level 1 on four bacteria, two
+of them unseen when the method was fixed
+([Bacterial genomes](#bacterial-genomes--the-codon-tracker-v0110)). A file without
+the codon period, such as any human chromosome, is written exactly as before.
+
 No dependencies beyond libc. Builds clean with `-Wall -Wextra` on gcc and clang.
 Every design decision was a falsifiable experiment on real genomes — kept when
 the measurement rewarded it, reverted when it did not. What the measurement
@@ -896,6 +903,52 @@ position the match model points to. It lost to that `bzip2` list and was not
 adopted. Both runs, pre-registered, are in
 [docs/case-mask.md](docs/case-mask.md) and [docs/case-list.md](docs/case-list.md).
 
+## Bacterial genomes — the codon tracker (v0.11.0)
+
+Most of a bacterial genome is genes, and a gene is read three bases at a time, on
+one strand or the other. A base is easier to predict when the model knows where it
+sits in its codon; handed the annotated reading frame as an oracle, the model
+shrinks E. coli by more than any tracker here recovers
+([docs/codon-oracle.md](docs/codon-oracle.md)). The tracker finds the frame from
+the sequence alone, so the
+decoder can run it too. Seven hypotheses compete: the + strand at three offsets,
+the − strand at three offsets, and "not a gene". Each is scored by how well a small
+order-5 model predicts under its labels, and a hypothesis takes over only when it
+leads by 4 bits. Statistics are kept in the gene's own direction: a − gene is a +
+gene read backwards on the other strand, so what one strand teaches the other uses
+at once. The label then enters the order models' contexts and a mixer expert.
+
+A file uses the tracker only if a per-file gate finds the codon period: the mutual
+information between bases 3, 6, 9 and 12 apart must be at least twice that at the
+neighbouring distances. It is **on by default at level 1**, available at levels 2-4
+with `-codon`, off with `-nocodon`, and never used with a reference.
+
+| genome | level 1 `-nocodon` | level 1 | change | level 3 | level 3 `-codon` | change |
+|---|---:|---:|---:|---:|---:|---:|
+| E. coli K-12 MG1655 | 1,094,632 B | 1,069,614 B | −2.29% | 1,093,425 B | 1,066,106 B | −2.50% |
+| B. subtilis 168 | 1,003,070 B | 986,937 B | −1.61% | 1,002,525 B | 985,292 B | −1.72% |
+| P. aeruginosa PAO1 | 1,385,837 B | 1,332,018 B | −3.88% | 1,382,299 B | 1,327,685 B | −3.95% |
+| S. aureus NCTC 8325 | 646,970 B | 630,969 B | −2.47% | 646,500 B | 629,691 B | −2.60% |
+
+The gate threshold was fixed before P. aeruginosa and S. aureus were fetched, and
+both gained more than predicted. The cost on E. coli, min of three runs: level 1
+encodes 7.8% and decodes 9.0% slower, level 3 with `-codon` 16.3% and 19.9% (timings
+carry no claim row; see [docs/codon-speed.md](docs/codon-speed.md)).
+**A file whose gate stays shut is written exactly as v0.10.0 wrote it**, which is
+why no human figure in this README moved. The gate itself adds about 0.1 s per 10 MB.
+
+Period 3 has been used in DNA compression before: Pinho et al. (IEEE TBME, 2006)
+gave each codon position its own model, on sequences already known to be coding. What
+is new here is finding the frame and the strand on a whole genome. The idea is
+Timotheos's ("the missing fundamental", like the beatmatching behind the cue). It
+took three pre-registered rounds to get there, and each failure named the next
+change: the first tracker found the phase but not the strand, and the second
+failed only on human sequence. The whole record, including the controls that turned
+out void and were replaced, is in [docs/codon-oracle.md](docs/codon-oracle.md),
+[docs/codon-tracker.md](docs/codon-tracker.md),
+[docs/codon-tracker2.md](docs/codon-tracker2.md),
+[docs/codon-gate.md](docs/codon-gate.md) and [docs/codon-speed.md](docs/codon-speed.md).
+
 ## Lossless on anything
 
 Every byte round-trips. Non-`ACGT` bytes (headers, newlines, `N`) go through the
@@ -906,13 +959,21 @@ sides. Verified by SHA-256 on real genomes *and* adversarial inputs (empty file,
 all 256 byte values, messy CRLF/lowercase/N FASTA, pure newlines, random binary,
 exact/diverged/inverted repeats), across many values of `k`.
 
+**A damaged archive is refused, not decoded.** Until v0.11.0 an archive cut short
+inside its coded data decoded to wrong bytes at exit 0, in every version. The
+decoder now counts any read past the end of the data and refuses the file, leaving
+no output behind. That also covers archives written by v0.10.0 and earlier, since no
+stream changed. A byte flipped inside a complete archive is still not detected: that
+needs a checksum in every file, which is a format change of its own
+([docs/truncation.md](docs/truncation.md)).
+
 ## Build & run
 
 **Linux / macOS / WSL:**
 
 ```sh
 make                              # cc -O2 -Wall -Wextra -o dnac dnac.c -lm
-make test                         # 264 SHA-256 round-trips (plain, reference, level, state, blocks, the cue, v0.8.0 streams)
+make test                         # 296 SHA-256 round-trips (plain, reference, level, state, blocks, the cue, v0.8.0 streams, the codon tracker)
 sh scripts/get-data.sh --human    # fetch the exact genomes benchmarked below
 make bench                        # bits/base on whatever is in ./data
 ```
@@ -928,6 +989,7 @@ make bench                        # bits/base on whatever is in ./data
 ./dnac.exe c  sample.fa  out.dnac 22    # compress (k = max model order, default 22)
 ./dnac.exe c  sample.fa  out.dnac 22 1  # ...at level 1 (fast); 3 = max, the default without a reference
 ./dnac.exe c  sample.fa  out.dnac 22 -j 8   # 8 independent blocks (see below)
+./dnac.exe c  bact.fa    out.dnac 22 3 -codon  # codon tracker at level 3 (on by default at 1; -nocodon)
 ./dnac.exe d  out.dnac   back.fa        # decompress (the level travels in the header)
 
 # reference-based (the same reference is required to decompress)
@@ -940,7 +1002,7 @@ make bench                        # bits/base on whatever is in ./data
 # measurement
 ./bench.ps1 -Exe .\dnac.exe -File .\chr21.fa -K 22   # round-trip + bits/base
 ./bench.ps1 ... -Fast                                # compress only (param sweeps)
-./adversarial.ps1 -Exe .\dnac.exe                    # 169 losslessness round-trips
+./adversarial.ps1 -Exe .\dnac.exe                    # 182 losslessness round-trips
 ./sweep-tables.ps1 -Macro MHBITS_MAX -Caps 26,25      # table size vs bits/base vs RAM
 ```
 
@@ -961,18 +1023,23 @@ Try a **real** genome: download a `.fa` from NCBI/Ensembl and
 - `build.ps1`, `test.ps1` — Windows build & demo.
 - `bench.ps1` — round-trip + bits/base for one build on one file (`-Fast` to
   compress only, for parameter sweeps).
-- `adversarial.ps1` — 169 SHA-256-verified round-trips: 10 nasty inputs × 6
+- `adversarial.ps1` — 182 SHA-256-verified round-trips: 10 nasty inputs × 6
   values of `k`, × 4 compression levels, plus reference mode (unrelated/short/
   messy references, primed state files, FASTA↔state interchange), the refusals
   (the wrong reference, a state file from an older dnac) and the check that
-  `-map` leaves the compressed bytes byte-identical, and the case list.
+  `-map` leaves the compressed bytes byte-identical, the case list, and the
+  codon tracker (a gene-like file from `scripts/genes.awk`, its family letters,
+  and `-codon` on a file whose gate stays shut), and truncated archives.
   `scripts/roundtrip.sh` is the POSIX port CI runs; it covers the same ground
   plus an out-of-range level, the reference path at every level, a state/stream
   level mismatch, the block modes, the cue's own cases (indel- and
   homopolymer-dense pairs, target = reference, the default levels, the stream
   families of streams and states), the stored v0.8.0 streams in `tests/v080`,
   and the case list (its families, the uppercase-twin body, a truncated list,
-  and v0.9.0's own lowercase streams in `tests/v090`), for 264.
+  and v0.9.0's own lowercase streams in `tests/v090`), and the codon tracker
+  (every level, `-codon`/`-nocodon`, blocks, case x codon, both sides of the
+  gate, reference mode), and truncated archives (plain, blocks, codon, case
+  list), for 296.
 - `ablate.ps1` — what each of v0.8.0's 15 prediction inputs is worth
   (`-Mode loo|diag|mask`). Drives `-DDNAC_ABLATE` / `-DDNAC_DIAG` in `dnac.c`:
   the first zeroes an input inside the mixer without touching table geometry, so
@@ -1012,7 +1079,7 @@ Try a **real** genome: download a `.fa` from NCBI/Ensembl and
   knowing where a technique *stops* working is worth as much as knowing where it
   starts.
 - `.github/workflows/ci.yml` — every push builds on gcc and clang, Linux and
-  macOS, and must pass all 264 round-trips on the release build, the cue
+  macOS, and must pass all 296 round-trips on the release build, the cue
   switched off and an experimental build, plus a cross-build portability check
   that compresses with one table geometry and decodes with another, and a check
   that the cue switched off writes the v0.8.0 tag's bytes.

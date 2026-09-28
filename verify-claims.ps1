@@ -108,14 +108,16 @@ function Bases($seq) {
 
 # Compress and return the stored size in bytes. Always round-trips: a size from a
 # run whose losslessness was not checked is not a measurement, it is a number.
-function Size($inFile, $ref, $level, $blocks, $exe) {
+function Size($inFile, $ref, $level, $blocks, $exe, $flag) {
     # $exe: an experiment build (the cue rows below). Default is the repository's
     # own dnac.exe, which is what every pre-v0.9.0 row measures.
+    # $flag: one extra encode switch (-codon / -nocodon, the codon rows).
     if (-not $exe) { $exe = $dnac }
     $out = Join-Path $work 'vc.dnac'; $rt = Join-Path $work 'vc.rt'
     Remove-Item $out, $rt -Force -ErrorAction SilentlyContinue
     $lvl = if ($level) { "$level" } else { '3' }
     $jarg = if ($blocks) { @('-j', "$blocks") } else { @() }
+    if ($flag) { $jarg += @("$flag") }
     if ($ref) { & $exe cr $inFile $out $ref 22 $lvl @jarg | Out-Null }
     else      { & $exe c  $inFile $out 22 $lvl @jarg      | Out-Null }
     if ($LASTEXITCODE -ne 0 -or -not (Test-Path $out)) { throw "compress failed: $inFile" }
@@ -706,6 +708,22 @@ $F = { param($n)
         $p = Join-Path $root $n
         if (Test-Path $p) { $p } else { Join-Path $root "data\$n" } }
 
+# --- the codon tracker (docs/codon-*.md) ---------------------------------------
+# Every figure compares THIS build with and without the tracker on one file:
+# -nocodon at level 1 and no flag at level 3 are, byte for byte, what v0.10.0
+# writes (docs/codon-impl-prediction.md, check I1). E. coli is in the repository;
+# the other three come from `sh scripts/get-data.sh --codon`.
+$script:CodonMemo = @{}
+function CodonSize($n, $level, $flag) {
+    $key = "$n|$level|$flag"
+    if (-not $script:CodonMemo.ContainsKey($key)) {
+        $p = & $F $n
+        if (-not (Test-Path $p)) { throw "missing $n - run: sh scripts/get-data.sh --codon" }
+        $script:CodonMemo[$key] = Size $p $null $level $null $null $flag
+    }
+    $script:CodonMemo[$key]
+}
+
 # --- v0.10.0: the case list ---------------------------------------------------
 # The soft-masked figures compare two releases on one file, so the other side is
 # the v0.9.0 TAG's source, not a flag on this one: v0.9.0 has no switch that
@@ -793,6 +811,89 @@ END { print run }
 # that editing the number breaks it, loose enough to survive reflowing prose.
 
 $claims = @(
+  # --- the codon tracker (docs/codon-*.md) --------------------------------------
+  @{ id='codon-ecoli-l1-off'; tier='fast'; doc='README.md'; unit='B'; tol=0
+     anchor='| E. coli K-12 MG1655 | 1,094,632 B | 1,069,614 B | −2.29% | 1,093,425 B | 1,066,106 B | −2.50% |'; expect=1094632
+     measure={ CodonSize 'ecoli.fa' 1 '-nocodon' } }
+  @{ id='codon-ecoli-l1'; tier='fast'; doc='README.md'; unit='B'; tol=0
+     anchor='| E. coli K-12 MG1655 | 1,094,632 B | 1,069,614 B | −2.29% | 1,093,425 B | 1,066,106 B | −2.50% |'; expect=1069614
+     measure={ CodonSize 'ecoli.fa' 1 $null } }
+  @{ id='codon-ecoli-l1-pct'; tier='fast'; doc='README.md'; unit='%'; tol=0
+     anchor='| E. coli K-12 MG1655 | 1,094,632 B | 1,069,614 B | −2.29% | 1,093,425 B | 1,066,106 B | −2.50% |'; expect=-2.29
+     measure={ CuePct (CodonSize 'ecoli.fa' 1 '-nocodon') (CodonSize 'ecoli.fa' 1 $null) } }
+  @{ id='codon-ecoli-l3'; tier='fast'; doc='README.md'; unit='B'; tol=0
+     anchor='| E. coli K-12 MG1655 | 1,094,632 B | 1,069,614 B | −2.29% | 1,093,425 B | 1,066,106 B | −2.50% |'; expect=1093425
+     measure={ CodonSize 'ecoli.fa' 3 $null } }
+  @{ id='codon-ecoli-l3-on'; tier='fast'; doc='README.md'; unit='B'; tol=0
+     anchor='| E. coli K-12 MG1655 | 1,094,632 B | 1,069,614 B | −2.29% | 1,093,425 B | 1,066,106 B | −2.50% |'; expect=1066106
+     measure={ CodonSize 'ecoli.fa' 3 '-codon' } }
+  @{ id='codon-ecoli-l3-pct'; tier='fast'; doc='README.md'; unit='%'; tol=0
+     anchor='| E. coli K-12 MG1655 | 1,094,632 B | 1,069,614 B | −2.29% | 1,093,425 B | 1,066,106 B | −2.50% |'; expect=-2.5
+     measure={ CuePct (CodonSize 'ecoli.fa' 3 $null) (CodonSize 'ecoli.fa' 3 '-codon') } }
+  @{ id='codon-bsub-l1-off'; tier='slow'; doc='README.md'; unit='B'; tol=0
+     anchor='| B. subtilis 168 | 1,003,070 B | 986,937 B | −1.61% | 1,002,525 B | 985,292 B | −1.72% |'; expect=1003070
+     measure={ CodonSize 'bsub.fa' 1 '-nocodon' } }
+  @{ id='codon-bsub-l1'; tier='slow'; doc='README.md'; unit='B'; tol=0
+     anchor='| B. subtilis 168 | 1,003,070 B | 986,937 B | −1.61% | 1,002,525 B | 985,292 B | −1.72% |'; expect=986937
+     measure={ CodonSize 'bsub.fa' 1 $null } }
+  @{ id='codon-bsub-l1-pct'; tier='slow'; doc='README.md'; unit='%'; tol=0
+     anchor='| B. subtilis 168 | 1,003,070 B | 986,937 B | −1.61% | 1,002,525 B | 985,292 B | −1.72% |'; expect=-1.61
+     measure={ CuePct (CodonSize 'bsub.fa' 1 '-nocodon') (CodonSize 'bsub.fa' 1 $null) } }
+  @{ id='codon-bsub-l3'; tier='slow'; doc='README.md'; unit='B'; tol=0
+     anchor='| B. subtilis 168 | 1,003,070 B | 986,937 B | −1.61% | 1,002,525 B | 985,292 B | −1.72% |'; expect=1002525
+     measure={ CodonSize 'bsub.fa' 3 $null } }
+  @{ id='codon-bsub-l3-on'; tier='slow'; doc='README.md'; unit='B'; tol=0
+     anchor='| B. subtilis 168 | 1,003,070 B | 986,937 B | −1.61% | 1,002,525 B | 985,292 B | −1.72% |'; expect=985292
+     measure={ CodonSize 'bsub.fa' 3 '-codon' } }
+  @{ id='codon-bsub-l3-pct'; tier='slow'; doc='README.md'; unit='%'; tol=0
+     anchor='| B. subtilis 168 | 1,003,070 B | 986,937 B | −1.61% | 1,002,525 B | 985,292 B | −1.72% |'; expect=-1.72
+     measure={ CuePct (CodonSize 'bsub.fa' 3 $null) (CodonSize 'bsub.fa' 3 '-codon') } }
+  @{ id='codon-paer-l1-off'; tier='slow'; doc='README.md'; unit='B'; tol=0
+     anchor='| P. aeruginosa PAO1 | 1,385,837 B | 1,332,018 B | −3.88% | 1,382,299 B | 1,327,685 B | −3.95% |'; expect=1385837
+     measure={ CodonSize 'paer.fa' 1 '-nocodon' } }
+  @{ id='codon-paer-l1'; tier='slow'; doc='README.md'; unit='B'; tol=0
+     anchor='| P. aeruginosa PAO1 | 1,385,837 B | 1,332,018 B | −3.88% | 1,382,299 B | 1,327,685 B | −3.95% |'; expect=1332018
+     measure={ CodonSize 'paer.fa' 1 $null } }
+  @{ id='codon-paer-l1-pct'; tier='slow'; doc='README.md'; unit='%'; tol=0
+     anchor='| P. aeruginosa PAO1 | 1,385,837 B | 1,332,018 B | −3.88% | 1,382,299 B | 1,327,685 B | −3.95% |'; expect=-3.88
+     measure={ CuePct (CodonSize 'paer.fa' 1 '-nocodon') (CodonSize 'paer.fa' 1 $null) } }
+  @{ id='codon-paer-l3'; tier='slow'; doc='README.md'; unit='B'; tol=0
+     anchor='| P. aeruginosa PAO1 | 1,385,837 B | 1,332,018 B | −3.88% | 1,382,299 B | 1,327,685 B | −3.95% |'; expect=1382299
+     measure={ CodonSize 'paer.fa' 3 $null } }
+  @{ id='codon-paer-l3-on'; tier='slow'; doc='README.md'; unit='B'; tol=0
+     anchor='| P. aeruginosa PAO1 | 1,385,837 B | 1,332,018 B | −3.88% | 1,382,299 B | 1,327,685 B | −3.95% |'; expect=1327685
+     measure={ CodonSize 'paer.fa' 3 '-codon' } }
+  @{ id='codon-paer-l3-pct'; tier='slow'; doc='README.md'; unit='%'; tol=0
+     anchor='| P. aeruginosa PAO1 | 1,385,837 B | 1,332,018 B | −3.88% | 1,382,299 B | 1,327,685 B | −3.95% |'; expect=-3.95
+     measure={ CuePct (CodonSize 'paer.fa' 3 $null) (CodonSize 'paer.fa' 3 '-codon') } }
+  @{ id='codon-saur-l1-off'; tier='slow'; doc='README.md'; unit='B'; tol=0
+     anchor='| S. aureus NCTC 8325 | 646,970 B | 630,969 B | −2.47% | 646,500 B | 629,691 B | −2.60% |'; expect=646970
+     measure={ CodonSize 'saur.fa' 1 '-nocodon' } }
+  @{ id='codon-saur-l1'; tier='slow'; doc='README.md'; unit='B'; tol=0
+     anchor='| S. aureus NCTC 8325 | 646,970 B | 630,969 B | −2.47% | 646,500 B | 629,691 B | −2.60% |'; expect=630969
+     measure={ CodonSize 'saur.fa' 1 $null } }
+  @{ id='codon-saur-l1-pct'; tier='slow'; doc='README.md'; unit='%'; tol=0
+     anchor='| S. aureus NCTC 8325 | 646,970 B | 630,969 B | −2.47% | 646,500 B | 629,691 B | −2.60% |'; expect=-2.47
+     measure={ CuePct (CodonSize 'saur.fa' 1 '-nocodon') (CodonSize 'saur.fa' 1 $null) } }
+  @{ id='codon-saur-l3'; tier='slow'; doc='README.md'; unit='B'; tol=0
+     anchor='| S. aureus NCTC 8325 | 646,970 B | 630,969 B | −2.47% | 646,500 B | 629,691 B | −2.60% |'; expect=646500
+     measure={ CodonSize 'saur.fa' 3 $null } }
+  @{ id='codon-saur-l3-on'; tier='slow'; doc='README.md'; unit='B'; tol=0
+     anchor='| S. aureus NCTC 8325 | 646,970 B | 630,969 B | −2.47% | 646,500 B | 629,691 B | −2.60% |'; expect=629691
+     measure={ CodonSize 'saur.fa' 3 '-codon' } }
+  @{ id='codon-saur-l3-pct'; tier='slow'; doc='README.md'; unit='%'; tol=0
+     anchor='| S. aureus NCTC 8325 | 646,970 B | 630,969 B | −2.47% | 646,500 B | 629,691 B | −2.60% |'; expect=-2.6
+     measure={ CuePct (CodonSize 'saur.fa' 3 $null) (CodonSize 'saur.fa' 3 '-codon') } }
+  @{ id='codon-lead-min'; tier='slow'; doc='README.md'; unit='%'; tol=0
+     anchor='1.61-3.88% smaller at the default level 1 on four bacteria'; expect=1.61
+     measure={ -(CuePct (CodonSize 'bsub.fa' 1 '-nocodon') (CodonSize 'bsub.fa' 1 $null)) } }
+  @{ id='codon-lead-max'; tier='slow'; doc='README.md'; unit='%'; tol=0
+     anchor='1.61-3.88% smaller at the default level 1 on four bacteria'; expect=3.88
+     measure={ -(CuePct (CodonSize 'paer.fa' 1 '-nocodon') (CodonSize 'paer.fa' 1 $null)) } }
+  @{ id='codon-slice-l1-unchanged'; tier='fast'; doc='README.md'; unit='B'; tol=0
+     anchor='**A file whose gate stays shut is written exactly as v0.10.0 wrote it**'; expect=0
+     measure={ (Size (& $F 'chr21_slice.fa') $null 1) - (Size (& $F 'chr21_slice.fa') $null 1 $null $null '-nocodon') } }
+
 
   # --- v0.10.0: soft-masked genomes, the case list (docs/case-list.md) ----------
   @{ id='case-chr21-v090'; tier='slow'; doc='README.md'; unit='B'; tol=0

@@ -419,6 +419,80 @@ else
   done
 fi
 
+# ------------------------------------------- the codon tracker (docs/codon-impl-prediction.md)
+# A file whose per-file gate finds the codon period (G >= 2.0) is coded with the
+# codon tracker -- by default at level 1, with -codon at 2-4, never with -nocodon
+# or a reference -- and gets its own family letters. Inputs come from
+# scripts/genes.awk (integer LCG, no rand()). G, from docs/codon-impl.md, checked
+# against scripts/pilot/codon-gate.py: on 2.678, above 2.050, below 1.993.
+GA=$SRCROOT/scripts/genes.awk
+awk -v seed=1 -v genes=300 -v bias=97 -v junk=0   -f "$GA" > g_on.fa
+awk -v seed=1 -v genes=300 -v bias=75 -v junk=0   -f "$GA" > g_above.fa
+awk -v seed=2 -v genes=300 -v bias=97 -v junk=300 -f "$GA" > g_below.fa
+for a in "22" "22 1" "22 2 -codon" "22 3 -codon" "22 4 -codon" "22 1 -nocodon" "16 1 -j 3" "22 3 -codon -j 8"; do
+  "$EXE" c g_on.fa rt.dnac $a >/dev/null
+  "$EXE" d rt.dnac rt.out >/dev/null
+  report "codon g_on.fa $a" "$(hash_of g_on.fa)" "$(hash_of rt.out)"
+  rm -f rt.dnac rt.out
+done
+case $LET in E) CD=I; CJ=J; CC=O ;; C) CD=D; CJ=G; CC=L ;; e) CD=i; CJ=j; CC=o ;; c) CD=d; CJ=g; CC=l ;; *) CD=?; CJ=?; CC=? ;; esac
+letter() { "$EXE" c "$1" lt.dnac $2 >/dev/null; dd if=lt.dnac bs=1 skip=3 count=1 2>/dev/null; rm -f lt.dnac; }
+report "codon letter: level 1, gate open"          "$CD"  "$(letter g_on.fa "22 1")"
+report "codon letter: level 1 -nocodon"            "$LET" "$(letter g_on.fa "22 1 -nocodon")"
+report "codon letter: level 3 without the flag"    "$LET" "$(letter g_on.fa "22")"
+report "codon letter: level 3 -codon"              "$CD"  "$(letter g_on.fa "22 3 -codon")"
+report "codon letter: blocks"                      "$CJ"  "$(letter g_on.fa "16 1 -j 3")"
+report "codon letter: just above the gate"         "$CD"  "$(letter g_above.fa "22 1")"
+report "codon letter: just below the gate"         "$LET" "$(letter g_below.fa "22 1")"
+# the case list and the tracker together
+casify g_on.fa > g_case.fa
+"$EXE" c g_case.fa rt.dnac 22 1 >/dev/null; "$EXE" d rt.dnac rt.out >/dev/null
+report "codon + case round-trip" "$(hash_of g_case.fa)" "$(hash_of rt.out)"
+report "codon + case letter" "$CC" "$(dd if=rt.dnac bs=1 skip=3 count=1 2>/dev/null)"
+rm -f rt.dnac rt.out
+# where the gate stays shut the flag must change nothing, byte for byte
+"$EXE" c g_below.fa b1.dnac 22 3 >/dev/null; "$EXE" c g_below.fa b2.dnac 22 3 -codon >/dev/null
+report "codon: -codon on a gate-closed file is a no-op" "$(hash_of b1.dnac)" "$(hash_of b2.dnac)"
+"$EXE" c random_dna.fa b1.dnac 22 1 >/dev/null; "$EXE" c random_dna.fa b2.dnac 22 1 -nocodon >/dev/null
+report "codon: level 1 on random DNA equals -nocodon" "$(hash_of b1.dnac)" "$(hash_of b2.dnac)"
+rm -f b1.dnac b2.dnac
+# reference mode never uses it, even when asked
+"$EXE" cr g_on.fa rt.dnac g_above.fa 22 1 -codon >/dev/null 2>&1; "$EXE" dr rt.dnac rt.out g_above.fa >/dev/null
+report "codon: reference mode round-trip with -codon" "$(hash_of g_on.fa)" "$(hash_of rt.out)"
+RL=$(dd if=rt.dnac bs=1 skip=3 count=1 2>/dev/null)
+n=$((n+1)); case $RL in U|V|u|v) ;; *) fail=$((fail+1)); echo "FAIL: reference mode wrote codon letter $RL" ;; esac
+rm -f rt.dnac rt.out
+# a codon stream cut inside its header is refused, and nothing written
+"$EXE" c g_on.fa cg.dnac 22 1 >/dev/null; head -c 10 cg.dnac > cut.dnac
+n=$((n+1))
+if "$EXE" d cut.dnac cut.out >/dev/null 2>&1 || [ -e cut.out ]; then
+  fail=$((fail+1)); echo "FAIL: a truncated codon stream was accepted"
+fi
+rm -f cg.dnac cut.dnac cut.out
+
+# ------------------------------------------- v0.11.0: truncation (docs/truncation-prediction.md)
+# A stream cut inside its CODED BODY used to decode to wrong bytes at exit 0 (every
+# family, v0.10.0 included). The decoder now counts reads past the end of the data
+# and refuses. Cut to half and to one byte short: plain, blocks, codon, case list.
+cutcheck() {  # cutcheck <label> <input> <args...>
+  lb=$1; in=$2; shift 2
+  "$EXE" c "$in" tc.dnac "$@" >/dev/null
+  sz=$(wc -c < tc.dnac)
+  for cut in $((sz / 2)) $((sz - 1)); do
+    head -c "$cut" tc.dnac > tcut.dnac; rm -f tcut.out
+    n=$((n+1))
+    if "$EXE" d tcut.dnac tcut.out >/dev/null 2>&1 || [ -e tcut.out ]; then
+      fail=$((fail+1)); echo "FAIL: truncated ($cut of $sz) accepted or output left: $lb"
+    fi
+  done
+  rm -f tc.dnac tcut.dnac tcut.out
+}
+cutcheck "plain level 3" diverged.fa 22
+cutcheck "plain level 1" random_dna.fa 22 1
+cutcheck "blocks -j 3"   diverged.fa 16 -j 3
+cutcheck "codon"         g_on.fa 22 1
+cutcheck "case list"     case_mix.fa 22
+
 # ------------------------------------------------------------------- verdict
 if [ "$fail" -ne 0 ]; then echo "$fail of $n FAILED"; exit 1; fi
 echo "$n/$n adversarial round-trips lossless"

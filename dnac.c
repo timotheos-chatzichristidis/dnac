@@ -109,10 +109,17 @@ static void buf_put(Buf *b, int c) {
 static void buf_free(Buf *b) { free(b->p); b->p = NULL; b->len = b->cap = 0; }
 
 typedef struct { uint32_t low, range; Buf *out; } REnc;
-typedef struct { uint32_t low, range, code; const uint8_t *in; size_t pos, len; } RDec;
+typedef struct { uint32_t low, range, code; const uint8_t *in; size_t pos, len, over; } RDec;
 
+/* The encoder's flush writes exactly the bytes the decoder will still read, so a
+   complete stream is never read past its end. A read past it means the file was
+   cut short: it still returns 0xFF so decoding can finish, but it is COUNTED, and
+   the caller refuses the archive (docs/truncation-prediction.md). Until v0.11.0
+   this was silent, and a truncated archive decoded to wrong bytes at exit 0. */
 static uint32_t rdec_byte(RDec *d) {
-    return d->pos < d->len ? (uint32_t)d->in[d->pos++] : 0xFFu;   /* EOF read as 0xFF */
+    if (d->pos < d->len) return (uint32_t)d->in[d->pos++];
+    d->over++;
+    return 0xFFu;
 }
 
 static void renc_init(REnc *e, Buf *out) { e->low = 0; e->range = 0xFFFFFFFFu; e->out = out; }
@@ -138,7 +145,7 @@ static void renc_flush(REnc *e) {
 }
 
 static void rdec_init(RDec *d, const uint8_t *in, size_t len) {
-    d->low = 0; d->range = 0xFFFFFFFFu; d->code = 0; d->in = in; d->pos = 0; d->len = len;
+    d->low = 0; d->range = 0xFFFFFFFFu; d->code = 0; d->in = in; d->pos = 0; d->len = len; d->over = 0;
     for (int i = 0; i < 4; i++) d->code = (d->code << 8) | rdec_byte(d);
 }
 
@@ -735,6 +742,158 @@ static void ir_prefetch(uint64_t newhist) {
     }
 }
 
+/* ---- CODON PHASE (docs/codon-*.md) -----------------------------------------
+   In a bacterial genome most bases sit in genes, and a gene is read in codons:
+   period 3, on one of two strands. Knowing a base's codon position (and strand)
+   makes it easier to predict -- an oracle with the annotated phase gains 3.75% on
+   E. coli. This finds the phase from the sequence alone, so the decoder can run
+   the same thing: seven fixed hypotheses (+ strand at offset 0..2, - strand at
+   offset 0..2, non-coding), each scored by how well a small order-5 model
+   predicts under its labels, with hysteresis -- beatmatching on period 3.
+   Statistics are kept in GENE orientation: G_fwd predicts a base from the five
+   before it, G_bwd from the five after it, so a - gene (a + gene read backwards
+   on the other strand) is predicted by the + gene's statistics, and every base
+   trains both. A background order-5 model is the non-coding default; the codec
+   gets a phase label only while the leading phase hypothesis beats it.
+   The label (0-2 + codon position, 3-5 - codon position, 6 non-coding) is fed to
+   the order models' contexts, to the fourth expert's weight set, and to the
+   inverted-repeat training (strand swapped, since the other strand reads a +
+   gene as a - gene).
+   A file uses it only if the per-file gate (codon_gate) finds the codon period;
+   such a file gets its own family letters, so every other file is written byte
+   for byte as before. Default ON at level 1, opt-in (-codon) at levels 2-4,
+   never in reference mode (docs/codon-impl-prediction.md). */
+static int g_codon = 0;          /* configuration: this stream uses the tracker     */
+static int g_codon_req = -1;     /* -1 by level (on at 1), 0 -nocodon, 1 -codon      */
+#define TRK_DECAY  (1.0 - 1.0 / 128.0)   /* score memory: about 128 bases          */
+#define TRK_MARGIN 4.0                   /* bits a challenger must lead by         */
+#define TRK_HALVE  8191                  /* tracker counts halve here              */
+#define CODON_MAXORD_FAST 99             /* level 1 phases every order model...     */
+#define CODON_MAXORD      11             /* ...levels 2-4 only orders <= 11        */
+static float g_trk_lt[65536];            /* log2(k), shared, read-only once built  */
+static int   g_trk_lt_ok = 0;
+static TLS uint16_t *g_tk_fwd = NULL, *g_tk_bwd = NULL, *g_tk_bg = NULL;
+static TLS double    g_tk_sc[7];
+static TLS int       g_tk_ph = 0, g_tk_cur = 6;
+static TLS uint8_t   g_tk_ring[64];      /* labels of the last 64 bases (IR needs <= 29 back) */
+static TLS uint64_t  g_tk_n = 0;         /* bases labelled so far in this span      */
+
+static int codon_maxord(void) { return g_level <= 1 ? CODON_MAXORD_FAST : CODON_MAXORD; }
+static int codon_inter(void)  { return g_level > 1; }
+static int trk_label(int h, uint64_t t) {
+    if (h < 3) return (int)((t + (uint64_t)h) % 3);
+    if (h < 6) return 3 + (int)(((uint64_t)(h - 3) + 3 - t % 3) % 3);
+    return 6;
+}
+static void codon_lt_init(void) {        /* before any thread starts */
+    if (g_trk_lt_ok) return;
+    g_trk_lt[0] = 0.0f;
+    for (int k = 1; k < 65536; k++) g_trk_lt[k] = (float)log2((double)k);
+    g_trk_lt_ok = 1;
+}
+static void codon_free(void) {
+    free(g_tk_fwd); free(g_tk_bwd); free(g_tk_bg);
+    g_tk_fwd = g_tk_bwd = g_tk_bg = NULL;
+}
+static int codon_reset(void) {           /* a fresh tracker for each span */
+    codon_free();
+    if (!g_codon) return 0;
+    g_tk_fwd = (uint16_t *)calloc((size_t)3 * 1024 * 4, sizeof(uint16_t));
+    g_tk_bwd = (uint16_t *)calloc((size_t)3 * 1024 * 4, sizeof(uint16_t));
+    g_tk_bg  = (uint16_t *)calloc((size_t)1024 * 4, sizeof(uint16_t));
+    if (!g_tk_fwd || !g_tk_bwd || !g_tk_bg) { codon_free(); return -1; }
+    for (int h = 0; h < 7; h++) g_tk_sc[h] = 0.0;
+    g_tk_ph = 0; g_tk_cur = 6; g_tk_n = 0;
+    memset(g_tk_ring, 0, sizeof g_tk_ring);
+    return 0;
+}
+static int codon_lab(uint64_t pos) {
+    return pos < g_tk_n ? g_tk_ring[pos & 63] : trk_label(g_tk_cur, pos);
+}
+static uint64_t codon_ctx(int i, uint64_t ctx, int lab) {
+    if (g_order[i] > codon_maxord()) return ctx;
+    if (g_direct[i]) return codon_inter() ? ctx * 8 + (uint64_t)lab
+                                          : (ctx | ((uint64_t)lab << (2 * g_order[i])));
+    return ctx ^ ((uint64_t)(lab + 1) << 56);
+}
+static void codon_apply(uint64_t *ctxv) {
+    if (!g_codon) return;
+    int lab = codon_lab(g_npos);
+    for (int i = 0; i < g_nmodels; i++) if (!g_tol[i]) ctxv[i] = codon_ctx(i, ctxv[i], lab);
+}
+static double trk_lp(const uint16_t *c, int s) {
+    return (double)g_trk_lt[2 * c[s] + 1] - (double)g_trk_lt[2 * (c[0] + c[1] + c[2] + c[3]) + 4];
+}
+static void trk_inc(uint16_t *c, int s) { if (++c[s] == TRK_HALVE) for (int k = 0; k < 4; k++) c[k] >>= 1; }
+/* After base s at position np: label it, score every hypothesis, train, choose. */
+static void trk_update(uint32_t np, int s) {
+    g_tk_ring[np & 63] = (uint8_t)trk_label(g_tk_cur, np); g_tk_n = (uint64_t)np + 1;
+    if (np < 5) return;
+    int x[6]; for (int j = 0; j <= 5; j++) x[j] = g_seq[np - j];   /* x[0] this base, x[5] five back */
+    int fwd  = x[5] * 256 + x[4] * 64 + x[3] * 16 + x[2] * 4 + x[1];
+    int bwdm = (3 - x[1]) * 256 + (3 - x[2]) * 64 + (3 - x[3]) * 16 + (3 - x[4]) * 4 + (3 - x[5]);
+    for (int h = 0; h < 7; h++) {
+        double lp; int lab = trk_label(h, np);
+        if (h < 3)      lp = trk_lp(&g_tk_fwd[((size_t)lab * 1024 + fwd) * 4], s);
+        else if (h < 6) lp = trk_lp(&g_tk_bwd[((size_t)(lab - 3) * 1024 + bwdm) * 4], 3 - s);
+        else            lp = trk_lp(&g_tk_bg[(size_t)fwd * 4], s);
+        g_tk_sc[h] = g_tk_sc[h] * TRK_DECAY + lp;
+    }
+    int u = trk_label(g_tk_ph, np), u5 = trk_label(g_tk_ph, np - 5);
+    if (u < 3) {
+        trk_inc(&g_tk_fwd[((size_t)u * 1024 + fwd) * 4], s);
+        int bwdp = x[4] * 256 + x[3] * 64 + x[2] * 16 + x[1] * 4 + x[0];
+        trk_inc(&g_tk_bwd[((size_t)u5 * 1024 + bwdp) * 4], x[5]);
+    } else {
+        trk_inc(&g_tk_bwd[((size_t)(u - 3) * 1024 + bwdm) * 4], 3 - s);
+        int fwdm = (3 - x[0]) * 256 + (3 - x[1]) * 64 + (3 - x[2]) * 16 + (3 - x[3]) * 4 + (3 - x[4]);
+        trk_inc(&g_tk_fwd[((size_t)(u5 - 3) * 1024 + fwdm) * 4], 3 - x[5]);
+    }
+    trk_inc(&g_tk_bg[(size_t)fwd * 4], s);
+    int best = 0;
+    for (int h = 1; h < 6; h++) if (g_tk_sc[h] > g_tk_sc[best]) best = h;
+    if (best != g_tk_ph && g_tk_sc[best] > g_tk_sc[g_tk_ph] + TRK_MARGIN) g_tk_ph = best;
+    if (g_tk_cur == 6) { if (g_tk_sc[g_tk_ph] > g_tk_sc[6] + TRK_MARGIN) g_tk_cur = g_tk_ph; }
+    else if (g_tk_sc[6] > g_tk_sc[g_tk_ph] + TRK_MARGIN) g_tk_cur = 6;
+    else g_tk_cur = g_tk_ph;
+}
+/* The per-file gate: how much stronger the codon period is than its neighbours.
+   G = mean MI(3,6,9,12) / mean MI(4,5,7,8,10,11) over the file's bases (A/C/G/T
+   either case, outside '>' lines); on if G >= 2.0. Bacteria measured 3.26-5.09,
+   human 1.17 (docs/codon-gate.md). */
+static double codon_gate_stat(const uint8_t *buf, int64_t n) {
+    static const int lags[10] = { 3, 6, 9, 12, 4, 5, 7, 8, 10, 11 };
+    uint64_t cnt[10][16]; memset(cnt, 0, sizeof cnt);
+    uint8_t win[16]; uint64_t nb = 0; int inhdr = 0;
+    for (int64_t i = 0; i < n; i++) {
+        int b = buf[i];
+        if (b == '>') { inhdr = 1; continue; }
+        if (b == '\n') { inhdr = 0; continue; }
+        if (inhdr) continue;
+        if (b >= 'a' && b <= 'z') b -= 32;
+        int s = base_to_sym(b);
+        if (s < 0) continue;
+        for (int l = 0; l < 10; l++)
+            if (nb >= (uint64_t)lags[l]) cnt[l][win[(nb - lags[l]) & 15] * 4 + s]++;
+        win[nb & 15] = (uint8_t)s; nb++;
+    }
+    double mi[10];
+    for (int l = 0; l < 10; l++) {
+        double tot = 0, pa[4] = {0}, pb[4] = {0}, m = 0;
+        for (int q = 0; q < 16; q++) tot += (double)cnt[l][q];
+        if (tot <= 0) return 0.0;
+        for (int q = 0; q < 16; q++) { pa[q >> 2] += cnt[l][q] / tot; pb[q & 3] += cnt[l][q] / tot; }
+        for (int q = 0; q < 16; q++) {
+            double j = cnt[l][q] / tot;
+            if (j > 0) m += j * log2(j / (pa[q >> 2] * pb[q & 3]));
+        }
+        mi[l] = m;
+    }
+    double on = (mi[0] + mi[1] + mi[2] + mi[3]) / 4.0;
+    double off = (mi[4] + mi[5] + mi[6] + mi[7] + mi[8] + mi[9]) / 6.0;
+    return off > 0 ? on / off : 0.0;
+}
+
 static void ir_train(uint64_t newhist, uint64_t tolhist) {
     for (int i = 0; i < g_nmodels; i++) {
         if (!g_ir[i]) continue;
@@ -742,6 +901,11 @@ static void ir_train(uint64_t newhist, uint64_t tolhist) {
         if (g_npos < (uint32_t)o + 1) continue;
         uint64_t h = g_tol[i] ? tolhist : newhist;
         uint64_t rctx = rc_context(h, o);           /* the other strand's context */
+        if (g_codon && !g_tol[i]) {                 /* the other strand reads a + gene as a - gene */
+            int lab = codon_lab((uint64_t)g_npos - 1 - (uint64_t)o);
+            if (lab < 6) lab = lab < 3 ? lab + 3 : lab - 3;
+            rctx = codon_ctx(i, rctx, lab);
+        }
         int sym = 3 - (int)((h >> (2 * o)) & 3);          /* ...and what follows it     */
         int b1 = sym >> 1, b0 = sym & 1;
         uint16_t *b = mix_slot(i, rctx, 0);               /* both nodes, one bucket     */
@@ -755,6 +919,7 @@ static void ir_train(uint64_t newhist, uint64_t tolhist) {
 static void match_after(int s, uint64_t newhist) {
     uint32_t np = g_npos;
     g_seq[np] = (uint8_t)s;
+    if (g_codon) trk_update(np, s);        /* the codon tracker hears every base */
     g_npos = np + 1;
 
     /* the headphone ear follows its own phase, exactly as a match model does.
@@ -954,27 +1119,49 @@ static const char CASE_LETTER[4][3] = {
     { 'f', 0, 'h' },
     { 'k', 0, 'm' },
 };
+/* THE CODON TRACKER (see codon_gate_stat). A file whose gate opened gets one of
+   these letters, with and without the case list; every other file keeps the
+   letters above, byte for byte. Reference mode never uses the tracker (0). */
+static const char CODON_LETTER[4][3] = {
+    { 'D', 0, 'G' },
+    { 'I', 0, 'J' },
+    { 'd', 0, 'g' },
+    { 'i', 0, 'j' },
+};
+static const char CODON_CASE_LETTER[4][3] = {
+    { 'L', 0, 'N' },
+    { 'O', 0, 'W' },
+    { 'l', 0, 'n' },
+    { 'o', 0, 'w' },
+};
 static int g_casemode = 0;      /* configuration, like g_level */
+static char family_letter(int casem, int codon, int f, int j) {
+    if (codon) return casem ? CODON_CASE_LETTER[f][j] : CODON_LETTER[f][j];
+    return casem ? CASE_LETTER[f][j] : STREAM_LETTER[f][j];
+}
 static int stream_letter(int ref, int blocked) {
     int f = (DNAC_EXPERIMENTAL ? 2 : 0) + (g_cue ? 1 : 0), j = ref ? 1 : (blocked ? 2 : 0);
-    return g_casemode ? CASE_LETTER[f][j] : STREAM_LETTER[f][j];
+    return family_letter(g_casemode, g_codon, f, j);
 }
 /* 0 and the properties for a letter this build knows, -1 otherwise */
-static int stream_family(int m3, int *exper, int *cue, int *ref, int *blocked, int *casem) {
-    for (int c = 0; c < 2; c++)
-        for (int f = 0; f < 4; f++)
-            for (int j = 0; j < 3; j++) {
-                int l = c ? CASE_LETTER[f][j] : STREAM_LETTER[f][j];
-                if (l != 0 && l == m3) {
-                    *exper = f >= 2; *cue = f & 1; *ref = (j == 1); *blocked = (j == 2); *casem = c;
-                    return 0;
+static int stream_family(int m3, int *exper, int *cue, int *ref, int *blocked, int *casem, int *codon) {
+    for (int d = 0; d < 2; d++)
+        for (int c = 0; c < 2; c++)
+            for (int f = 0; f < 4; f++)
+                for (int j = 0; j < 3; j++) {
+                    int l = family_letter(c, d, f, j);
+                    if (l != 0 && l == m3) {
+                        *exper = f >= 2; *cue = f & 1; *ref = (j == 1); *blocked = (j == 2);
+                        *casem = c; *codon = d;
+                        return 0;
+                    }
                 }
-            }
     return -1;
 }
 static int mix_setup(int maxorder, size_t sizing_n, size_t seq_alloc, int hb, int mhb) {
 
     stretch_tab_init();
+    if (codon_reset()) { fprintf(stderr, "out of memory for the codon tracker\n"); return -1; }
     /* g_hashbits counts BUCKETS of BUCKETW uint16, so the byte footprint of a
        hashed model is the same as it was with one uint16 per (context,node). */
     g_hashbits = (hb > 0) ? hb : size_bits(sizing_n, HASHBITS_MAX) - 2 + HASH_EXTRA;
@@ -1008,6 +1195,7 @@ static int mix_setup(int maxorder, size_t sizing_n, size_t seq_alloc, int hb, in
         if (o <= DIRECT_MAXORDER) {
             g_direct[i] = 1;
             g_size[i]   = (size_t)(1ull << (2 * o)) * NNODES;
+            if (g_codon) g_size[i] *= 8;      /* one slot per codon label (7 used) */
         } else {
             g_direct[i] = 0;
             g_size[i]   = ((size_t)1 << g_hashbits) * BUCKETW;
@@ -1093,6 +1281,7 @@ static int mix_setup(int maxorder, size_t sizing_n, size_t seq_alloc, int hb, in
     return 0;
 }
 static void mix_free(void) {
+    codon_free();
     for (int i = 0; i < g_nmodels; i++) { free(g_tab[i]); g_tab[i] = NULL; }
     free(g_seq);   g_seq = NULL;
     for (int mi = 0; mi < NMATCH; mi++) { free(g_mm[mi].hash); g_mm[mi].hash = NULL; }
@@ -1167,7 +1356,7 @@ static void mix_ctxs(uint64_t hist, int *mc) {
     int conf = (!m->active || m->mlen == 0) ? 0
              : (m->mlen >= 32 ? 3 : (m->mlen >= 12 ? 2 : 1));
     mc[2] = conf * 4 + (g_nstcm > 0 ? (g_tfail > 0 ? 2 : 0) : 0) + (g_mm[1].active ? 1 : 0);
-    mc[3] = 0;                                             /* one global expert    */
+    mc[3] = g_codon ? codon_lab(g_npos) : 0;               /* one global expert, or one per codon label */
 }
 
 /* ---------------------------------------------------- model ablation --------
@@ -1749,6 +1938,7 @@ static int do_prime(const char *refpath, const char *statepath, int k) {
 
 static void encode_span(const uint8_t *buf, long n, Buf *out);
 static void decode_span(const uint8_t *cs, size_t cs_len, uint64_t n, uint8_t *dst);
+static TLS int g_span_short = 0;   /* the last decode_span read past its data */
 
 typedef struct {
     int tid, nthreads, nb, k, hb, mhb, decode, err;
@@ -1765,7 +1955,10 @@ static void worker_run(Worker *w) {
         uint64_t blen  = (start + (uint64_t)w->bsz <= total) ? (uint64_t)w->bsz
                        : (start < total ? total - start : 0);
         if (mix_setup(w->k, (size_t)w->bsz, (size_t)blen + 1, w->hb, w->mhb)) { w->err = 1; return; }
-        if (w->decode) decode_span(w->cs + w->coff[b], (size_t)w->clen[b], blen, w->dst + start);
+        if (w->decode) {
+            decode_span(w->cs + w->coff[b], (size_t)w->clen[b], blen, w->dst + start);
+            if (g_span_short) w->err = 1;
+        }
         else {
             encode_span(w->src + start, (long)blen, &w->bufs[b]);
             if (w->bufs[b].err) w->err = 1;
@@ -1907,7 +2100,7 @@ static int case_list_dec(const uint8_t *cs, size_t cs_len, uint64_t nruns, uint8
         if (cur) dst[i] = (uint8_t)(b + 32);
         rem--;
     }
-    return (got == nruns && rem == 0) ? 0 : -1;
+    return (got == nruns && rem == 0 && d.over == 0) ? 0 : -1;
 }
 
 /* Code one span of bytes with the CURRENT model state.
@@ -1936,6 +2129,7 @@ static void encode_span(const uint8_t *buf, long n, Buf *out) {
             uint64_t ctxv[MAXIN];
             PT(11, for (int i = 0; i < g_nmodels; i++)
                 ctxv[i] = (g_tol[i] ? g_thist : hist) & g_ctxmask[i];
+            codon_apply(ctxv);
             mix_prefetch(ctxv);       /* fetch overlaps the flag coder below */
             renc_encode(&e, 0, f0, ft));
             fc[0]++;
@@ -2024,6 +2218,20 @@ static int do_compress(const char *inpath, const char *outpath, int k, const cha
             cl_runs = case_list_enc(buf, n, &clb);
             if (clb.err) { fprintf(stderr, "out of memory while coding the case list\n"); free(buf); return 1; }
         }
+    }
+
+    /* The codon tracker: wanted by level or flag, then only if the gate finds the
+       codon period in THIS file. Decided before any table is built (it changes
+       their shape) and before the header (it picks the letter). The gate reads
+       the whole file even with -j, so every block agrees. */
+    g_codon = 0;
+    if (!refpath) {
+        int want = g_codon_req < 0 ? (g_level <= 1) : g_codon_req;
+        double G = want ? codon_gate_stat(buf, n) : 0.0;
+        if (want && getenv("DNAC_CODON_DEBUG")) fprintf(stderr, "codon gate G = %.12f\n", G);
+        if (want && G >= 2.0) { g_codon = 1; codon_lt_init(); }
+    } else if (g_codon_req == 1) {
+        fprintf(stderr, "note: -codon is not used in reference mode\n");
     }
 
     memset(lit_cnt, 0, sizeof(lit_cnt));
@@ -2179,6 +2387,7 @@ static void decode_span(const uint8_t *cs, size_t cs_len, uint64_t n, uint8_t *d
     memset(lit_cnt, 0, sizeof(lit_cnt));
     memset(flag_cnt, 0, sizeof(flag_cnt));
     RDec d; rdec_init(&d, cs, cs_len);
+    g_span_short = 0;
     uint64_t hist = 0;
     int run = 0;
 
@@ -2189,6 +2398,7 @@ static void decode_span(const uint8_t *cs, size_t cs_len, uint64_t n, uint8_t *d
         uint64_t ctxv[MAXIN];
         for (int i = 0; i < g_nmodels; i++)
             ctxv[i] = (g_tol[i] ? g_thist : hist) & g_ctxmask[i];
+        codon_apply(ctxv);
         mix_prefetch(ctxv);
 
         int rc = run < RUNCAP ? run : RUNCAP;
@@ -2222,6 +2432,7 @@ static void decode_span(const uint8_t *cs, size_t cs_len, uint64_t n, uint8_t *d
         }
         if (ft + 1 >= CAP) { fc[0] >>= 1; fc[1] >>= 1; }
     }
+    g_span_short = d.over != 0;
 }
 
 static int do_decompress(const char *inpath, const char *outpath, const char *refpath) {
@@ -2246,8 +2457,8 @@ static int do_decompress(const char *inpath, const char *outpath, const char *re
                         " build's and it cannot be read safely\n");
         fclose(in); return 1;
     }
-    int exper = 0, cue = 0, need_ref = 0, blocked = 0, casem = 0;   /* blocked: plain, cut into spans */
-    if (m0 != 'D' || m1 != 'N' || m2 != 'C' || stream_family(m3, &exper, &cue, &need_ref, &blocked, &casem)) {
+    int exper = 0, cue = 0, need_ref = 0, blocked = 0, casem = 0, codon = 0;   /* blocked: plain, cut into spans */
+    if (m0 != 'D' || m1 != 'N' || m2 != 'C' || stream_family(m3, &exper, &cue, &need_ref, &blocked, &casem, &codon)) {
         fprintf(stderr, "not a dnac file\n"); fclose(in); return 1;
     }
     if (exper != (DNAC_EXPERIMENTAL != 0)) {
@@ -2259,6 +2470,8 @@ static int do_decompress(const char *inpath, const char *outpath, const char *re
         fclose(in); return 1;
     }
     g_cue = cue;                  /* before any table is built: it decides the mixer's inputs */
+    g_codon = codon;              /* likewise: it decides the tables' shape */
+    if (g_codon) codon_lt_init();
     if (need_ref && !refpath) {
         fprintf(stderr, "this file was compressed against a reference: use  dnac dr <in> <out> <ref.fa>\n");
         fclose(in); return 1;
@@ -2378,31 +2591,36 @@ static int do_decompress(const char *inpath, const char *outpath, const char *re
        thread its own slice, and even single-block decode no longer needs the
        handle. */
     int64_t cs_start = dnac_ftell64(in);
-    if (cs_start < 0 || dnac_fseek64(in, 0, SEEK_END) != 0) { perror("seek input"); fclose(in); mix_free(); return 1; }
+    if (cs_start < 0 || dnac_fseek64(in, 0, SEEK_END) != 0) { perror("seek input"); fclose(out); remove(outpath); fclose(in); mix_free(); return 1; }
     int64_t cs_end = dnac_ftell64(in);
     size_t cs_len = (size_t)(cs_end - cs_start);
     uint8_t *cs = (uint8_t *)malloc(cs_len ? cs_len : 1);
-    if (!cs) { fprintf(stderr, "out of memory\n"); fclose(in); mix_free(); return 1; }
+    if (!cs) { fprintf(stderr, "out of memory\n"); fclose(out); remove(outpath); fclose(in); mix_free(); return 1; }
     if (dnac_fseek64(in, cs_start, SEEK_SET) != 0 || (cs_len && fread(cs, 1, cs_len, in) != cs_len)) {
-        perror("read input"); free(cs); fclose(in); mix_free(); return 1; }
+        perror("read input"); free(cs); fclose(out); remove(outpath); fclose(in); mix_free(); return 1; }
     uint8_t *dst = (uint8_t *)malloc(len ? (size_t)len : 1);
-    if (!dst) { fprintf(stderr, "out of memory\n"); free(blen_c); free(cs); fclose(out); fclose(in); mix_free(); return 1; }
+    if (!dst) { fprintf(stderr, "out of memory\n"); free(blen_c); free(cs); fclose(out); remove(outpath); fclose(in); mix_free(); return 1; }
     if (!blocked) {
         decode_span(cs, cs_len, len, dst);
+        if (g_span_short) {
+            fprintf(stderr, "truncated archive: the coded data ends before the %llu bytes"
+                            " its header promises\n", (unsigned long long)len);
+            free(dst); free(blen_c); free(cs); fclose(out); remove(outpath); fclose(in); mix_free(); return 1;
+        }
     } else {
         /* Mirror the encoder exactly: block b gets a model built from scratch,
            sized from the block, and sees only its own slice of the stream. */
         uint64_t bsz = ((uint64_t)len + (uint64_t)nb - 1) / (uint64_t)nb;
         size_t *coff = (size_t *)malloc((size_t)nb * sizeof(size_t));
         if (!coff) { fprintf(stderr, "out of memory\n");
-                     free(dst); free(blen_c); free(cs); fclose(out); fclose(in); mix_free(); return 1; }
+                     free(dst); free(blen_c); free(cs); fclose(out); remove(outpath); fclose(in); mix_free(); return 1; }
         size_t off = 0;
         for (int b = 0; b < nb; b++) {
             /* Every offset is checked BEFORE any thread runs: a truncated file must
                be a clean refusal, not a worker reading past the buffer. */
             if (blen_c[b] > cs_len || off + (size_t)blen_c[b] > cs_len) {
                 fprintf(stderr, "truncated block %d of %d\n", b + 1, nb);
-                free(coff); free(dst); free(blen_c); free(cs); fclose(out); fclose(in); mix_free(); return 1;
+                free(coff); free(dst); free(blen_c); free(cs); fclose(out); remove(outpath); fclose(in); mix_free(); return 1;
             }
             coff[b] = off; off += (size_t)blen_c[b];
         }
@@ -2417,18 +2635,18 @@ static int do_decompress(const char *inpath, const char *outpath, const char *re
         }
         int werr = run_workers(ws, nt);
         free(coff);
-        if (werr) { fprintf(stderr, "a block failed to decompress\n");
-                    free(dst); free(blen_c); free(cs); fclose(out); fclose(in); mix_free(); return 1; }
+        if (werr) { fprintf(stderr, "a block failed to decompress (truncated or corrupt archive)\n");
+                    free(dst); free(blen_c); free(cs); fclose(out); remove(outpath); fclose(in); mix_free(); return 1; }
     }
     free(blen_c);
     if (casem) {
         int bad = case_list_dec(clbuf, cl_len, cl_runs, dst, len);
         free(clbuf); clbuf = NULL;
         if (bad) { fprintf(stderr, "corrupt case list\n");
-                   free(dst); free(cs); fclose(out); fclose(in); mix_free(); return 1; }
+                   free(dst); free(cs); fclose(out); remove(outpath); fclose(in); mix_free(); return 1; }
     }
     if (len && fwrite(dst, 1, (size_t)len, out) != (size_t)len) {
-        perror("write output"); free(dst); free(cs); fclose(out); fclose(in); mix_free(); return 1; }
+        perror("write output"); free(dst); free(cs); fclose(out); remove(outpath); fclose(in); mix_free(); return 1; }
     free(dst);
     free(cs);
     fclose(out); fclose(in);
@@ -2580,7 +2798,19 @@ static int take_map_flags(int *argc, char **argv) {
     return 0;
 }
 
+/* -codon / -nocodon: the codon tracker at levels 2-4 / off at level 1 (encode). */
+static void take_codon_flags(int *argc, char **argv) {
+    for (int i = 1; i < *argc; i++) {
+        if (strcmp(argv[i], "-codon") == 0) g_codon_req = 1;
+        else if (strcmp(argv[i], "-nocodon") == 0) g_codon_req = 0;
+        else continue;
+        for (int q = i; q + 1 < *argc; q++) argv[q] = argv[q + 1];
+        (*argc)--; i--;
+    }
+}
+
 int main(int argc, char **argv) {
+    take_codon_flags(&argc, argv);
     if (take_j_flag(&argc, argv)) return 1;
     if (take_map_flags(&argc, argv)) return 1;
     if (g_mappath && g_blocks > 1) {
@@ -2648,6 +2878,11 @@ int main(int argc, char **argv) {
         "  dnac mut <in> <out> [per-mille] [seed]   simulate a resequenced genome\n"
         "  -map <file.tsv> [-mapw N]     write a per-window bit-cost map while\n"
         "                                compressing (encode only, -j 1; the\n"
-        "                                archive is byte-identical either way)\n");
+        "                                archive is byte-identical either way)\n"
+        "  -codon | -nocodon             codon-phase tracker for gene-dense genomes\n"
+        "                                (bacteria): on by default at level 1, -codon\n"
+        "                                turns it on at levels 2-4. Used only when the\n"
+        "                                file shows the codon period; never with a\n"
+        "                                reference. Encode only.\n");
     return 1;
 }

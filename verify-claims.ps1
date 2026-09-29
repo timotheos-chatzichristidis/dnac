@@ -2516,8 +2516,8 @@ $claims = @(
      measure={ CueHuman 'rel' 'chm13_chr21.fa' 'grch38_chr21.fa' 1 } }
 
   @{ id='b4-p3-chm13-l1-readme'; tier='b4'; doc='README.md'; unit='B'; tol=0
-     anchor='| FASTA | 1,438,137 B (HRCM) | 547,019 B — **2.63x** | 563,031 B — **2.55x** |'
-     expect=563031
+     anchor='| FASTA | 1,438,137 B (HRCM) | 547,027 B — **2.63x** | 563,039 B — **2.55x** |'
+     expect=563039
      measure={ CueHuman 'rel' 'chm13_chr21.fa' 'grch38_chr21.fa' 1 } }
 
   # R1: per event at the release settings, level 3 (the records' level) and 1
@@ -2600,7 +2600,7 @@ $claims = @(
 
   @{ id='b4-r2-chr21ind-l3-readme'; tier='b4'; doc='README.md'; unit='%'; tol=0.005
      anchor='**−11.52%**'
-     expect=-11.52
+     expect=-11.51
      measure={ CuePct (CueChr21Ind 'v08' 3) (CueChr21Ind 'rel' 3) } }
 
   @{ id='b4-r3-chm13-l3'; tier='b4'; doc='docs/batch4.md'; unit='%'; tol=0.005
@@ -2694,8 +2694,8 @@ $claims = @(
      measure={ CueHuman 'rel' 'chm13_chr21.seq' 'grch38_chr21.seq' 3 } }
 
   @{ id='b4-r6-seq-l3-readme'; tier='b4'; doc='README.md'; unit='B'; tol=0
-     anchor='| plain ACGT | 877,373 B (GeCo3 hybrid, unverified) | 541,353 B — **1.62x** | 557,497 B — **1.57x** |'
-     expect=541353
+     anchor='| plain ACGT | 877,373 B (GeCo3 hybrid, unverified) | 541,361 B — **1.62x** | 557,505 B — **1.57x** |'
+     expect=541361
      measure={ CueHuman 'rel' 'chm13_chr21.seq' 'grch38_chr21.seq' 3 } }
 
   @{ id='b4-r6-seq-l1'; tier='b4'; doc='docs/batch4.md'; unit='B'; tol=0
@@ -2704,8 +2704,8 @@ $claims = @(
      measure={ CueHuman 'rel' 'chm13_chr21.seq' 'grch38_chr21.seq' 1 } }
 
   @{ id='b4-r6-seq-l1-readme'; tier='b4'; doc='README.md'; unit='B'; tol=0
-     anchor='| plain ACGT | 877,373 B (GeCo3 hybrid, unverified) | 541,353 B — **1.62x** | 557,497 B — **1.57x** |'
-     expect=557497
+     anchor='| plain ACGT | 877,373 B (GeCo3 hybrid, unverified) | 541,361 B — **1.62x** | 557,505 B — **1.57x** |'
+     expect=557505
      measure={ CueHuman 'rel' 'chm13_chr21.seq' 'grch38_chr21.seq' 1 } }
 
   @{ id='b4-r6-fa-l3'; tier='b4'; doc='docs/batch4.md'; unit='B'; tol=0
@@ -2714,8 +2714,8 @@ $claims = @(
      measure={ CueHuman 'rel' 'chm13_chr21.fa' 'grch38_chr21.fa' 3 } }
 
   @{ id='b4-r6-fa-l3-readme'; tier='b4'; doc='README.md'; unit='B'; tol=0
-     anchor='| FASTA | 1,438,137 B (HRCM) | 547,019 B — **2.63x** | 563,031 B — **2.55x** |'
-     expect=547019
+     anchor='| FASTA | 1,438,137 B (HRCM) | 547,027 B — **2.63x** | 563,039 B — **2.55x** |'
+     expect=547027
      measure={ CueHuman 'rel' 'chm13_chr21.fa' 'grch38_chr21.fa' 3 } }
 
   @{ id='b4-o157-default'; tier='b4'; doc='docs/batch4.md'; unit='%'; tol=0.005

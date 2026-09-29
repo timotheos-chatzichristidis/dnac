@@ -129,8 +129,8 @@ both builds — so the classes cannot move under the comparison.
 
 | | chr21 | chr22 (held out) |
 |---|---:|---:|
-| v0.8.0, level 3 | 586,615 B | 794,330 B |
-| v0.9.0, level 3 | **547,019 B** | **742,177 B** |
+| v0.8.0, level 3 | 586,623 B | 794,338 B |
+| v0.9.0, level 3 | **547,027 B** | **742,185 B** |
 | whole file | **−6.75%** | **−6.57%** |
 | on *shared* sequence (< 0.2 bits/base) | **−19.36%** | **−16.90%** |
 | on diverged sequence (0.2–1.0) | −3.55% | −4.51% |
@@ -142,7 +142,7 @@ exists to lose the place in — and does not disturb sequence where no match
 exists at all.
 
 On simulated data the effect is larger still (a simulated chr21 individual is
-**−11.52%**), and on bacteria smaller (a simulated E. coli individual −4.20%,
+**−11.51%**), and on bacteria smaller (a simulated E. coli individual −4.20%,
 the diverged O157:H7 pair −0.18%): the cue pays in proportion to how many indels
 there are to recover from.
 
@@ -322,8 +322,8 @@ ahead depends on the level, and the default is the fast one:
 
 | | best competitor | v0.9.0 `-l 3` | v0.9.0 default (`-l 1`) |
 |---|---:|---:|---:|
-| plain ACGT | 877,373 B (GeCo3 hybrid, unverified) | 541,353 B — **1.62x** | 557,497 B — **1.57x** |
-| FASTA | 1,438,137 B (HRCM) | 547,019 B — **2.63x** | 563,031 B — **2.55x** |
+| plain ACGT | 877,373 B (GeCo3 hybrid, unverified) | 541,361 B — **1.62x** | 557,505 B — **1.57x** |
+| FASTA | 1,438,137 B (HRCM) | 547,027 B — **2.63x** | 563,039 B — **2.55x** |
 
 Level 1 buys 2.1x the speed and gives up about 3% of the size to do it, so the
 margin over the field narrows at exactly the setting most people will run.
@@ -622,7 +622,7 @@ Bits per base of the target, at the default and at `-l 3`:
 
 | target | reference | alone | default (`-l 1`) | `-l 3` | smaller by |
 |--------|-----------|:-----:|:-----:|:-----:|:----------:|
-| **CHM13 chr21 (a real second person)** | GRCh38 chr21 | 1.390 | **0.0999** | **0.0971** | 14.3× — 547,019 bytes for a chromosome |
+| **CHM13 chr21 (a real second person)** | GRCh38 chr21 | 1.390 | **0.0999** | **0.0971** | 14.3× — 547,027 bytes for a chromosome |
 | E. coli W3110 (real strain) | E. coli MG1655 | 1.880 | 0.0037 | **0.0033** | **567×** — 1,924 bytes for a 4.6 Mbp genome |
 | chr21 of a simulated individual (0.1% SNPs + indels) | chr21 | 1.502 | 0.0203 | **0.0201** | 75× |
 | E. coli, simulated individual | E. coli MG1655 | 1.886 | 0.0210 | **0.0208** | 91× |
@@ -969,7 +969,10 @@ before writing anything, so a byte flipped anywhere in the file is refused too, 
 so is an encoder/decoder disagreement of the kind that once wrote wrong bytes at exit
 0. Every archive is exactly the v0.11.0 archive plus those 8 bytes, and older `DNC`
 archives are still read, without the check
-([docs/checksum.md](docs/checksum.md)).
+([docs/checksum.md](docs/checksum.md)). **Every byte count in this README includes
+those 8 bytes**, also in columns named after the release that introduced a setting
+("v0.8.0 default", "v0.9.0, level 3"): those name the setting, measured with this
+build. The dated documents in `docs/` keep the sizes their releases wrote.
 
 ## Build & run
 

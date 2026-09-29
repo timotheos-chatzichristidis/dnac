@@ -976,13 +976,13 @@ $claims = @(
   # bench-external/seq/meta.seq. These are the only rows here where the number
   # being defended is one a competitor set.
   @{ id='meta-dnac-l3-bytes'; tier='meta'; doc='README.md'; unit='B'; tol=0
-     anchor='| **dnac -l3** | 17,320,408 | **0.6928** | 415.4 s | 411.6 s |'
-     expect=17320408
+     anchor='| **dnac -l3** | 17,320,416 | **0.6928** | 415.4 s | 411.6 s |'
+     expect=17320416
      measure={ Size (& $S 'meta.seq') $null 3 } }
 
   @{ id='meta-dnac-l1-bytes'; tier='meta'; doc='README.md'; unit='B'; tol=0
-     anchor='| **dnac -l1** | 17,652,211 | **0.7061** | 197.9 s | 195.4 s |'
-     expect=17652211
+     anchor='| **dnac -l1** | 17,652,219 | **0.7061** | 197.9 s | 195.4 s |'
+     expect=17652219
      measure={ Size (& $S 'meta.seq') $null 1 } }
 
   @{ id='meta-zstd-bytes'; tier='meta'; doc='README.md'; unit='B'; tol=0

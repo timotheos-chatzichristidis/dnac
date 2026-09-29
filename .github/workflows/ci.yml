@@ -58,12 +58,20 @@ jobs:
           ${{ matrix.cc }} -O2 -o dnac_v080 v080.c -lm -pthread
           ./dnac gen cue_ref.fa 300000 5
           ./dnac mut cue_ref.fa cue_tgt.fa 8 9
+          # Since the checksum release every stream is 'DNH' and ends in an 8-byte
+          # CRC-64 (docs/checksum-prediction.md), so "the same bytes" means: the
+          # tag's stream with 'C' -> 'H' at byte 2, then 8 bytes more.
+          envelope() { { head -c 2 "$1"; printf 'H'; tail -c +4 "$1"; } > "$2"; }
           for lvl in 1 3; do
             ./dnac_v080 cr cue_tgt.fa old$lvl.dnac cue_ref.fa 22 $lvl
             ./dnac_v08  cr cue_tgt.fa v08_$lvl.dnac cue_ref.fa 22 $lvl
-            cmp old$lvl.dnac v08_$lvl.dnac
+            envelope old$lvl.dnac oldH$lvl.dnac
+            test $(wc -c < v08_$lvl.dnac) -eq $(( $(wc -c < old$lvl.dnac) + 8 ))
+            head -c $(wc -c < oldH$lvl.dnac) v08_$lvl.dnac > v08b$lvl.dnac
+            cmp oldH$lvl.dnac v08b$lvl.dnac
             ./dnac      cr cue_tgt.fa new$lvl.dnac cue_ref.fa 22 $lvl
-            if cmp -s old$lvl.dnac new$lvl.dnac; then
+            head -c $(wc -c < oldH$lvl.dnac) new$lvl.dnac > newb$lvl.dnac
+            if cmp -s oldH$lvl.dnac newb$lvl.dnac; then
               echo "the release build wrote v0.8.0's bytes: the cue is not on"; exit 1
             fi
             ./dnac dr old$lvl.dnac back$lvl.fa cue_ref.fa

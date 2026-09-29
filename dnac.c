@@ -1732,6 +1732,34 @@ static uint64_t ref_fingerprint(const uint8_t *r, size_t n) {
     return h;
 }
 
+/* CRC-64/XZ (ECMA-182, reflected, init and xorout all ones) over the ORIGINAL
+   bytes, stored as the last 8 bytes of every 'DNH' stream (docs/checksum-
+   prediction.md). It checks the decoder's output end to end, so it covers every
+   section with one number -- and an encoder and decoder that disagree, the bug
+   that has written wrong bytes at exit 0 three times here. The table is built on
+   first use and checked against the standard value, so a wrong one fails loudly. */
+static uint64_t g_crc64_tab[256];
+static int crc64_ready(void) {
+    static int state = 0;                        /* 0 unbuilt, 1 ok, -1 bad */
+    if (state == 0) {
+        for (int i = 0; i < 256; i++) {
+            uint64_t c = (uint64_t)i;
+            for (int b = 0; b < 8; b++) c = (c >> 1) ^ ((c & 1) ? 0xC96C5795D7870F42ull : 0);
+            g_crc64_tab[i] = c;
+        }
+        uint64_t h = ~0ull;
+        for (const char *t = "123456789"; *t; t++) h = g_crc64_tab[(h ^ (uint8_t)*t) & 0xFF] ^ (h >> 8);
+        state = (~h == 0x995DC9BBDF1939FAull) ? 1 : -1;
+        if (state < 0) fprintf(stderr, "internal error: CRC-64 self-test failed\n");
+    }
+    return state > 0;
+}
+static uint64_t crc64(const uint8_t *p, size_t n) {
+    uint64_t h = ~0ull;
+    for (size_t i = 0; i < n; i++) h = g_crc64_tab[(h ^ p[i]) & 0xFF] ^ (h >> 8);
+    return ~h;
+}
+
 static void put64(FILE *f, uint64_t v) {
     for (int i = 0; i < 8; i++) fputc((int)((v >> (8 * i)) & 0xFF), f);
 }
@@ -2202,6 +2230,9 @@ static int do_compress(const char *inpath, const char *outpath, int k, const cha
     uint8_t *buf = (uint8_t *)malloc((size_t)n ? (size_t)n : 1);
     if (n && fread(buf, 1, (size_t)n, in) != (size_t)n) { perror("read"); fclose(in); return 1; }
     fclose(in);
+    /* over the bytes as read, before the case list makes buf its uppercase twin */
+    if (!crc64_ready()) { free(buf); return 1; }
+    uint64_t out_crc = crc64(buf, (size_t)n);
     /* The case list exists only when it is needed, so a file without a
        lowercase base is written exactly as v0.9.0 wrote it. When it is needed,
        buf becomes the uppercase twin here, before any model sees it. */
@@ -2294,7 +2325,9 @@ static int do_compress(const char *inpath, const char *outpath, int k, const cha
        decoder that predates it says "not a dnac file" rather than misreading
        the count as coded data. */
 
-    fputc('D', out); fputc('N', out); fputc('C', out);
+    /* 'H' (was 'C' through v0.11.0): the stream ends in a CRC-64 of the original
+       bytes. The family letter after it means what it always meant. */
+    fputc('D', out); fputc('N', out); fputc('H', out);
     fputc(stream_letter(refpath != NULL, nb > 1), out);   /* after state_load: it sets g_cue */
 
     fputc((int)k, out);
@@ -2372,6 +2405,8 @@ static int do_compress(const char *inpath, const char *outpath, int k, const cha
     buf_free(&cs);
     for (int b = 0; b < nb; b++) buf_free(&bufs[b]);
     free(bufs);
+    put64(out, out_crc);
+    if (ferror(out)) { perror("write output"); fclose(out); free(buf); mix_free(); return 1; }
     fclose(out);
     free(buf); mix_free();
     if (g_mappath) { int r = map_dump(g_mappath); map_free(); if (r) return 1; }
@@ -2431,6 +2466,11 @@ static void decode_span(const uint8_t *cs, size_t cs_len, uint64_t n, uint8_t *d
             run = 0;
         }
         if (ft + 1 >= CAP) { fc[0] >>= 1; fc[1] >>= 1; }
+        /* A complete stream never reads past its end, so the first read past it
+           settles the verdict: stop here. Otherwise a length corrupted upward
+           (one flipped byte can make it gigabytes) is decoded to the end as
+           garbage before the refusal (docs/checksum.md, C2). */
+        if (d.over) break;
     }
     g_span_short = d.over != 0;
 }
@@ -2458,7 +2498,9 @@ static int do_decompress(const char *inpath, const char *outpath, const char *re
         fclose(in); return 1;
     }
     int exper = 0, cue = 0, need_ref = 0, blocked = 0, casem = 0, codon = 0;   /* blocked: plain, cut into spans */
-    if (m0 != 'D' || m1 != 'N' || m2 != 'C' || stream_family(m3, &exper, &cue, &need_ref, &blocked, &casem, &codon)) {
+    /* 'DNH' streams end in a CRC-64 of the output; 'DNC' (v0.11.0 and older) do not */
+    int has_crc = (m2 == 'H');
+    if (m0 != 'D' || m1 != 'N' || (m2 != 'C' && m2 != 'H') || stream_family(m3, &exper, &cue, &need_ref, &blocked, &casem, &codon)) {
         fprintf(stderr, "not a dnac file\n"); fclose(in); return 1;
     }
     if (exper != (DNAC_EXPERIMENTAL != 0)) {
@@ -2593,6 +2635,17 @@ static int do_decompress(const char *inpath, const char *outpath, const char *re
     int64_t cs_start = dnac_ftell64(in);
     if (cs_start < 0 || dnac_fseek64(in, 0, SEEK_END) != 0) { perror("seek input"); fclose(out); remove(outpath); fclose(in); mix_free(); return 1; }
     int64_t cs_end = dnac_ftell64(in);
+    uint64_t want_crc = 0;
+    if (has_crc) {
+        /* the trailer is not coded data: take it off the end before any span sees it */
+        if (!crc64_ready()) { fclose(out); remove(outpath); fclose(in); mix_free(); return 1; }
+        if (cs_end - cs_start < 8 || dnac_fseek64(in, cs_end - 8, SEEK_SET) != 0) {
+            fprintf(stderr, "truncated archive: no checksum at its end\n");
+            fclose(out); remove(outpath); fclose(in); mix_free(); return 1;
+        }
+        want_crc = get64(in);
+        cs_end -= 8;
+    }
     size_t cs_len = (size_t)(cs_end - cs_start);
     uint8_t *cs = (uint8_t *)malloc(cs_len ? cs_len : 1);
     if (!cs) { fprintf(stderr, "out of memory\n"); fclose(out); remove(outpath); fclose(in); mix_free(); return 1; }
@@ -2644,6 +2697,10 @@ static int do_decompress(const char *inpath, const char *outpath, const char *re
         free(clbuf); clbuf = NULL;
         if (bad) { fprintf(stderr, "corrupt case list\n");
                    free(dst); free(cs); fclose(out); remove(outpath); fclose(in); mix_free(); return 1; }
+    }
+    if (has_crc && crc64(dst, (size_t)len) != want_crc) {
+        fprintf(stderr, "corrupt archive: the decoded bytes do not match the checksum\n");
+        free(dst); free(cs); fclose(out); remove(outpath); fclose(in); mix_free(); return 1;
     }
     if (len && fwrite(dst, 1, (size_t)len, out) != (size_t)len) {
         perror("write output"); free(dst); free(cs); fclose(out); remove(outpath); fclose(in); mix_free(); return 1; }

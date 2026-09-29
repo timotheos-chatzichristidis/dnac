@@ -29,6 +29,12 @@ of them unseen when the method was fixed
 ([Bacterial genomes](#bacterial-genomes--the-codon-tracker-v0110)). A file without
 the codon period, such as any human chromosome, is written exactly as before.
 
+**v0.12.0 refuses a damaged archive instead of decoding it.** Every archive now ends
+in a CRC-64 of the original bytes, so a byte flipped anywhere in the file, or an
+encoder and decoder that disagree, is refused before anything is written. It costs 8
+bytes per file and no model changes: every archive is the v0.11.0 archive plus those
+8 bytes ([Lossless on anything](#lossless-on-anything)).
+
 No dependencies beyond libc. Builds clean with `-Wall -Wextra` on gcc and clang.
 Every design decision was a falsifiable experiment on real genomes — kept when
 the measurement rewarded it, reverted when it did not. What the measurement
@@ -962,8 +968,8 @@ exact/diverged/inverted repeats), across many values of `k`.
 **A damaged archive is refused, not decoded.** Until v0.11.0 an archive cut short
 inside its coded data decoded to wrong bytes at exit 0, in every version. The
 decoder now counts any read past the end of the data and refuses the file, leaving
-no output behind ([docs/truncation.md](docs/truncation.md)). Since the checksum
-release every archive also ends in a **CRC-64 of the original bytes** (8 bytes; the
+no output behind ([docs/truncation.md](docs/truncation.md)). Since v0.12.0
+every archive also ends in a **CRC-64 of the original bytes** (8 bytes; the
 magic says `DNH` instead of `DNC`). The decoder checks the whole output against it
 before writing anything, so a byte flipped anywhere in the file is refused too, and
 so is an encoder/decoder disagreement of the kind that once wrote wrong bytes at exit

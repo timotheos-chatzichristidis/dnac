@@ -9,8 +9,8 @@ authors:
 repository-code: "https://github.com/timotheos-chatzichristidis/dnac"
 url: "https://github.com/timotheos-chatzichristidis/dnac"
 license: GPL-3.0-or-later
-version: 0.11.0
-date-released: "2026-09-28"
+version: 0.12.0
+date-released: "2026-09-29"
 abstract: >-
   A single-file lossless DNA compressor in C. It codes each base as two binary
   decisions and predicts them with an ensemble of finite-context models,
@@ -29,6 +29,8 @@ abstract: >-
   tracker: for gene-dense genomes it infers each base's reading frame and strand
   from the sequence alone and uses it as model context, 1.61-3.88% smaller at
   level 1 on four bacteria; files without the codon period are unchanged.
+  Version 0.12.0 ends every archive in a CRC-64 of the original bytes, so a
+  damaged archive is refused instead of decoded, for 8 bytes per file.
   On the sequences benchmarked it compresses below GeCo3 in both reference-free
   and reference-based modes. All results are verified by SHA-256 round-trip and
   re-derived by a registry of executable claims.

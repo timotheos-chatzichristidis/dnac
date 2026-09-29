@@ -875,58 +875,58 @@ $claims = @(
      anchor='| E. coli K-12 MG1655 | 1,094,640 B | 1,069,622 B | −2.29% | 1,093,433 B | 1,066,114 B | −2.50% |'; expect=-2.5
      measure={ CuePct (CodonSize 'ecoli.fa' 3 $null) (CodonSize 'ecoli.fa' 3 '-codon') } }
   @{ id='codon-bsub-l1-off'; tier='slow'; doc='README.md'; unit='B'; tol=0
-     anchor='| B. subtilis 168 | 1,003,070 B | 986,937 B | −1.61% | 1,002,525 B | 985,292 B | −1.72% |'; expect=1003070
+     anchor='| B. subtilis 168 | 1,003,078 B | 986,945 B | −1.61% | 1,002,533 B | 985,300 B | −1.72% |'; expect=1003078
      measure={ CodonSize 'bsub.fa' 1 '-nocodon' } }
   @{ id='codon-bsub-l1'; tier='slow'; doc='README.md'; unit='B'; tol=0
-     anchor='| B. subtilis 168 | 1,003,070 B | 986,937 B | −1.61% | 1,002,525 B | 985,292 B | −1.72% |'; expect=986937
+     anchor='| B. subtilis 168 | 1,003,078 B | 986,945 B | −1.61% | 1,002,533 B | 985,300 B | −1.72% |'; expect=986945
      measure={ CodonSize 'bsub.fa' 1 $null } }
   @{ id='codon-bsub-l1-pct'; tier='slow'; doc='README.md'; unit='%'; tol=0
-     anchor='| B. subtilis 168 | 1,003,070 B | 986,937 B | −1.61% | 1,002,525 B | 985,292 B | −1.72% |'; expect=-1.61
+     anchor='| B. subtilis 168 | 1,003,078 B | 986,945 B | −1.61% | 1,002,533 B | 985,300 B | −1.72% |'; expect=-1.61
      measure={ CuePct (CodonSize 'bsub.fa' 1 '-nocodon') (CodonSize 'bsub.fa' 1 $null) } }
   @{ id='codon-bsub-l3'; tier='slow'; doc='README.md'; unit='B'; tol=0
-     anchor='| B. subtilis 168 | 1,003,070 B | 986,937 B | −1.61% | 1,002,525 B | 985,292 B | −1.72% |'; expect=1002525
+     anchor='| B. subtilis 168 | 1,003,078 B | 986,945 B | −1.61% | 1,002,533 B | 985,300 B | −1.72% |'; expect=1002533
      measure={ CodonSize 'bsub.fa' 3 $null } }
   @{ id='codon-bsub-l3-on'; tier='slow'; doc='README.md'; unit='B'; tol=0
-     anchor='| B. subtilis 168 | 1,003,070 B | 986,937 B | −1.61% | 1,002,525 B | 985,292 B | −1.72% |'; expect=985292
+     anchor='| B. subtilis 168 | 1,003,078 B | 986,945 B | −1.61% | 1,002,533 B | 985,300 B | −1.72% |'; expect=985300
      measure={ CodonSize 'bsub.fa' 3 '-codon' } }
   @{ id='codon-bsub-l3-pct'; tier='slow'; doc='README.md'; unit='%'; tol=0
-     anchor='| B. subtilis 168 | 1,003,070 B | 986,937 B | −1.61% | 1,002,525 B | 985,292 B | −1.72% |'; expect=-1.72
+     anchor='| B. subtilis 168 | 1,003,078 B | 986,945 B | −1.61% | 1,002,533 B | 985,300 B | −1.72% |'; expect=-1.72
      measure={ CuePct (CodonSize 'bsub.fa' 3 $null) (CodonSize 'bsub.fa' 3 '-codon') } }
   @{ id='codon-paer-l1-off'; tier='slow'; doc='README.md'; unit='B'; tol=0
-     anchor='| P. aeruginosa PAO1 | 1,385,837 B | 1,332,018 B | −3.88% | 1,382,299 B | 1,327,685 B | −3.95% |'; expect=1385837
+     anchor='| P. aeruginosa PAO1 | 1,385,845 B | 1,332,026 B | −3.88% | 1,382,307 B | 1,327,693 B | −3.95% |'; expect=1385845
      measure={ CodonSize 'paer.fa' 1 '-nocodon' } }
   @{ id='codon-paer-l1'; tier='slow'; doc='README.md'; unit='B'; tol=0
-     anchor='| P. aeruginosa PAO1 | 1,385,837 B | 1,332,018 B | −3.88% | 1,382,299 B | 1,327,685 B | −3.95% |'; expect=1332018
+     anchor='| P. aeruginosa PAO1 | 1,385,845 B | 1,332,026 B | −3.88% | 1,382,307 B | 1,327,693 B | −3.95% |'; expect=1332026
      measure={ CodonSize 'paer.fa' 1 $null } }
   @{ id='codon-paer-l1-pct'; tier='slow'; doc='README.md'; unit='%'; tol=0
-     anchor='| P. aeruginosa PAO1 | 1,385,837 B | 1,332,018 B | −3.88% | 1,382,299 B | 1,327,685 B | −3.95% |'; expect=-3.88
+     anchor='| P. aeruginosa PAO1 | 1,385,845 B | 1,332,026 B | −3.88% | 1,382,307 B | 1,327,693 B | −3.95% |'; expect=-3.88
      measure={ CuePct (CodonSize 'paer.fa' 1 '-nocodon') (CodonSize 'paer.fa' 1 $null) } }
   @{ id='codon-paer-l3'; tier='slow'; doc='README.md'; unit='B'; tol=0
-     anchor='| P. aeruginosa PAO1 | 1,385,837 B | 1,332,018 B | −3.88% | 1,382,299 B | 1,327,685 B | −3.95% |'; expect=1382299
+     anchor='| P. aeruginosa PAO1 | 1,385,845 B | 1,332,026 B | −3.88% | 1,382,307 B | 1,327,693 B | −3.95% |'; expect=1382307
      measure={ CodonSize 'paer.fa' 3 $null } }
   @{ id='codon-paer-l3-on'; tier='slow'; doc='README.md'; unit='B'; tol=0
-     anchor='| P. aeruginosa PAO1 | 1,385,837 B | 1,332,018 B | −3.88% | 1,382,299 B | 1,327,685 B | −3.95% |'; expect=1327685
+     anchor='| P. aeruginosa PAO1 | 1,385,845 B | 1,332,026 B | −3.88% | 1,382,307 B | 1,327,693 B | −3.95% |'; expect=1327693
      measure={ CodonSize 'paer.fa' 3 '-codon' } }
   @{ id='codon-paer-l3-pct'; tier='slow'; doc='README.md'; unit='%'; tol=0
-     anchor='| P. aeruginosa PAO1 | 1,385,837 B | 1,332,018 B | −3.88% | 1,382,299 B | 1,327,685 B | −3.95% |'; expect=-3.95
+     anchor='| P. aeruginosa PAO1 | 1,385,845 B | 1,332,026 B | −3.88% | 1,382,307 B | 1,327,693 B | −3.95% |'; expect=-3.95
      measure={ CuePct (CodonSize 'paer.fa' 3 $null) (CodonSize 'paer.fa' 3 '-codon') } }
   @{ id='codon-saur-l1-off'; tier='slow'; doc='README.md'; unit='B'; tol=0
-     anchor='| S. aureus NCTC 8325 | 646,970 B | 630,969 B | −2.47% | 646,500 B | 629,691 B | −2.60% |'; expect=646970
+     anchor='| S. aureus NCTC 8325 | 646,978 B | 630,977 B | −2.47% | 646,508 B | 629,699 B | −2.60% |'; expect=646978
      measure={ CodonSize 'saur.fa' 1 '-nocodon' } }
   @{ id='codon-saur-l1'; tier='slow'; doc='README.md'; unit='B'; tol=0
-     anchor='| S. aureus NCTC 8325 | 646,970 B | 630,969 B | −2.47% | 646,500 B | 629,691 B | −2.60% |'; expect=630969
+     anchor='| S. aureus NCTC 8325 | 646,978 B | 630,977 B | −2.47% | 646,508 B | 629,699 B | −2.60% |'; expect=630977
      measure={ CodonSize 'saur.fa' 1 $null } }
   @{ id='codon-saur-l1-pct'; tier='slow'; doc='README.md'; unit='%'; tol=0
-     anchor='| S. aureus NCTC 8325 | 646,970 B | 630,969 B | −2.47% | 646,500 B | 629,691 B | −2.60% |'; expect=-2.47
+     anchor='| S. aureus NCTC 8325 | 646,978 B | 630,977 B | −2.47% | 646,508 B | 629,699 B | −2.60% |'; expect=-2.47
      measure={ CuePct (CodonSize 'saur.fa' 1 '-nocodon') (CodonSize 'saur.fa' 1 $null) } }
   @{ id='codon-saur-l3'; tier='slow'; doc='README.md'; unit='B'; tol=0
-     anchor='| S. aureus NCTC 8325 | 646,970 B | 630,969 B | −2.47% | 646,500 B | 629,691 B | −2.60% |'; expect=646500
+     anchor='| S. aureus NCTC 8325 | 646,978 B | 630,977 B | −2.47% | 646,508 B | 629,699 B | −2.60% |'; expect=646508
      measure={ CodonSize 'saur.fa' 3 $null } }
   @{ id='codon-saur-l3-on'; tier='slow'; doc='README.md'; unit='B'; tol=0
-     anchor='| S. aureus NCTC 8325 | 646,970 B | 630,969 B | −2.47% | 646,500 B | 629,691 B | −2.60% |'; expect=629691
+     anchor='| S. aureus NCTC 8325 | 646,978 B | 630,977 B | −2.47% | 646,508 B | 629,699 B | −2.60% |'; expect=629699
      measure={ CodonSize 'saur.fa' 3 '-codon' } }
   @{ id='codon-saur-l3-pct'; tier='slow'; doc='README.md'; unit='%'; tol=0
-     anchor='| S. aureus NCTC 8325 | 646,970 B | 630,969 B | −2.47% | 646,500 B | 629,691 B | −2.60% |'; expect=-2.6
+     anchor='| S. aureus NCTC 8325 | 646,978 B | 630,977 B | −2.47% | 646,508 B | 629,699 B | −2.60% |'; expect=-2.6
      measure={ CuePct (CodonSize 'saur.fa' 3 $null) (CodonSize 'saur.fa' 3 '-codon') } }
   @{ id='codon-lead-min'; tier='slow'; doc='README.md'; unit='%'; tol=0
      anchor='1.61-3.88% smaller at the default level 1 on four bacteria'; expect=1.61
@@ -941,22 +941,22 @@ $claims = @(
 
   # --- v0.10.0: soft-masked genomes, the case list (docs/case-list.md) ----------
   @{ id='case-chr21-v090'; tier='slow'; doc='README.md'; unit='B'; tol=0
-     anchor='| chr21 | 10,847,678 B | 7,890,480 B | −27.26% |'; expect=10847678
+     anchor='| chr21 | 10,847,678 B | 7,890,488 B | −27.26% |'; expect=10847678
      measure={ CaseSize 'v090' 'chr21_sm.fa' } }
   @{ id='case-chr21'; tier='slow'; doc='README.md'; unit='B'; tol=0
-     anchor='| chr21 | 10,847,678 B | 7,890,480 B | −27.26% |'; expect=7890480
+     anchor='| chr21 | 10,847,678 B | 7,890,488 B | −27.26% |'; expect=7890488
      measure={ CaseSize 'new' 'chr21_sm.fa' } }
   @{ id='case-chr21-pct'; tier='slow'; doc='README.md'; unit='%'; tol=0
-     anchor='| chr21 | 10,847,678 B | 7,890,480 B | −27.26% |'; expect=-27.26
+     anchor='| chr21 | 10,847,678 B | 7,890,488 B | −27.26% |'; expect=-27.26
      measure={ CuePct (CaseSize 'v090' 'chr21_sm.fa') (CaseSize 'new' 'chr21_sm.fa') } }
   @{ id='case-chr22-v090'; tier='slow'; doc='README.md'; unit='B'; tol=0
-     anchor='| chr22 | 10,741,570 B | 7,574,755 B | −29.48% |'; expect=10741570
+     anchor='| chr22 | 10,741,570 B | 7,574,763 B | −29.48% |'; expect=10741570
      measure={ CaseSize 'v090' 'chr22_sm.fa' } }
   @{ id='case-chr22'; tier='slow'; doc='README.md'; unit='B'; tol=0
-     anchor='| chr22 | 10,741,570 B | 7,574,755 B | −29.48% |'; expect=7574755
+     anchor='| chr22 | 10,741,570 B | 7,574,763 B | −29.48% |'; expect=7574763
      measure={ CaseSize 'new' 'chr22_sm.fa' } }
   @{ id='case-chr22-pct'; tier='slow'; doc='README.md'; unit='%'; tol=0
-     anchor='| chr22 | 10,741,570 B | 7,574,755 B | −29.48% |'; expect=-29.48
+     anchor='| chr22 | 10,741,570 B | 7,574,763 B | −29.48% |'; expect=-29.48
      measure={ CuePct (CaseSize 'v090' 'chr22_sm.fa') (CaseSize 'new' 'chr22_sm.fa') } }
   @{ id='case-chr21-runs'; tier='slow'; doc='README.md'; unit='runs'; tol=0
      anchor="chr21's case changes 119,986 times"; expect=119986
@@ -1145,13 +1145,13 @@ $claims = @(
      measure={ Size (& $S 'ecoli.seq') $null 3 4 } }
 
   @{ id='chr21-j1-bytes'; tier='slow'; doc='README.md'; unit='B'; tol=0
-     anchor='| 1 | 7,498,339 | 88.4 s | 88.8 s |'
-     expect=7498339
+     anchor='| 1 | 7,498,347 | 88.4 s | 88.8 s |'
+     expect=7498347
      measure={ Size (& $S 'chr21.seq') $null 3 1 } }
 
   @{ id='chr21-j8-bytes'; tier='slow'; doc='README.md'; unit='B'; tol=0
-     anchor='| 8 | 7,828,539 | **23.2 s** | **23.5 s** |'
-     expect=7828539
+     anchor='| 8 | 7,828,547 | **23.2 s** | **23.5 s** |'
+     expect=7828547
      measure={ Size (& $S 'chr21.seq') $null 3 8 } }
 
   @{ id='chr21-seq-l2-bpb'; tier='slow'; doc='README.md'; unit='bpb'; tol=6e-05
@@ -2599,7 +2599,7 @@ $claims = @(
      measure={ CuePct (CueChr21Ind 'v08' 3) (CueChr21Ind 'rel' 3) } }
 
   @{ id='b4-r2-chr21ind-l3-readme'; tier='b4'; doc='README.md'; unit='%'; tol=0.005
-     anchor='**−11.52%**'
+     anchor='**−11.51%**'
      expect=-11.51
      measure={ CuePct (CueChr21Ind 'v08' 3) (CueChr21Ind 'rel' 3) } }
 
@@ -2731,17 +2731,17 @@ $claims = @(
   # The first row of the reference table: the real human pair, and what that
   # chromosome costs with no reference at all (the denominator of the 14.3x).
   @{ id='chm13-alone-bpb'; tier='b4'; doc='README.md'; unit='bpb'; tol=0.0006
-     anchor='| **CHM13 chr21 (a real second person)** | GRCh38 chr21 | 1.390 | **0.0999** | **0.0971** | 14.3× — 547,019 bytes for a chromosome |'
+     anchor='| **CHM13 chr21 (a real second person)** | GRCh38 chr21 | 1.390 | **0.0999** | **0.0971** | 14.3× — 547,027 bytes for a chromosome |'
      expect=1.390
      measure={ Bpb (CueSize 'rel' (Join-Path $cueHuman 'chm13_chr21.fa') $null 3) 45090688 } }
 
   @{ id='chm13-default-bpb'; tier='b4'; doc='README.md'; unit='bpb'; tol=0.00006
-     anchor='| **CHM13 chr21 (a real second person)** | GRCh38 chr21 | 1.390 | **0.0999** | **0.0971** | 14.3× — 547,019 bytes for a chromosome |'
+     anchor='| **CHM13 chr21 (a real second person)** | GRCh38 chr21 | 1.390 | **0.0999** | **0.0971** | 14.3× — 547,027 bytes for a chromosome |'
      expect=0.0999
      measure={ Bpb (CueHuman 'rel' 'chm13_chr21.fa' 'grch38_chr21.fa' 1) 45090688 } }
 
   @{ id='chm13-l3-bpb'; tier='b4'; doc='README.md'; unit='bpb'; tol=0.00006
-     anchor='| **CHM13 chr21 (a real second person)** | GRCh38 chr21 | 1.390 | **0.0999** | **0.0971** | 14.3× — 547,019 bytes for a chromosome |'
+     anchor='| **CHM13 chr21 (a real second person)** | GRCh38 chr21 | 1.390 | **0.0999** | **0.0971** | 14.3× — 547,027 bytes for a chromosome |'
      expect=0.0971
      measure={ Bpb (CueHuman 'rel' 'chm13_chr21.fa' 'grch38_chr21.fa' 3) 45090688 } }
 
@@ -2801,18 +2801,18 @@ $claims = @(
   # The chr21 block table's other three rows. They were published without a row
   # until Batch 5, like the headline table's E. coli cell.
   @{ id='chr21-j2-bytes'; tier='slow'; doc='README.md'; unit='B'; tol=0
-     anchor='| 2 | 7,687,850 | 50.8 s | 52.3 s |'
-     expect=7687850
+     anchor='| 2 | 7,687,858 | 50.8 s | 52.3 s |'
+     expect=7687858
      measure={ Size (& $S 'chr21.seq') $null 3 2 } }
 
   @{ id='chr21-j4-bytes'; tier='slow'; doc='README.md'; unit='B'; tol=0
-     anchor='| 4 | 7,732,528 | 32.0 s | 32.0 s |'
-     expect=7732528
+     anchor='| 4 | 7,732,536 | 32.0 s | 32.0 s |'
+     expect=7732536
      measure={ Size (& $S 'chr21.seq') $null 3 4 } }
 
   @{ id='chr21-j16-bytes'; tier='slow'; doc='README.md'; unit='B'; tol=0
-     anchor='| 16 | 7,907,062 | 22.4 s | 22.6 s |'
-     expect=7907062
+     anchor='| 16 | 7,907,070 | 22.4 s | 22.6 s |'
+     expect=7907070
      measure={ Size (& $S 'chr21.seq') $null 3 16 } }
 
   # --- Batch 5: the figures the v0.9.0 README added -------------------------

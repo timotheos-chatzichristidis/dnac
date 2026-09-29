@@ -566,11 +566,11 @@ What it buys, measured on the full chr21 (40 Mbp) on an 8-core machine:
 
 | `-j` | bytes | encode | decode |
 |---:|---:|---:|---:|
-| 1 | 7,498,339 | 88.4 s | 88.8 s |
-| 2 | 7,687,850 | 50.8 s | 52.3 s |
-| 4 | 7,732,528 | 32.0 s | 32.0 s |
-| 8 | 7,828,539 | **23.2 s** | **23.5 s** |
-| 16 | 7,907,062 | 22.4 s | 22.6 s |
+| 1 | 7,498,347 | 88.4 s | 88.8 s |
+| 2 | 7,687,858 | 50.8 s | 52.3 s |
+| 4 | 7,732,536 | 32.0 s | 32.0 s |
+| 8 | 7,828,547 | **23.2 s** | **23.5 s** |
+| 16 | 7,907,070 | 22.4 s | 22.6 s |
 
 **3.8× on encode and 3.8× on decode at `-j 8`** — the two are the same number,
 which is the codec's symmetry showing: a block is independent in both
@@ -886,8 +886,8 @@ alternating run lengths:
 
 | GRCh38 (Ensembl release 110, `dna_sm`) | v0.9.0 | v0.10.0 | change |
 |---|---:|---:|---:|
-| chr21 | 10,847,678 B | 7,890,480 B | −27.26% |
-| chr22 | 10,741,570 B | 7,574,755 B | −29.48% |
+| chr21 | 10,847,678 B | 7,890,488 B | −27.26% |
+| chr22 | 10,741,570 B | 7,574,763 B | −29.48% |
 
 chr21's case changes 119,986 times, and the list that records it costs
 **143,081 B**. That is 8.74% less than the lazy alternative, the same run
@@ -926,9 +926,9 @@ with `-codon`, off with `-nocodon`, and never used with a reference.
 | genome | level 1 `-nocodon` | level 1 | change | level 3 | level 3 `-codon` | change |
 |---|---:|---:|---:|---:|---:|---:|
 | E. coli K-12 MG1655 | 1,094,640 B | 1,069,622 B | −2.29% | 1,093,433 B | 1,066,114 B | −2.50% |
-| B. subtilis 168 | 1,003,070 B | 986,937 B | −1.61% | 1,002,525 B | 985,292 B | −1.72% |
-| P. aeruginosa PAO1 | 1,385,837 B | 1,332,018 B | −3.88% | 1,382,299 B | 1,327,685 B | −3.95% |
-| S. aureus NCTC 8325 | 646,970 B | 630,969 B | −2.47% | 646,500 B | 629,691 B | −2.60% |
+| B. subtilis 168 | 1,003,078 B | 986,945 B | −1.61% | 1,002,533 B | 985,300 B | −1.72% |
+| P. aeruginosa PAO1 | 1,385,845 B | 1,332,026 B | −3.88% | 1,382,307 B | 1,327,693 B | −3.95% |
+| S. aureus NCTC 8325 | 646,978 B | 630,977 B | −2.47% | 646,508 B | 629,699 B | −2.60% |
 
 The gate threshold was fixed before P. aeruginosa and S. aureus were fetched, and
 both gained more than predicted. The cost on E. coli, min of three runs: level 1

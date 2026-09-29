@@ -616,6 +616,40 @@ function CueRoundtripExe($exe, $suite) {
     throw "roundtrip.sh did not report a clean count for '$exe':`n$out"
 }
 
+# A release TAG's own tree (dnac.c, the suite, its fixtures), for a dated claim about
+# that release: "229/229 on the release build" was v0.9.0's build on v0.9.0's suite.
+# Run against the working tree it measured whatever the suite had grown to since
+# (264, 296, then 330), and against the checksum release it fails the old magic
+# checks -- neither is what docs/batch4.md said. git archive to a file, then tar,
+# because a PowerShell pipe re-encodes bytes.
+$script:TagMemo = @{}
+function TagTree($rev) {
+    if ($script:TagMemo.ContainsKey($rev)) { return $script:TagMemo[$rev] }
+    $dir = Join-Path $cueWork ("tag_" + ($rev -replace '[^\w.-]', '_'))
+    if (-not (Test-Path (Join-Path $dir 'dnac.c'))) {
+        New-Item -ItemType Directory -Force $dir | Out-Null
+        $tar = Join-Path $cueWork ("tag_" + ($rev -replace '[^\w.-]', '_') + ".tar")
+        & git -C $root archive -o $tar $rev dnac.c scripts tests
+        if ($LASTEXITCODE -ne 0) { throw "git archive $rev failed" }
+        & tar -xf $tar -C $dir
+        if ($LASTEXITCODE -ne 0) { throw "tar -xf $tar failed" }
+    }
+    $script:TagMemo[$rev] = $dir
+    $dir
+}
+function TagExe($rev, $label) {
+    $key = "exe|$rev|$label"
+    if ($script:TagMemo.ContainsKey($key)) { return $script:TagMemo[$key] }
+    $dir = TagTree $rev
+    $cc  = if ($env:DNAC_CC) { $env:DNAC_CC } else { 'gcc' }
+    $exe = Join-Path $dir "dnac_$label.exe"
+    $log = & $cc @('-O3','-o',$exe,(Join-Path $dir 'dnac.c'),'-lm','-pthread') @(CueDefs $label) 2>&1
+    if ($LASTEXITCODE -ne 0) { throw "$cc failed for $rev '$label':`n$log" }
+    $script:TagMemo[$key] = $exe
+    $exe
+}
+function TagRoundtrip($rev, $label) { CueRoundtripExe (TagExe $rev $label) (Join-Path (TagTree $rev) 'scripts/roundtrip.sh') }
+
 function CueRoundtrip($label) { CueRoundtripExe (CueExe $label) (PinnedFile 'scripts/roundtrip.sh') }
 
 # zstd's --patch-from: the trivial diff, and the answer to "what does the most
@@ -2463,17 +2497,17 @@ $claims = @(
   @{ id='b4-p8-rt-rel'; tier='b4'; doc='docs/batch4.md'; unit='round-trips'; tol=0
      anchor='**229/229 on the release build, 229/229 on the cue switched off,'
      expect=229
-     measure={ CueRoundtripExe (CueExe 'rel') } }
+     measure={ TagRoundtrip 'v0.9.0' 'rel' } }
 
   @{ id='b4-p8-rt-v08'; tier='b4'; doc='docs/batch4.md'; unit='round-trips'; tol=0
      anchor='**229/229 on the release build, 229/229 on the cue switched off,'
      expect=229
-     measure={ CueRoundtripExe (CueExe 'v08') } }
+     measure={ TagRoundtrip 'v0.9.0' 'v08' } }
 
   @{ id='b4-p8-rt-exp'; tier='b4'; doc='docs/batch4.md'; unit='round-trips'; tol=0
      anchor='229/229 on an experimental build (`-DCUE_MINLEN=16`).**'
      expect=229
-     measure={ CueRoundtripExe (CueExe 'exp') } }
+     measure={ TagRoundtrip 'v0.9.0' 'exp' } }
 
   # P3: the release's size on the real pair at its default level
   @{ id='b4-p3-chm13-l1'; tier='b4'; doc='docs/batch4.md'; unit='B'; tol=0

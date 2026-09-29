@@ -29,6 +29,12 @@ of them unseen when the method was fixed
 ([Bacterial genomes](#bacterial-genomes--the-codon-tracker-v0110)). A file without
 the codon period, such as any human chromosome, is written exactly as before.
 
+**v0.12.0 refuses a damaged archive instead of decoding it.** Every archive now ends
+in a CRC-64 of the original bytes, so a byte flipped anywhere in the file, or an
+encoder and decoder that disagree, is refused before anything is written. It costs 8
+bytes per file and no model changes: every archive is the v0.11.0 archive plus those
+8 bytes ([Lossless on anything](#lossless-on-anything)).
+
 No dependencies beyond libc. Builds clean with `-Wall -Wextra` on gcc and clang.
 Every design decision was a falsifiable experiment on real genomes — kept when
 the measurement rewarded it, reverted when it did not. What the measurement
@@ -40,7 +46,7 @@ the measurement rewarded it, reverted when it did not. What the measurement
 with no reference, and **651x slower than `zstd -19` to decompress**; on aligned
 reads CRAM wins on structure, because an aligner hands it each read's position
 for free; its reference mode saturates at about chromosome scale; and the new
-reference-mode default is **9.84% worse than v0.8.0 on the tightest bacterial
+reference-mode default is **9.80% worse than v0.8.0 on the tightest bacterial
 pair**, which one argument fixes. Those figures are measured
 to the same standard as the winning ones.
 
@@ -129,8 +135,8 @@ both builds — so the classes cannot move under the comparison.
 
 | | chr21 | chr22 (held out) |
 |---|---:|---:|
-| v0.8.0, level 3 | 586,615 B | 794,330 B |
-| v0.9.0, level 3 | **547,019 B** | **742,177 B** |
+| v0.8.0, level 3 | 586,623 B | 794,338 B |
+| v0.9.0, level 3 | **547,027 B** | **742,185 B** |
 | whole file | **−6.75%** | **−6.57%** |
 | on *shared* sequence (< 0.2 bits/base) | **−19.36%** | **−16.90%** |
 | on diverged sequence (0.2–1.0) | −3.55% | −4.51% |
@@ -142,7 +148,7 @@ exists to lose the place in — and does not disturb sequence where no match
 exists at all.
 
 On simulated data the effect is larger still (a simulated chr21 individual is
-**−11.52%**), and on bacteria smaller (a simulated E. coli individual −4.21%,
+**−11.51%**), and on bacteria smaller (a simulated E. coli individual −4.20%,
 the diverged O157:H7 pair −0.18%): the cue pays in proportion to how many indels
 there are to recover from.
 
@@ -215,12 +221,12 @@ swapping before being stopped. The 10 MB chr21 slice exists in the table so that
 
 | pair | dnac (default, `-l 1`) | dnac `-l 3` | GeCo3 ref models | GeCo3 hybrid |
 |------|-----:|-----:|-----------------:|-------------:|
-| W3110 vs MG1655 (near-identical strains) | 1,280 B | **1,063 B** | 1,404 B | 1,319 B |
-| O157:H7 vs MG1655 (diverged strains) | 361,611 B | **360,752 B** | 431,652 B | 365,401 B |
+| W3110 vs MG1655 (near-identical strains) | 1,288 B | **1,071 B** | 1,404 B | 1,319 B |
+| O157:H7 vs MG1655 (diverged strains) | 361,619 B | **360,760 B** | 431,652 B | 365,401 B |
 
 (Stored file sizes on the plain-ACGT `.seq` files, as everywhere in this
 section. The same pairs measured on the original FASTA files cost a little more
-— 1,931 B for W3110 — because the headers and newlines are stored too.)
+— 1,939 B for W3110 — because the headers and newlines are stored too.)
 
 ### What the head-to-head actually says
 
@@ -233,11 +239,11 @@ section. The same pairs measured on the original FASTA files cost a little more
   prefetch and stretch-table work. The honest comparison is the table above.
 - **Reference-based it is ahead on both pairs, at both levels** — but by how
   much depends on the level, and v0.9.0's default is the fast one. At `-l 3` it
-  is 1.3% better than their best configuration on the diverged pair and 19.4%
-  better on the near-identical one (1,063 bytes against 1,319 for a whole 4.6 Mbp
-  genome). At the default those margins are 1.0% and **3.0%**: on a two-kilobyte
+  is 1.3% better than their best configuration on the diverged pair and 18.8%
+  better on the near-identical one (1,071 bytes against 1,319 for a whole 4.6 Mbp
+  genome). At the default those margins are 1.0% and **2.4%**: on a two-kilobyte
   output, what level 1's two-expert mixer gives up eats most of the lead. See
-  [Where this loses](#the-new-default-is-984-worse-on-the-tightest-bacterial-pair).
+  [Where this loses](#the-new-default-is-980-worse-on-the-tightest-bacterial-pair).
 - Note that GeCo3's heaviest level is *worse* than its own level 9 on E. coli
   (1.8913 vs 1.8903, 20× the time): more models is not automatically better —
   the same lesson our own rejected experiments taught.
@@ -282,7 +288,7 @@ whole-genome priming pass (2 h 11 m, a 3.88 GB state file), so it is recorded wi
 its method rather than wired into the registry. The CRAM figure is arithmetic and
 is labelled as such.
 
-### The new default is 9.84% worse on the tightest bacterial pair
+### The new default is 9.80% worse on the tightest bacterial pair
 
 Since v0.9.0 `dnac cr` picks level 1, because with a reference that is 2.1x
 faster than v0.8.0's default *and* 4% smaller on a real human pair. On the one
@@ -290,8 +296,8 @@ input where level 1 has nothing to win back, it is simply worse:
 
 | pair, FASTA | v0.8.0 default (`-l 3`) | v0.9.0 default (`-l 1`) | v0.9.0 `-l 3` |
 |---|---:|---:|---:|
-| **W3110 vs MG1655** (near-identical) | 1,931 B | **2,121 B — +9.84%** | **1,916 B** |
-| O157:H7 vs MG1655 (diverged) | 362,666 B | 362,862 B — +0.05% | 362,006 B |
+| **W3110 vs MG1655** (near-identical) | 1,939 B | **2,129 B — +9.80%** | **1,924 B** |
+| O157:H7 vs MG1655 (diverged) | 362,674 B | 362,870 B — +0.05% | 362,014 B |
 
 **The remedy is one argument** (`dnac cr target.fa out.dnac ref.fa 22 3`), and at
 level 3 v0.9.0 is smaller than v0.8.0 on both pairs. The loss is also 190 bytes:
@@ -302,11 +308,11 @@ It is worth saying *why*, because the obvious explanation is wrong. It is not
 that the output is small: a controlled divergence gradient (`dnac mut` at 0.05,
 0.2, 1.0 and 5.0 per-mille against the same reference) costs level 1 only
 −0.25%, +0.74%, +1.21% and +1.81% — and at the point whose output lands nearest
-W3110's (2,018 bytes against 1,916), **level 1 is 5 bytes smaller, where W3110
+W3110's (2,026 bytes against 1,924), **level 1 is 5 bytes smaller, where W3110
 is 205 bytes larger**. Nor is it the smaller model set that level 1 drops:
 switching level 1's mixer from two experts to level 3's four, and changing
-nothing else, gives 1,907 B — the whole gap, and then some. On a simulated
-E. coli individual the same switch recovers the gap exactly (12,204 → 12,051,
+nothing else, gives 1,915 B — the whole gap, and then some. On a simulated
+E. coli individual the same switch recovers the gap exactly (12,212 → 12,059,
 which *is* level 3's size); on the diverged pair only a fifth of it. **On
 near-identical pairs the cost of level 1 is the mixer's context, not its
 models.** That fix was priced on the human pair and rejected by
@@ -322,8 +328,8 @@ ahead depends on the level, and the default is the fast one:
 
 | | best competitor | v0.9.0 `-l 3` | v0.9.0 default (`-l 1`) |
 |---|---:|---:|---:|
-| plain ACGT | 877,373 B (GeCo3 hybrid, unverified) | 541,353 B — **1.62x** | 557,497 B — **1.57x** |
-| FASTA | 1,438,137 B (HRCM) | 547,019 B — **2.63x** | 563,031 B — **2.55x** |
+| plain ACGT | 877,373 B (GeCo3 hybrid, unverified) | 541,361 B — **1.62x** | 557,505 B — **1.57x** |
+| FASTA | 1,438,137 B (HRCM) | 547,027 B — **2.63x** | 563,039 B — **2.55x** |
 
 Level 1 buys 2.1x the speed and gives up about 3% of the size to do it, so the
 margin over the field narrows at exactly the setting most people will run.
@@ -339,8 +345,8 @@ theirs, no outside information for either side.
 
 | tool | bytes | bits/base | encode | decode |
 |------|------:|----------:|-------:|-------:|
-| **dnac -l3** | 17,320,408 | **0.6928** | 415.4 s | 411.6 s |
-| **dnac -l1** | 17,652,211 | **0.7061** | 197.9 s | 195.4 s |
+| **dnac -l3** | 17,320,416 | **0.6928** | 415.4 s | 411.6 s |
+| **dnac -l1** | 17,652,219 | **0.7061** | 197.9 s | 195.4 s |
 | xz -9e | 25,072,456 | 1.0029 | 252.1 s | 1.3 s |
 | zstd -19 --long=27 | 25,427,359 | 1.0171 | 157.2 s | **0.3 s** |
 | bzip2 -9 | 46,527,654 | 1.8611 | 19.5 s | 5.9 s |
@@ -407,7 +413,7 @@ this codec would have been tested for: on short, damaged reads it reaches 0.968
 AUPRC where Kraken2 reaches 0.184.
 
 Our own numbers say the idea would not transfer here anyway. Against GeCo3's
-reference templates we are 19.4% ahead on the near-identical pair and **1.3%
+reference templates we are 18.8% ahead on the near-identical pair and **1.3%
 ahead on the diverged pair** at `-l 3` (3.0% and 1.0% at the default) — and the
 diverged case is the one classification needs help with. The cue did not change
 that: it earns where a match exists to lose the place in, which is precisely the
@@ -429,7 +435,7 @@ ladder**, and level 4 is deliberately not "better than 3":
 | 1 `fast` | 6 orders, 2 mixing experts, no IR, no tolerant models | 10.6 s | 1.7180 | 2.0× faster, +0.369% size |
 | 2 `balanced` | all orders, 4 experts, no IR, no tolerant models | 14.6 s | 1.7166 | 1.4× faster, +0.292% |
 | 4 `light` | 8 orders, 4 experts, IR, no tolerant models | 16.1 s | 1.7137 | 1.3× faster, +0.121%, **−31% RAM** |
-| 3 `max` (default without a reference) | everything | 20.8 s | 1.7116 | — |
+| 3 `max` (default without a reference) | everything | 20.8 s | 1.7117 | — |
 
 **Since v0.9.0 the default is per mode: level 3 without a reference, level 1
 with one.** That is not a preference, it is where the measurement pointed and
@@ -534,7 +540,7 @@ experts beat four**, at these sizes. More models is not automatically better.
 That second one flips with a reference, which is worth knowing before anyone
 generalises it. On a near-identical pair at level 1, giving the mixer four
 experts instead of two recovers the *whole* difference between level 1 and level
-3 (W3110 2,121 → 1,907 B; a simulated E. coli individual 12,204 → 12,051 B,
+3 (W3110 2,129 → 1,915 B; a simulated E. coli individual 12,212 → 12,059 B,
 exactly level 3's size) — while on the diverged pair it recovers a fifth, and on
 a real human pair it was priced at +21% time for −0.52% size and turned down.
 The mixer's context, not the model set, is what level 1 gives up where the
@@ -557,20 +563,20 @@ cannot see blocks 0..j-1 while other cores are still producing them.
 
 | `-j` | bytes (E. coli, 4.6 Mbp) | vs one block |
 |---:|---:|---:|
-| 1 (default) | 1,092,635 | — |
-| 2 | 1,100,595 | +0.73% |
-| 4 | 1,108,139 | +1.42% |
-| 8 | 1,116,227 | +2.16% |
+| 1 (default) | 1,092,643 | — |
+| 2 | 1,100,603 | +0.73% |
+| 4 | 1,108,147 | +1.42% |
+| 8 | 1,116,235 | +2.16% |
 
 What it buys, measured on the full chr21 (40 Mbp) on an 8-core machine:
 
 | `-j` | bytes | encode | decode |
 |---:|---:|---:|---:|
-| 1 | 7,498,339 | 88.4 s | 88.8 s |
-| 2 | 7,687,850 | 50.8 s | 52.3 s |
-| 4 | 7,732,528 | 32.0 s | 32.0 s |
-| 8 | 7,828,539 | **23.2 s** | **23.5 s** |
-| 16 | 7,907,062 | 22.4 s | 22.6 s |
+| 1 | 7,498,347 | 88.4 s | 88.8 s |
+| 2 | 7,687,858 | 50.8 s | 52.3 s |
+| 4 | 7,732,536 | 32.0 s | 32.0 s |
+| 8 | 7,828,547 | **23.2 s** | **23.5 s** |
+| 16 | 7,907,070 | 22.4 s | 22.6 s |
 
 **3.8× on encode and 3.8× on decode at `-j 8`** — the two are the same number,
 which is the codec's symmetry showing: a block is independent in both
@@ -622,8 +628,8 @@ Bits per base of the target, at the default and at `-l 3`:
 
 | target | reference | alone | default (`-l 1`) | `-l 3` | smaller by |
 |--------|-----------|:-----:|:-----:|:-----:|:----------:|
-| **CHM13 chr21 (a real second person)** | GRCh38 chr21 | 1.390 | **0.0999** | **0.0971** | 14.3× — 547,019 bytes for a chromosome |
-| E. coli W3110 (real strain) | E. coli MG1655 | 1.880 | 0.0037 | **0.0033** | **570×** — 1,916 bytes for a 4.6 Mbp genome |
+| **CHM13 chr21 (a real second person)** | GRCh38 chr21 | 1.390 | **0.0999** | **0.0971** | 14.3× — 547,027 bytes for a chromosome |
+| E. coli W3110 (real strain) | E. coli MG1655 | 1.880 | 0.0037 | **0.0033** | **567×** — 1,924 bytes for a 4.6 Mbp genome |
 | chr21 of a simulated individual (0.1% SNPs + indels) | chr21 | 1.502 | 0.0203 | **0.0201** | 75× |
 | E. coli, simulated individual | E. coli MG1655 | 1.886 | 0.0210 | **0.0208** | 91× |
 | E. coli O157:H7 (real, diverged strain) | E. coli MG1655 | 1.812 | 0.5189 | **0.5176** | 3.5× |
@@ -886,8 +892,8 @@ alternating run lengths:
 
 | GRCh38 (Ensembl release 110, `dna_sm`) | v0.9.0 | v0.10.0 | change |
 |---|---:|---:|---:|
-| chr21 | 10,847,678 B | 7,890,480 B | −27.26% |
-| chr22 | 10,741,570 B | 7,574,755 B | −29.48% |
+| chr21 | 10,847,678 B | 7,890,488 B | −27.26% |
+| chr22 | 10,741,570 B | 7,574,763 B | −29.48% |
 
 chr21's case changes 119,986 times, and the list that records it costs
 **143,081 B**. That is 8.74% less than the lazy alternative, the same run
@@ -925,10 +931,10 @@ with `-codon`, off with `-nocodon`, and never used with a reference.
 
 | genome | level 1 `-nocodon` | level 1 | change | level 3 | level 3 `-codon` | change |
 |---|---:|---:|---:|---:|---:|---:|
-| E. coli K-12 MG1655 | 1,094,632 B | 1,069,614 B | −2.29% | 1,093,425 B | 1,066,106 B | −2.50% |
-| B. subtilis 168 | 1,003,070 B | 986,937 B | −1.61% | 1,002,525 B | 985,292 B | −1.72% |
-| P. aeruginosa PAO1 | 1,385,837 B | 1,332,018 B | −3.88% | 1,382,299 B | 1,327,685 B | −3.95% |
-| S. aureus NCTC 8325 | 646,970 B | 630,969 B | −2.47% | 646,500 B | 629,691 B | −2.60% |
+| E. coli K-12 MG1655 | 1,094,640 B | 1,069,622 B | −2.29% | 1,093,433 B | 1,066,114 B | −2.50% |
+| B. subtilis 168 | 1,003,078 B | 986,945 B | −1.61% | 1,002,533 B | 985,300 B | −1.72% |
+| P. aeruginosa PAO1 | 1,385,845 B | 1,332,026 B | −3.88% | 1,382,307 B | 1,327,693 B | −3.95% |
+| S. aureus NCTC 8325 | 646,978 B | 630,977 B | −2.47% | 646,508 B | 629,699 B | −2.60% |
 
 The gate threshold was fixed before P. aeruginosa and S. aureus were fetched, and
 both gained more than predicted. The cost on E. coli, min of three runs: level 1
@@ -962,10 +968,17 @@ exact/diverged/inverted repeats), across many values of `k`.
 **A damaged archive is refused, not decoded.** Until v0.11.0 an archive cut short
 inside its coded data decoded to wrong bytes at exit 0, in every version. The
 decoder now counts any read past the end of the data and refuses the file, leaving
-no output behind. That also covers archives written by v0.10.0 and earlier, since no
-stream changed. A byte flipped inside a complete archive is still not detected: that
-needs a checksum in every file, which is a format change of its own
-([docs/truncation.md](docs/truncation.md)).
+no output behind ([docs/truncation.md](docs/truncation.md)). Since v0.12.0
+every archive also ends in a **CRC-64 of the original bytes** (8 bytes; the
+magic says `DNH` instead of `DNC`). The decoder checks the whole output against it
+before writing anything, so a byte flipped anywhere in the file is refused too, and
+so is an encoder/decoder disagreement of the kind that once wrote wrong bytes at exit
+0. Every archive is exactly the v0.11.0 archive plus those 8 bytes, and older `DNC`
+archives are still read, without the check
+([docs/checksum.md](docs/checksum.md)). **Every byte count in this README includes
+those 8 bytes**, also in columns named after the release that introduced a setting
+("v0.8.0 default", "v0.9.0, level 3"): those name the setting, measured with this
+build. The dated documents in `docs/` keep the sizes their releases wrote.
 
 ## Build & run
 
@@ -973,7 +986,7 @@ needs a checksum in every file, which is a format change of its own
 
 ```sh
 make                              # cc -O2 -Wall -Wextra -o dnac dnac.c -lm
-make test                         # 296 SHA-256 round-trips (plain, reference, level, state, blocks, the cue, v0.8.0 streams, the codon tracker)
+make test                         # 330 SHA-256 round-trips (plain, reference, level, state, blocks, the cue, v0.8.0 streams, the codon tracker, the checksum)
 sh scripts/get-data.sh --human    # fetch the exact genomes benchmarked below
 make bench                        # bits/base on whatever is in ./data
 ```
@@ -1002,7 +1015,7 @@ make bench                        # bits/base on whatever is in ./data
 # measurement
 ./bench.ps1 -Exe .\dnac.exe -File .\chr21.fa -K 22   # round-trip + bits/base
 ./bench.ps1 ... -Fast                                # compress only (param sweeps)
-./adversarial.ps1 -Exe .\dnac.exe                    # 182 losslessness round-trips
+./adversarial.ps1 -Exe .\dnac.exe                    # 209 losslessness round-trips
 ./sweep-tables.ps1 -Macro MHBITS_MAX -Caps 26,25      # table size vs bits/base vs RAM
 ```
 
@@ -1023,13 +1036,14 @@ Try a **real** genome: download a `.fa` from NCBI/Ensembl and
 - `build.ps1`, `test.ps1` — Windows build & demo.
 - `bench.ps1` — round-trip + bits/base for one build on one file (`-Fast` to
   compress only, for parameter sweeps).
-- `adversarial.ps1` — 182 SHA-256-verified round-trips: 10 nasty inputs × 6
+- `adversarial.ps1` — 209 SHA-256-verified round-trips: 10 nasty inputs × 6
   values of `k`, × 4 compression levels, plus reference mode (unrelated/short/
   messy references, primed state files, FASTA↔state interchange), the refusals
   (the wrong reference, a state file from an older dnac) and the check that
   `-map` leaves the compressed bytes byte-identical, the case list, and the
   codon tracker (a gene-like file from `scripts/genes.awk`, its family letters,
-  and `-codon` on a file whose gate stays shut), and truncated archives.
+  and `-codon` on a file whose gate stays shut), truncated archives, flipped
+  bytes (header, body, trailer) and the stored v0.11.0 streams.
   `scripts/roundtrip.sh` is the POSIX port CI runs; it covers the same ground
   plus an out-of-range level, the reference path at every level, a state/stream
   level mismatch, the block modes, the cue's own cases (indel- and
@@ -1038,8 +1052,9 @@ Try a **real** genome: download a `.fa` from NCBI/Ensembl and
   and the case list (its families, the uppercase-twin body, a truncated list,
   and v0.9.0's own lowercase streams in `tests/v090`), and the codon tracker
   (every level, `-codon`/`-nocodon`, blocks, case x codon, both sides of the
-  gate, reference mode), and truncated archives (plain, blocks, codon, case
-  list), for 296.
+  gate, reference mode), truncated archives (plain, blocks, codon, case
+  list), flipped bytes in the same four plus level 1, a `DNH` stream read as
+  an old one, and the stored v0.11.0 streams in `tests/v0110`, for 330.
 - `ablate.ps1` — what each of v0.8.0's 15 prediction inputs is worth
   (`-Mode loo|diag|mask`). Drives `-DDNAC_ABLATE` / `-DDNAC_DIAG` in `dnac.c`:
   the first zeroes an input inside the mixer without touching table geometry, so
@@ -1079,10 +1094,11 @@ Try a **real** genome: download a `.fa` from NCBI/Ensembl and
   knowing where a technique *stops* working is worth as much as knowing where it
   starts.
 - `.github/workflows/ci.yml` — every push builds on gcc and clang, Linux and
-  macOS, and must pass all 296 round-trips on the release build, the cue
+  macOS, and must pass all 330 round-trips on the release build, the cue
   switched off and an experimental build, plus a cross-build portability check
   that compresses with one table geometry and decodes with another, and a check
-  that the cue switched off writes the v0.8.0 tag's bytes.
+  that the cue switched off writes the v0.8.0 tag's bytes (plus the checksum's
+  8-byte envelope).
 - `README.md` — this file.
 
 ## Where the remaining (small, hard) gains are

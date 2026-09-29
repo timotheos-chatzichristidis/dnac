@@ -370,7 +370,9 @@ report "case: letter of a header-only-lowercase file" "$LET" "$(dd if=ch.dnac bs
 rm -f ch.dnac
 # The separation: the body of a case stream is byte for byte the stream of its
 # uppercase twin (a/c/g/t uppercased outside '>' lines, n untouched), in plain and
-# block mode. Header 16 B; then run count and section size, 8 B each, LE.
+# block mode. Header 16 B; then run count and section size, 8 B each, LE. Since the
+# checksum release every stream ends in an 8-byte CRC of ITS OWN output, which differs
+# between a file and its twin, so the last 8 bytes are left out of both bodies.
 twin() { awk '/^>/{print; next}{gsub(/a/,"A");gsub(/c/,"C");gsub(/g/,"G");gsub(/t/,"T");print}' "$1"; }
 for f in case_mix.fa case_n.fa; do
   twin "$f" > tw.fa
@@ -382,8 +384,9 @@ for f in case_mix.fa case_n.fa; do
     # "no section", so the comparison fails instead of aborting the suite
     case $SEC in ''|*[!0-9]*) SEC=0 ;; esac
     [ ${#SEC} -le 12 ] && [ "$SEC" -le "$(wc -c < cs.dnac)" ] || SEC=0
-    tail -c +17 tw.dnac > b_tw
-    tail -c +$((33 + SEC)) cs.dnac > b_cs
+    tail -c +17 tw.dnac > b_tw0;           head -c $(( $(wc -c < b_tw0) - 8 )) b_tw0 > b_tw
+    tail -c +$((33 + SEC)) cs.dnac > b_cs0; head -c $(( $(wc -c < b_cs0) - 8 )) b_cs0 > b_cs
+    rm -f b_tw0 b_cs0
     report "case: body == uppercase twin, $f $a" "$(hash_of b_tw)" "$(hash_of b_cs)"
     rm -f cs.dnac tw.dnac b_tw b_cs
   done
@@ -492,6 +495,67 @@ cutcheck "plain level 1" random_dna.fa 22 1
 cutcheck "blocks -j 3"   diverged.fa 16 -j 3
 cutcheck "codon"         g_on.fa 22 1
 cutcheck "case list"     case_mix.fa 22
+
+# ------------------------------------------- the checksum (docs/checksum-prediction.md)
+# Every stream is 'DNH' and ends in a CRC-64 of the original bytes. A flipped byte
+# anywhere -- header, body, trailer -- must be refused with nothing written.
+"$EXE" c diverged.fa ck.dnac 22 >/dev/null
+report "checksum: new streams are DNH" "DNH" "$(head -c 3 ck.dnac)"
+flipcheck() {  # flipcheck <label> <input> <args...>
+  lb=$1; in=$2; shift 2
+  "$EXE" c "$in" fk.dnac "$@" >/dev/null
+  sz=$(wc -c < fk.dnac)
+  for p in 4 $((sz / 3)) $((sz / 2)) $((sz - 8)) $((sz - 1)); do
+    cp fk.dnac ff.dnac
+    b=$(od -An -tu1 -j$p -N1 ff.dnac | tr -d ' ')
+    printf "\\$(printf '%03o' $(( b ^ 255 )))" | dd of=ff.dnac bs=1 seek=$p count=1 conv=notrunc 2>/dev/null
+    rm -f ff.out; n=$((n+1))
+    if "$EXE" d ff.dnac ff.out >/dev/null 2>&1 || [ -e ff.out ]; then
+      if [ -e ff.out ] && [ "$(hash_of ff.out)" = "$(hash_of "$in")" ]; then :   # harmless: right bytes
+      else fail=$((fail+1)); echo "FAIL: byte $p of $sz flipped, accepted or output left: $lb"; fi
+    fi
+  done
+  rm -f fk.dnac ff.dnac ff.out
+}
+flipcheck "plain level 3" diverged.fa 22
+flipcheck "plain level 1" random_dna.fa 22 1
+flipcheck "blocks -j 3"   diverged.fa 16 -j 3
+flipcheck "codon"         g_on.fa 22 1
+flipcheck "case list"     case_mix.fa 22
+# 'H' turned into exactly 'C' makes the stream read as an old one: the trailer is then
+# trailing data, and the output must still be right (docs/checksum-prediction.md)
+{ head -c 2 ck.dnac; printf 'C'; tail -c +4 ck.dnac; } > dg.dnac
+"$EXE" d dg.dnac dg.out >/dev/null 2>&1 || true
+if [ -e dg.out ]; then report "checksum: H->C downgrade still decodes right" "$(hash_of diverged.fa)" "$(hash_of dg.out)"
+else n=$((n+1)); fail=$((fail+1)); echo "FAIL: an H->C downgraded stream was refused"; fi
+rm -f ck.dnac dg.dnac dg.out
+# Stored v0.11.0 streams, the last 'DNC' generation (tests/v0110/make.sh, written by
+# the v0.11.0 tag): a release build decodes them byte for byte, an experimental build
+# refuses them.
+FIX11=$SRCROOT/tests/v0110
+if [ ! -s "$FIX11/inputs.sha256" ]; then
+  n=$((n+1)); fail=$((fail+1)); echo "FAIL: no stored v0.11.0 streams at $FIX11"
+else
+  "$EXE" gen g.fa 40000 3 >/dev/null
+  "$EXE" mut g.fa m.fa 20 4 >/dev/null
+  casify g_on.fa > g_case.fa
+  n=$((n+1))
+  if ! $SHA -c "$FIX11/inputs.sha256" >/dev/null 2>&1; then
+    fail=$((fail+1)); echo "FAIL: the v0.11.0 fixture inputs are no longer reproduced"
+  fi
+  for f in plain_l1 plain_l3 codon_l1 codon_j3 codon_case_l1 ref_l1; do
+    case $f in plain_*) src=g.fa ;; codon_case_*) src=g_case.fa ;; codon_*) src=g_on.fa ;; ref_*) src=m.fa ;; esac
+    case $f in ref_*) "$EXE" dr "$FIX11/$f.dnac" v11.out g.fa >/dev/null 2>&1 || true ;;
+               *)     "$EXE" d  "$FIX11/$f.dnac" v11.out      >/dev/null 2>&1 || true ;; esac
+    if [ "$EXPER" -eq 0 ]; then
+      if [ -e v11.out ]; then report "v0.11.0 stream $f" "$(hash_of $src)" "$(hash_of v11.out)"
+      else n=$((n+1)); fail=$((fail+1)); echo "FAIL: v0.11.0 stream $f was refused"; fi
+    else
+      n=$((n+1)); [ -e v11.out ] && { fail=$((fail+1)); echo "FAIL: an experimental build read v0.11.0 stream $f"; }
+    fi
+    rm -f v11.out
+  done
+fi
 
 # ------------------------------------------------------------------- verdict
 if [ "$fail" -ne 0 ]; then echo "$fail of $n FAILED"; exit 1; fi

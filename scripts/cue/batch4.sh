@@ -48,7 +48,12 @@ enc() {
     ref1) "$exe" cr "$ROOT/ecoli_ind.fa" "$out" "$REF" 22 1 >/dev/null 2>&1; in=$ROOT/ecoli_ind.fa; r=$REF ;;
     ref3) "$exe" cr "$ROOT/ecoli_ind.fa" "$out" "$REF" 22 3 >/dev/null 2>&1; in=$ROOT/ecoli_ind.fa; r=$REF ;;
     self1) "$exe" cr "$REF" "$out" "$REF" 22 1 >/dev/null 2>&1; in=$REF; r=$REF ;;
-    pl1) "$exe" c "$SEQ" "$out" 22 1 >/dev/null 2>&1; in=$SEQ; r= ;;
+    # Since v0.11.0 level 1 turns the codon tracker on where its gate opens, and
+    # it opens on E. coli. Batch 4 predates it, so the working-tree builds are
+    # asked for -nocodon here -- byte for byte what v0.10.0 wrote
+    # (docs/codon-impl-prediction.md, I1). Older builds do not know the flag.
+    pl1) nc=; case $lbl in rel|v08|m16) nc=-nocodon ;; esac
+         "$exe" c "$SEQ" "$out" 22 1 $nc >/dev/null 2>&1; in=$SEQ; r= ;;
     pl2) "$exe" c "$SEQ" "$out" 22 2 >/dev/null 2>&1; in=$SEQ; r= ;;
     pl3) "$exe" c "$SEQ" "$out" 22 3 >/dev/null 2>&1; in=$SEQ; r= ;;
     pl4) "$exe" c "$SEQ" "$out" 22 4 >/dev/null 2>&1; in=$SEQ; r= ;;
@@ -59,6 +64,14 @@ enc() {
   else "$exe" d "$out" "$B/back" >/dev/null 2>&1; fi
   cmp -s "$in" "$B/back" || { fail "lossless $cs $lbl"; return 0; }
   rm -f "$B/back"
+  # Since the checksum release the working tree writes 'DNH' streams: the
+  # pre-checksum stream with 'C' -> 'H' and an 8-byte CRC appended, exactly
+  # (docs/checksum.md, C1). Batch 4 compared pre-checksum streams, so after the
+  # round trip above has checked the real file, compare what v0.9.0 wrote.
+  if [ "$(head -c 3 "$out")" = DNH ]; then
+    { head -c 2 "$out"; printf 'C'; tail -c +4 "$out" | head -c $(( $(wc -c < "$out") - 11 )); } > "$out.pre"
+    mv "$out.pre" "$out"
+  fi
   printf '%s\t%s\t%s\n' "$lbl" "$cs" "$(wc -c < "$out")" >> "$WORK/batch4.tsv"
 }
 

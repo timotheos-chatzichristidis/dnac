@@ -248,6 +248,50 @@ foreach ($t in $cutcases) {
     Remove-Item $c, $cut, $o -Force -ErrorAction SilentlyContinue
 }
 
+# --- the checksum (docs/checksum-prediction.md): every stream is 'DNH' and ends in ---
+# --- a CRC-64 of the original bytes; a flipped byte anywhere is refused, nothing ------
+# --- written. A stream whose 'H' became exactly 'C' reads as an old one, correctly. --
+foreach ($t in $cutcases) {
+    $src = $t.f; $a = $t.a
+    $c = Join-Path $dir "fk.dnac"; $ff = Join-Path $dir "ff.dnac"; $o = Join-Path $dir "ff.out"
+    & $Exe c $src $c @a | Out-Null
+    $bytes = [System.IO.File]::ReadAllBytes($c)
+    $n++; if ([System.Text.Encoding]::ASCII.GetString($bytes, 0, 3) -ne "DNH") { $fail++; Write-Host "FAIL: a new stream is not DNH" -ForegroundColor Red }
+    $L = $bytes.Length
+    foreach ($p in @(4, [int]($L / 3), [int]($L / 2), ($L - 8), ($L - 1))) {
+        $fb = [byte[]]$bytes.Clone(); $fb[$p] = $fb[$p] -bxor 0xFF
+        [System.IO.File]::WriteAllBytes($ff, $fb)
+        Remove-Item $o -Force -ErrorAction SilentlyContinue
+        & $Exe d $ff $o 2>$null | Out-Null
+        $n++
+        if ($LASTEXITCODE -eq 0 -or (Test-Path $o)) {
+            if (-not ((Test-Path $o) -and (Get-FileHash $o).Hash -eq (Get-FileHash $src).Hash)) {
+                $fail++; Write-Host ("FAIL: byte {0} of {1} flipped, accepted or output left ({2})" -f $p, $L, ($a -join " ")) -ForegroundColor Red }
+        }
+    }
+    $dg = [byte[]]$bytes.Clone(); $dg[2] = [byte][char]'C'
+    [System.IO.File]::WriteAllBytes($ff, $dg)
+    Remove-Item $o -Force -ErrorAction SilentlyContinue
+    & $Exe d $ff $o 2>$null | Out-Null
+    $n++; if (-not ((Test-Path $o) -and (Get-FileHash $o).Hash -eq (Get-FileHash $src).Hash)) { $fail++; Write-Host ("FAIL: H->C downgrade did not decode right ({0})" -f ($a -join " ")) -ForegroundColor Red }
+    Remove-Item $c, $ff, $o -Force -ErrorAction SilentlyContinue
+}
+# stored v0.11.0 streams (tests/v0110/make.sh): decoded and checked against the input
+# hashes that make.sh recorded, so no input has to be regenerated here
+$fix11 = Join-Path $PSScriptRoot "tests/v0110"
+$want = @{}
+foreach ($line in Get-Content (Join-Path $fix11 "inputs.sha256")) { $h, $nm = $line -split '\s+\*?', 2; $want[$nm] = $h.ToUpper() }
+$g11 = Join-Path $dir "g11.fa"; & $Exe gen $g11 40000 3 | Out-Null
+foreach ($s in @(@("plain_l1","g.fa"), @("plain_l3","g.fa"), @("codon_l1","g_on.fa"), @("codon_j3","g_on.fa"), @("codon_case_l1","g_case.fa"), @("ref_l1","m.fa"))) {
+    $o = Join-Path $dir "v11.out"; Remove-Item $o -Force -ErrorAction SilentlyContinue
+    $f = Join-Path $fix11 ($s[0] + ".dnac")
+    if ($s[0] -like "ref_*") { & $Exe dr $f $o $g11 2>$null | Out-Null } else { & $Exe d $f $o 2>$null | Out-Null }
+    $n++
+    if (-not ((Test-Path $o) -and (Get-FileHash $o).Hash -eq $want[$s[1]])) { $fail++; Write-Host ("FAIL: v0.11.0 stream {0}" -f $s[0]) -ForegroundColor Red }
+    Remove-Item $o -Force -ErrorAction SilentlyContinue
+}
+Remove-Item $g11 -Force -ErrorAction SilentlyContinue
+
 if ($fail -ne 0) { Write-Host "$fail of $n FAILED" -ForegroundColor Red; exit 1 }
 Write-Host "$n/$n adversarial roundtrips lossless" -ForegroundColor Green
 exit 0   # the wrong-reference test leaves $LASTEXITCODE=1 on purpose

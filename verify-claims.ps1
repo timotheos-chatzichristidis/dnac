@@ -127,6 +127,15 @@ function Size($inFile, $ref, $level, $blocks, $exe, $flag) {
         throw "NOT LOSSLESS on $inFile - stop everything else and fix this"
     }
     $n = (Get-Item $out).Length
+    # A row that defends a document written before the checksum release measures
+    # what that document measured: the stream without its 8-byte CRC trailer. That
+    # is exact, not an estimate -- docs/checksum.md, C1: every 'DNH' stream is the
+    # v0.11.0 stream with 'C'->'H' and 8 bytes appended. Streams from pinned older
+    # builds ('DNC') have no trailer and are never adjusted.
+    if ($script:Pre12) {
+        $fs = [System.IO.File]::OpenRead($out); $m = New-Object byte[] 3; [void]$fs.Read($m, 0, 3); $fs.Close()
+        if ([System.Text.Encoding]::ASCII.GetString($m) -eq 'DNH') { $n -= 8 }
+    }
     Remove-Item $out, $rt -Force -ErrorAction SilentlyContinue
     $n
 }
@@ -283,6 +292,7 @@ $cueHuman   = Join-Path $root 'bench-external\cue\human'
 $script:CueExeMemo   = @{}
 $script:CueStateMemo = @{}
 $script:CueSizeMemo  = @{}
+$script:Pre12 = $false
 $script:CueMapMemo   = @{}
 
 # The flags each label in the docs was built with. Kept in step with
@@ -382,7 +392,7 @@ function CueState($label, $level) {
 }
 
 function CueSize($label, $inFile, $ref, $level) {
-    $key = "$label|$inFile|$ref|$level"
+    $key = "$label|$inFile|$ref|$level|$($script:Pre12)"
     if ($script:CueSizeMemo.ContainsKey($key)) { return $script:CueSizeMemo[$key] }
     $n = Size $inFile $ref $level $null (CueExe $label)
     $script:CueSizeMemo[$key] = $n
@@ -715,7 +725,7 @@ $F = { param($n)
 # the other three come from `sh scripts/get-data.sh --codon`.
 $script:CodonMemo = @{}
 function CodonSize($n, $level, $flag) {
-    $key = "$n|$level|$flag"
+    $key = "$n|$level|$flag|$($script:Pre12)"
     if (-not $script:CodonMemo.ContainsKey($key)) {
         $p = & $F $n
         if (-not (Test-Path $p)) { throw "missing $n - run: sh scripts/get-data.sh --codon" }
@@ -750,7 +760,7 @@ function V090Exe {
     $exe
 }
 function CaseSize($which, $n) {
-    $key = "size|$which|$n"
+    $key = "size|$which|$n|$($script:Pre12)"
     if (-not $script:CaseMemo.ContainsKey($key)) {
         $exe = if ($which -eq 'v090') { V090Exe } else { $dnac }
         $script:CaseMemo[$key] = Size (CaseFile $n) $null 3 $null $exe
@@ -813,22 +823,22 @@ END { print run }
 $claims = @(
   # --- the codon tracker (docs/codon-*.md) --------------------------------------
   @{ id='codon-ecoli-l1-off'; tier='fast'; doc='README.md'; unit='B'; tol=0
-     anchor='| E. coli K-12 MG1655 | 1,094,632 B | 1,069,614 B | −2.29% | 1,093,425 B | 1,066,106 B | −2.50% |'; expect=1094632
+     anchor='| E. coli K-12 MG1655 | 1,094,640 B | 1,069,622 B | −2.29% | 1,093,433 B | 1,066,114 B | −2.50% |'; expect=1094640
      measure={ CodonSize 'ecoli.fa' 1 '-nocodon' } }
   @{ id='codon-ecoli-l1'; tier='fast'; doc='README.md'; unit='B'; tol=0
-     anchor='| E. coli K-12 MG1655 | 1,094,632 B | 1,069,614 B | −2.29% | 1,093,425 B | 1,066,106 B | −2.50% |'; expect=1069614
+     anchor='| E. coli K-12 MG1655 | 1,094,640 B | 1,069,622 B | −2.29% | 1,093,433 B | 1,066,114 B | −2.50% |'; expect=1069622
      measure={ CodonSize 'ecoli.fa' 1 $null } }
   @{ id='codon-ecoli-l1-pct'; tier='fast'; doc='README.md'; unit='%'; tol=0
-     anchor='| E. coli K-12 MG1655 | 1,094,632 B | 1,069,614 B | −2.29% | 1,093,425 B | 1,066,106 B | −2.50% |'; expect=-2.29
+     anchor='| E. coli K-12 MG1655 | 1,094,640 B | 1,069,622 B | −2.29% | 1,093,433 B | 1,066,114 B | −2.50% |'; expect=-2.29
      measure={ CuePct (CodonSize 'ecoli.fa' 1 '-nocodon') (CodonSize 'ecoli.fa' 1 $null) } }
   @{ id='codon-ecoli-l3'; tier='fast'; doc='README.md'; unit='B'; tol=0
-     anchor='| E. coli K-12 MG1655 | 1,094,632 B | 1,069,614 B | −2.29% | 1,093,425 B | 1,066,106 B | −2.50% |'; expect=1093425
+     anchor='| E. coli K-12 MG1655 | 1,094,640 B | 1,069,622 B | −2.29% | 1,093,433 B | 1,066,114 B | −2.50% |'; expect=1093433
      measure={ CodonSize 'ecoli.fa' 3 $null } }
   @{ id='codon-ecoli-l3-on'; tier='fast'; doc='README.md'; unit='B'; tol=0
-     anchor='| E. coli K-12 MG1655 | 1,094,632 B | 1,069,614 B | −2.29% | 1,093,425 B | 1,066,106 B | −2.50% |'; expect=1066106
+     anchor='| E. coli K-12 MG1655 | 1,094,640 B | 1,069,622 B | −2.29% | 1,093,433 B | 1,066,114 B | −2.50% |'; expect=1066114
      measure={ CodonSize 'ecoli.fa' 3 '-codon' } }
   @{ id='codon-ecoli-l3-pct'; tier='fast'; doc='README.md'; unit='%'; tol=0
-     anchor='| E. coli K-12 MG1655 | 1,094,632 B | 1,069,614 B | −2.29% | 1,093,425 B | 1,066,106 B | −2.50% |'; expect=-2.5
+     anchor='| E. coli K-12 MG1655 | 1,094,640 B | 1,069,622 B | −2.29% | 1,093,433 B | 1,066,114 B | −2.50% |'; expect=-2.5
      measure={ CuePct (CodonSize 'ecoli.fa' 3 $null) (CodonSize 'ecoli.fa' 3 '-codon') } }
   @{ id='codon-bsub-l1-off'; tier='slow'; doc='README.md'; unit='B'; tol=0
      anchor='| B. subtilis 168 | 1,003,070 B | 986,937 B | −1.61% | 1,002,525 B | 985,292 B | −1.72% |'; expect=1003070
@@ -967,18 +977,18 @@ $claims = @(
      measure={ Bpb (Size (& $S 'ecoli.seq') $null 3) (Bases (& $S 'ecoli.seq')) } }
 
   @{ id='w3110-seq-bytes'; tier='fast'; doc='README.md'; unit='B'; tol=0
-     anchor='| W3110 vs MG1655 (near-identical strains) | 1,280 B | **1,063 B** | 1,404 B | 1,319 B |'
-     expect=1063
+     anchor='| W3110 vs MG1655 (near-identical strains) | 1,288 B | **1,071 B** | 1,404 B | 1,319 B |'
+     expect=1071
      measure={ Size (& $S 'w3110.seq') (& $S 'ecoli.seq') 3 } }
 
   @{ id='o157-seq-bytes'; tier='fast'; doc='README.md'; unit='B'; tol=0
-     anchor='| O157:H7 vs MG1655 (diverged strains) | 361,611 B | **360,752 B** | 431,652 B | 365,401 B |'
-     expect=360752
+     anchor='| O157:H7 vs MG1655 (diverged strains) | 361,619 B | **360,760 B** | 431,652 B | 365,401 B |'
+     expect=360760
      measure={ Size (& $S 'o157.seq') (& $S 'ecoli.seq') 3 } }
 
   @{ id='w3110-fa-bytes'; tier='fast'; doc='README.md'; unit='B'; tol=0
-     anchor='1,916 bytes for a 4.6 Mbp genome'
-     expect=1916
+     anchor='1,924 bytes for a 4.6 Mbp genome'
+     expect=1924
      measure={ Size (& $F 'w3110.fa') (& $F 'ecoli.fa') 3 } }
 
   @{ id='ecoli-fa-alone-bpb'; tier='fast'; doc='README.md'; unit='bpb'; tol=0.001
@@ -1012,13 +1022,13 @@ $claims = @(
   # -j sizes are published, so they are executed like every other figure. The
   # block count is part of the format, so these also prove the split itself.
   @{ id='ecoli-j2-bytes'; tier='fast'; doc='README.md'; unit='B'; tol=0
-     anchor='| 2 | 1,100,595 | +0.73% |'
-     expect=1100595
+     anchor='| 2 | 1,100,603 | +0.73% |'
+     expect=1100603
      measure={ Size (& $S 'ecoli.seq') $null 3 2 } }
 
   @{ id='ecoli-j8-bytes'; tier='fast'; doc='README.md'; unit='B'; tol=0
-     anchor='| 8 | 1,116,227 | +2.16% |'
-     expect=1116227
+     anchor='| 8 | 1,116,235 | +2.16% |'
+     expect=1116235
      measure={ Size (& $S 'ecoli.seq') $null 3 8 } }
 
   @{ id='chr21-ind-alone-bpb'; tier='slow'; doc='README.md'; unit='bpb'; tol=0.0006
@@ -1042,8 +1052,8 @@ $claims = @(
      measure={ Bpb (Size (& $F 'chr21_slice.fa') $null 2) (Bases (& $F 'chr21_slice.fa')) } }
 
   @{ id='slice-l3-bpb'; tier='fast'; doc='README.md'; unit='bpb'; tol=6e-05
-     anchor='| 3 `max` (default without a reference) | everything | 20.8 s | 1.7116 |'
-     expect=1.7116
+     anchor='| 3 `max` (default without a reference) | everything | 20.8 s | 1.7117 |'
+     expect=1.7117
      measure={ Bpb (Size (& $F 'chr21_slice.fa') $null 3) (Bases (& $F 'chr21_slice.fa')) } }
 
   # The level paragraph's load-bearing number: what IR training and the tolerant
@@ -1096,8 +1106,8 @@ $claims = @(
      measure={ Bpb (Size (& $S 'chr21slice.seq') $null 1) (Bases (& $S 'chr21slice.seq')) } }
 
   @{ id='ecoli-j4-bytes'; tier='fast'; doc='README.md'; unit='B'; tol=0
-     anchor='| 4 | 1,108,139 | +1.42% |'
-     expect=1108139
+     anchor='| 4 | 1,108,147 | +1.42% |'
+     expect=1108147
      measure={ Size (& $S 'ecoli.seq') $null 3 4 } }
 
   @{ id='chr21-j1-bytes'; tier='slow'; doc='README.md'; unit='B'; tol=0
@@ -1146,22 +1156,22 @@ $claims = @(
      measure={ Bpb (Geco (& $S 'ecoli.seq') '-l 16') (Bases (& $S 'ecoli.seq')) } }
 
   @{ id='geco-w3110-ref-bytes'; tier='extern'; doc='README.md'; unit='B'; tol=0
-     anchor='| W3110 vs MG1655 (near-identical strains) | 1,280 B | **1,063 B** | 1,404 B | 1,319 B |'
+     anchor='| W3110 vs MG1655 (near-identical strains) | 1,288 B | **1,071 B** | 1,404 B | 1,319 B |'
      expect=1404
      measure={ Geco (& $S 'w3110.seq') "$PARAMR -r ref.seq" (& $S 'ecoli.seq') } }
 
   @{ id='geco-w3110-hybrid-bytes'; tier='extern'; doc='README.md'; unit='B'; tol=0
-     anchor='| W3110 vs MG1655 (near-identical strains) | 1,280 B | **1,063 B** | 1,404 B | 1,319 B |'
+     anchor='| W3110 vs MG1655 (near-identical strains) | 1,288 B | **1,071 B** | 1,404 B | 1,319 B |'
      expect=1319
      measure={ Geco (& $S 'w3110.seq') "$PARAMH -r ref.seq" (& $S 'ecoli.seq') } }
 
   @{ id='geco-o157-ref-bytes'; tier='extern'; doc='README.md'; unit='B'; tol=0
-     anchor='| O157:H7 vs MG1655 (diverged strains) | 361,611 B | **360,752 B** | 431,652 B | 365,401 B |'
+     anchor='| O157:H7 vs MG1655 (diverged strains) | 361,619 B | **360,760 B** | 431,652 B | 365,401 B |'
      expect=431652
      measure={ Geco (& $S 'o157.seq') "$PARAMR -r ref.seq" (& $S 'ecoli.seq') } }
 
   @{ id='geco-o157-hybrid-bytes'; tier='extern'; doc='README.md'; unit='B'; tol=0
-     anchor='| O157:H7 vs MG1655 (diverged strains) | 361,611 B | **360,752 B** | 431,652 B | 365,401 B |'
+     anchor='| O157:H7 vs MG1655 (diverged strains) | 361,619 B | **360,760 B** | 431,652 B | 365,401 B |'
      expect=365401
      measure={ Geco (& $S 'o157.seq') "$PARAMH -r ref.seq" (& $S 'ecoli.seq') } }
 
@@ -2468,26 +2478,42 @@ $claims = @(
   # P3: the release's size on the real pair at its default level
   @{ id='b4-p3-chm13-l1'; tier='b4'; doc='docs/batch4.md'; unit='B'; tol=0
      anchor='CHM13 chr21 against GRCh38 chr21 at level 1, the release build: **563,031 B**,'
-     also=@(@{ doc='README.md'; anchor='| FASTA | 1,438,137 B (HRCM) | 547,019 B — **2.63x** | 563,031 B — **2.55x** |' })
+     expect=563031
+     measure={ CueHuman 'rel' 'chm13_chr21.fa' 'grch38_chr21.fa' 1 } }
+
+  @{ id='b4-p3-chm13-l1-readme'; tier='b4'; doc='README.md'; unit='B'; tol=0
+     anchor='| FASTA | 1,438,137 B (HRCM) | 547,019 B — **2.63x** | 563,031 B — **2.55x** |'
      expect=563031
      measure={ CueHuman 'rel' 'chm13_chr21.fa' 'grch38_chr21.fa' 1 } }
 
   # R1: per event at the release settings, level 3 (the records' level) and 1
   @{ id='b4-r1-v08-ind-l3'; tier='b4'; doc='docs/batch4.md'; unit='bits'; tol=0.005
      anchor='| 3 | v0.8.0 | 14.64 | **48.25** | 31.43 |'
-     also=@(@{ doc='README.md'; anchor='| **random indel** | 48.25 bits | **26.90 bits** | −44% |' })
+     expect=48.25
+     measure={ CuePerEvent 'v08' 'ind' 3 } }
+
+  @{ id='b4-r1-v08-ind-l3-readme'; tier='b4'; doc='README.md'; unit='bits'; tol=0.005
+     anchor='| **random indel** | 48.25 bits | **26.90 bits** | −44% |'
      expect=48.25
      measure={ CuePerEvent 'v08' 'ind' 3 } }
 
   @{ id='b4-r1-v08-sub-l3'; tier='b4'; doc='docs/batch4.md'; unit='bits'; tol=0.005
      anchor='| 3 | v0.8.0 | 14.64 | **48.25** | 31.43 |'
-     also=@(@{ doc='README.md'; anchor='| substitution | 14.64 bits | 14.75 bits |' })
+     expect=14.64
+     measure={ CuePerEvent 'v08' 'sub' 3 } }
+
+  @{ id='b4-r1-v08-sub-l3-readme'; tier='b4'; doc='README.md'; unit='bits'; tol=0.005
+     anchor='| substitution | 14.64 bits | 14.75 bits |'
      expect=14.64
      measure={ CuePerEvent 'v08' 'sub' 3 } }
 
   @{ id='b4-r1-rel-sub-l3'; tier='b4'; doc='docs/batch4.md'; unit='bits'; tol=0.005
      anchor='| 3 | release | 14.75 | **26.90** | **11.60** |'
-     also=@(@{ doc='README.md'; anchor='| substitution | 14.64 bits | 14.75 bits |' })
+     expect=14.75
+     measure={ CuePerEvent 'rel' 'sub' 3 } }
+
+  @{ id='b4-r1-rel-sub-l3-readme'; tier='b4'; doc='README.md'; unit='bits'; tol=0.005
+     anchor='| substitution | 14.64 bits | 14.75 bits |'
      expect=14.75
      measure={ CuePerEvent 'rel' 'sub' 3 } }
 
@@ -2499,7 +2525,11 @@ $claims = @(
 
   @{ id='b4-r1-rel-hp-l3'; tier='b4'; doc='docs/batch4.md'; unit='bits'; tol=0.005
      anchor='| 3 | release | 14.75 | **26.90** | **11.60** |'
-     also=@(@{ doc='README.md'; anchor='| **slip inside a homopolymer** | 31.43 bits | **11.60 bits** | −63% |' })
+     expect=11.60
+     measure={ CuePerEvent 'rel' 'hp' 3 } }
+
+  @{ id='b4-r1-rel-hp-l3-readme'; tier='b4'; doc='README.md'; unit='bits'; tol=0.005
+     anchor='| **slip inside a homopolymer** | 31.43 bits | **11.60 bits** | −63% |'
      expect=11.60
      measure={ CuePerEvent 'rel' 'hp' 3 } }
 
@@ -2510,26 +2540,42 @@ $claims = @(
 
   @{ id='b4-r1-osmosis-rel'; tier='b4'; doc='docs/batch4.md'; unit='ratio'; tol=0.0005
      anchor='43%** (ratio 0.571), against 9% without the cue (ratio 0.913)'
-     also=@(@{ doc='README.md'; anchor='**a fall of 43%**' })
+     expect=0.571
+     measure={ (CueHalves 'rel').hp.ratio } }
+
+  @{ id='b4-r1-osmosis-rel-readme'; tier='b4'; doc='README.md'; unit='ratio'; tol=0.0005
+     anchor='**a fall of 43%**'
      expect=0.571
      measure={ (CueHalves 'rel').hp.ratio } }
 
   @{ id='b4-r1-osmosis-v08'; tier='b4'; doc='docs/batch4.md'; unit='ratio'; tol=0.0005
      anchor='against 9% without the cue (ratio 0.913)'
-     also=@(@{ doc='README.md'; anchor='cue the same measurement falls 9%' })
+     expect=0.913
+     measure={ (CueHalves 'v08').hp.ratio } }
+
+  @{ id='b4-r1-osmosis-v08-readme'; tier='b4'; doc='README.md'; unit='ratio'; tol=0.0005
+     anchor='cue the same measurement falls 9%'
      expect=0.913
      measure={ (CueHalves 'v08').hp.ratio } }
 
   # R2, R3, and the level-1 default against v0.8.0's level 3
   @{ id='b4-r2-chr21ind-l3'; tier='b4'; doc='docs/batch4.md'; unit='%'; tol=0.005
      anchor='| `chr21_ind` | 3 | 113,925 | 100,806 | **−11.52%** | −11.52% |'
-     also=@(@{ doc='README.md'; anchor='**−11.52%**' })
+     expect=-11.52
+     measure={ CuePct (CueChr21Ind 'v08' 3) (CueChr21Ind 'rel' 3) } }
+
+  @{ id='b4-r2-chr21ind-l3-readme'; tier='b4'; doc='README.md'; unit='%'; tol=0.005
+     anchor='**−11.52%**'
      expect=-11.52
      measure={ CuePct (CueChr21Ind 'v08' 3) (CueChr21Ind 'rel' 3) } }
 
   @{ id='b4-r3-chm13-l3'; tier='b4'; doc='docs/batch4.md'; unit='%'; tol=0.005
      anchor='| CHM13 chr21 | 3 | 586,615 | 547,019 | **−6.75%** | −6.75% |'
-     also=@(@{ doc='README.md'; anchor='| whole file | **−6.75%** | **−6.57%** |' })
+     expect=-6.75
+     measure={ CuePct (CueHuman 'v08' 'chm13_chr21.fa' 'grch38_chr21.fa' 3) (CueHuman 'rel' 'chm13_chr21.fa' 'grch38_chr21.fa' 3) } }
+
+  @{ id='b4-r3-chm13-l3-readme'; tier='b4'; doc='README.md'; unit='%'; tol=0.005
+     anchor='| whole file | **−6.75%** | **−6.57%** |'
      expect=-6.75
      measure={ CuePct (CueHuman 'v08' 'chm13_chr21.fa' 'grch38_chr21.fa' 3) (CueHuman 'rel' 'chm13_chr21.fa' 'grch38_chr21.fa' 3) } }
 
@@ -2541,21 +2587,33 @@ $claims = @(
   # the loss: the level-1 default on the near-identical bacterial pair
   @{ id='b4-w3110-default-loss'; tier='b4'; doc='docs/batch4.md'; unit='%'; tol=0.005
      anchor='| W3110 | 1 | 2,130 | 2,121 | −0.42% | **+9.84%** |'
-     also=@(@{ doc='README.md'; anchor='| **W3110 vs MG1655** (near-identical) | 1,931 B | **2,121 B — +9.84%** | **1,916 B** |' })
      expect=9.84
+     measure={ CuePct (CueReal 'v08' 'w3110' 3) (CueReal 'rel' 'w3110' 1) } }
+
+  @{ id='b4-w3110-default-loss-readme'; tier='b4'; doc='README.md'; unit='%'; tol=0.005
+     anchor='| **W3110 vs MG1655** (near-identical) | 1,939 B | **2,129 B — +9.80%** | **1,924 B** |'
+     expect=9.80
      measure={ CuePct (CueReal 'v08' 'w3110' 3) (CueReal 'rel' 'w3110' 1) } }
 
   # R4, R5: the window split at the release settings (classes fixed by v0.8.0
   # at level 3), and the chr22 file
   @{ id='b4-r4-chr21-shared-l3'; tier='b4'; doc='docs/batch4.md'; unit='%'; tol=0.005
      anchor='| chr21 | 3 | **−19.36%** | −3.55% | **−0.26%** | −6.85% | −6.75% |'
-     also=@(@{ doc='README.md'; anchor='| on *shared* sequence (< 0.2 bits/base) | **−19.36%** | **−16.90%** |' })
+     expect=-19.36
+     measure={ CueWindows 'chm13_chr21' 'grch38_chr21' 'shared' 'rel' $null 3 } }
+
+  @{ id='b4-r4-chr21-shared-l3-readme'; tier='b4'; doc='README.md'; unit='%'; tol=0.005
+     anchor='| on *shared* sequence (< 0.2 bits/base) | **−19.36%** | **−16.90%** |'
      expect=-19.36
      measure={ CueWindows 'chm13_chr21' 'grch38_chr21' 'shared' 'rel' $null 3 } }
 
   @{ id='b4-r4-chr21-novel-l3'; tier='b4'; doc='docs/batch4.md'; unit='%'; tol=0.005
      anchor='| chr21 | 3 | **−19.36%** | −3.55% | **−0.26%** | −6.85% | −6.75% |'
-     also=@(@{ doc='README.md'; anchor='| on sequence one of them lacks (≥ 1.0) | −0.26% | −0.23% |' })
+     expect=-0.26
+     measure={ CueWindows 'chm13_chr21' 'grch38_chr21' 'novel' 'rel' $null 3 } }
+
+  @{ id='b4-r4-chr21-novel-l3-readme'; tier='b4'; doc='README.md'; unit='%'; tol=0.005
+     anchor='| on sequence one of them lacks (≥ 1.0) | −0.26% | −0.23% |'
      expect=-0.26
      measure={ CueWindows 'chm13_chr21' 'grch38_chr21' 'novel' 'rel' $null 3 } }
 
@@ -2566,19 +2624,31 @@ $claims = @(
 
   @{ id='b4-r5-chr22-shared-l3'; tier='b4'; doc='docs/batch4.md'; unit='%'; tol=0.005
      anchor='| chr22 | 3 | **−16.90%** | −4.51% | **−0.23%** | −6.64% | **−6.57%** |'
-     also=@(@{ doc='README.md'; anchor='| on *shared* sequence (< 0.2 bits/base) | **−19.36%** | **−16.90%** |' })
+     expect=-16.90
+     measure={ CueWindows 'chm13_chr22' 'grch38_chr22' 'shared' 'rel' $null 3 } }
+
+  @{ id='b4-r5-chr22-shared-l3-readme'; tier='b4'; doc='README.md'; unit='%'; tol=0.005
+     anchor='| on *shared* sequence (< 0.2 bits/base) | **−19.36%** | **−16.90%** |'
      expect=-16.90
      measure={ CueWindows 'chm13_chr22' 'grch38_chr22' 'shared' 'rel' $null 3 } }
 
   @{ id='b4-r5-chr22-novel-l3'; tier='b4'; doc='docs/batch4.md'; unit='%'; tol=0.005
      anchor='| chr22 | 3 | **−16.90%** | −4.51% | **−0.23%** | −6.64% | **−6.57%** |'
-     also=@(@{ doc='README.md'; anchor='| on sequence one of them lacks (≥ 1.0) | −0.26% | −0.23% |' })
+     expect=-0.23
+     measure={ CueWindows 'chm13_chr22' 'grch38_chr22' 'novel' 'rel' $null 3 } }
+
+  @{ id='b4-r5-chr22-novel-l3-readme'; tier='b4'; doc='README.md'; unit='%'; tol=0.005
+     anchor='| on sequence one of them lacks (≥ 1.0) | −0.26% | −0.23% |'
      expect=-0.23
      measure={ CueWindows 'chm13_chr22' 'grch38_chr22' 'novel' 'rel' $null 3 } }
 
   @{ id='b4-r5-chr22-file-l3'; tier='b4'; doc='docs/batch4.md'; unit='%'; tol=0.005
      anchor='| chr22 | 3 | **−16.90%** | −4.51% | **−0.23%** | −6.64% | **−6.57%** |'
-     also=@(@{ doc='README.md'; anchor='| whole file | **−6.75%** | **−6.57%** |' })
+     expect=-6.57
+     measure={ CuePct (CueHuman 'v08' 'chm13_chr22.fa' 'grch38_chr22.fa' 3) (CueHuman 'rel' 'chm13_chr22.fa' 'grch38_chr22.fa' 3) } }
+
+  @{ id='b4-r5-chr22-file-l3-readme'; tier='b4'; doc='README.md'; unit='%'; tol=0.005
+     anchor='| whole file | **−6.75%** | **−6.57%** |'
      expect=-6.57
      measure={ CuePct (CueHuman 'v08' 'chm13_chr22.fa' 'grch38_chr22.fa' 3) (CueHuman 'rel' 'chm13_chr22.fa' 'grch38_chr22.fa' 3) } }
 
@@ -2586,25 +2656,41 @@ $claims = @(
   # (the FASTA sizes are b4-p3 and b4-r3's; the competitors' own bytes are extern rows)
   @{ id='b4-r6-seq-l3'; tier='b4'; doc='docs/batch4.md'; unit='B'; tol=0
      anchor='| **541,353 B, 1.621x** | **557,497 B, 1.574x** |'
-     also=@(@{ doc='README.md'; anchor='| plain ACGT | 877,373 B (GeCo3 hybrid, unverified) | 541,353 B — **1.62x** | 557,497 B — **1.57x** |' })
+     expect=541353
+     measure={ CueHuman 'rel' 'chm13_chr21.seq' 'grch38_chr21.seq' 3 } }
+
+  @{ id='b4-r6-seq-l3-readme'; tier='b4'; doc='README.md'; unit='B'; tol=0
+     anchor='| plain ACGT | 877,373 B (GeCo3 hybrid, unverified) | 541,353 B — **1.62x** | 557,497 B — **1.57x** |'
      expect=541353
      measure={ CueHuman 'rel' 'chm13_chr21.seq' 'grch38_chr21.seq' 3 } }
 
   @{ id='b4-r6-seq-l1'; tier='b4'; doc='docs/batch4.md'; unit='B'; tol=0
      anchor='| **541,353 B, 1.621x** | **557,497 B, 1.574x** |'
-     also=@(@{ doc='README.md'; anchor='| plain ACGT | 877,373 B (GeCo3 hybrid, unverified) | 541,353 B — **1.62x** | 557,497 B — **1.57x** |' })
+     expect=557497
+     measure={ CueHuman 'rel' 'chm13_chr21.seq' 'grch38_chr21.seq' 1 } }
+
+  @{ id='b4-r6-seq-l1-readme'; tier='b4'; doc='README.md'; unit='B'; tol=0
+     anchor='| plain ACGT | 877,373 B (GeCo3 hybrid, unverified) | 541,353 B — **1.62x** | 557,497 B — **1.57x** |'
      expect=557497
      measure={ CueHuman 'rel' 'chm13_chr21.seq' 'grch38_chr21.seq' 1 } }
 
   @{ id='b4-r6-fa-l3'; tier='b4'; doc='docs/batch4.md'; unit='B'; tol=0
      anchor='| **547,019 B, 2.629x** | **563,031 B, 2.554x** |'
-     also=@(@{ doc='README.md'; anchor='| FASTA | 1,438,137 B (HRCM) | 547,019 B — **2.63x** | 563,031 B — **2.55x** |' })
+     expect=547019
+     measure={ CueHuman 'rel' 'chm13_chr21.fa' 'grch38_chr21.fa' 3 } }
+
+  @{ id='b4-r6-fa-l3-readme'; tier='b4'; doc='README.md'; unit='B'; tol=0
+     anchor='| FASTA | 1,438,137 B (HRCM) | 547,019 B — **2.63x** | 563,031 B — **2.55x** |'
      expect=547019
      measure={ CueHuman 'rel' 'chm13_chr21.fa' 'grch38_chr21.fa' 3 } }
 
   @{ id='b4-o157-default'; tier='b4'; doc='docs/batch4.md'; unit='%'; tol=0.005
      anchor='| O157 | 1 | 363,532 | 362,862 | −0.18% | **+0.05%** |'
-     also=@(@{ doc='README.md'; anchor='| O157:H7 vs MG1655 (diverged) | 362,666 B | 362,862 B — +0.05% | 362,006 B |' })
+     expect=0.05
+     measure={ CuePct (CueReal 'v08' 'o157' 3) (CueReal 'rel' 'o157' 1) } }
+
+  @{ id='b4-o157-default-readme'; tier='b4'; doc='README.md'; unit='%'; tol=0.005
+     anchor='| O157:H7 vs MG1655 (diverged) | 362,674 B | 362,870 B — +0.05% | 362,014 B |'
      expect=0.05
      measure={ CuePct (CueReal 'v08' 'o157' 3) (CueReal 'rel' 'o157' 1) } }
 
@@ -2701,8 +2787,8 @@ $claims = @(
   # v0.8.0 pass $v08 for that side and say so.
 
   @{ id='ecoli-j1-bytes'; tier='fast'; doc='README.md'; unit='B'; tol=0
-     anchor='| 1 (default) | 1,092,635 | — |'
-     expect=1092635
+     anchor='| 1 (default) | 1,092,643 | — |'
+     expect=1092643
      measure={ Size (& $S 'ecoli.seq') $null 3 } }
 
   @{ id='ecoli-ind-alone-bpb'; tier='fast'; doc='README.md'; unit='bpb'; tol=0.0006
@@ -2717,40 +2803,40 @@ $claims = @(
 
   # The loss the release ships with, in the units the README states it in.
   @{ id='w3110-fa-default-bytes'; tier='fast'; doc='README.md'; unit='B'; tol=0
-     anchor='| **W3110 vs MG1655** (near-identical) | 1,931 B | **2,121 B — +9.84%** | **1,916 B** |'
-     expect=2121
+     anchor='| **W3110 vs MG1655** (near-identical) | 1,939 B | **2,129 B — +9.80%** | **1,924 B** |'
+     expect=2129
      measure={ Size (& $F 'w3110.fa') (& $F 'ecoli.fa') 1 } }
 
   @{ id='w3110-fa-v08-bytes'; tier='fast'; doc='README.md'; unit='B'; tol=0
-     anchor='| **W3110 vs MG1655** (near-identical) | 1,931 B | **2,121 B — +9.84%** | **1,916 B** |'
-     expect=1931
+     anchor='| **W3110 vs MG1655** (near-identical) | 1,939 B | **2,129 B — +9.80%** | **1,924 B** |'
+     expect=1939
      measure={ Size (& $F 'w3110.fa') (& $F 'ecoli.fa') 3 $null $v08 } }
 
   @{ id='o157-fa-default-bytes'; tier='fast'; doc='README.md'; unit='B'; tol=0
-     anchor='| O157:H7 vs MG1655 (diverged) | 362,666 B | 362,862 B — +0.05% | 362,006 B |'
-     expect=362862
+     anchor='| O157:H7 vs MG1655 (diverged) | 362,674 B | 362,870 B — +0.05% | 362,014 B |'
+     expect=362870
      measure={ Size (& $F 'o157.fa') (& $F 'ecoli.fa') 1 } }
 
   @{ id='o157-fa-v08-bytes'; tier='fast'; doc='README.md'; unit='B'; tol=0
-     anchor='| O157:H7 vs MG1655 (diverged) | 362,666 B | 362,862 B — +0.05% | 362,006 B |'
-     expect=362666
+     anchor='| O157:H7 vs MG1655 (diverged) | 362,674 B | 362,870 B — +0.05% | 362,014 B |'
+     expect=362674
      measure={ Size (& $F 'o157.fa') (& $F 'ecoli.fa') 3 $null $v08 } }
 
   @{ id='w3110-seq-default-bytes'; tier='fast'; doc='README.md'; unit='B'; tol=0
-     anchor='| W3110 vs MG1655 (near-identical strains) | 1,280 B | **1,063 B** | 1,404 B | 1,319 B |'
-     expect=1280
+     anchor='| W3110 vs MG1655 (near-identical strains) | 1,288 B | **1,071 B** | 1,404 B | 1,319 B |'
+     expect=1288
      measure={ Size (& $S 'w3110.seq') (& $S 'ecoli.seq') 1 } }
 
   @{ id='o157-seq-default-bytes'; tier='fast'; doc='README.md'; unit='B'; tol=0
-     anchor='| O157:H7 vs MG1655 (diverged strains) | 361,611 B | **360,752 B** | 431,652 B | 365,401 B |'
-     expect=361611
+     anchor='| O157:H7 vs MG1655 (diverged strains) | 361,619 B | **360,760 B** | 431,652 B | 365,401 B |'
+     expect=361619
      measure={ Size (& $S 'o157.seq') (& $S 'ecoli.seq') 1 } }
 
   # What the cue is worth on the two bacterial pairs, stated as percentages in
   # the cue section.
   @{ id='ecoliind-cue-pct'; tier='fast'; doc='README.md'; unit='%'; tol=0.005
-     anchor='a simulated E. coli individual −4.21%'
-     expect=-4.21
+     anchor='a simulated E. coli individual −4.20%'
+     expect=-4.20
      measure={ CuePct (Size (& $F 'ecoli_ind.fa') (& $F 'ecoli.fa') 3 $null $v08) (Size (& $F 'ecoli_ind.fa') (& $F 'ecoli.fa') 3) } }
 
   @{ id='o157-cue-pct'; tier='fast'; doc='README.md'; unit='%'; tol=0.005
@@ -2774,34 +2860,54 @@ $claims = @(
   # reference and seed the document names, so the row re-derives the INPUT as
   # well as the number and a changed `mut` cannot pass unnoticed.
   @{ id='w5-mut005-penalty-bytes'; tier='b5'; doc='README.md'; unit='B'; tol=0
-     also=@(@{ doc='docs/batch5.md'; anchor='| `mut` 0.05 ‰ | 2,018 | 2,013 | **−5 B** | **−0.25%** | 232 | 23 |' })
      anchor='**level 1 is 5 bytes smaller, where W3110'
      expect=-5
      measure={ MutPenalty '0.05' 'bytes' } }
 
+  @{ id='w5-mut005-penalty-bytes-doc'; tier='b5'; doc='docs/batch5.md'; unit='B'; tol=0
+     anchor='| `mut` 0.05 ‰ | 2,018 | 2,013 | **−5 B** | **−0.25%** | 232 | 23 |'
+     expect=-5
+     measure={ MutPenalty '0.05' 'bytes' } }
+
   @{ id='w5-mut50-penalty-pct'; tier='b5'; doc='README.md'; unit='%'; tol=0.005
-     also=@(@{ doc='docs/batch5.md'; anchor='| `mut` 5.0 ‰ | 42,933 | 43,710 | 777 B | +1.81% | 23,208 | 2,320 |' })
      anchor='−0.25%, +0.74%, +1.21% and +1.81%'
      expect=1.81
      measure={ MutPenalty '5.0' 'pct' } }
 
+  @{ id='w5-mut50-penalty-pct-doc'; tier='b5'; doc='docs/batch5.md'; unit='%'; tol=0.005
+     anchor='| `mut` 5.0 ‰ | 42,933 | 43,710 | 777 B | +1.81% | 23,208 | 2,320 |'
+     expect=1.81
+     measure={ MutPenalty '5.0' 'pct' } }
+
   @{ id='w5-w3110-penalty-bytes'; tier='b5'; doc='README.md'; unit='B'; tol=0
-     also=@(@{ doc='docs/batch5.md'; anchor='| **W3110** | 1,916 | 2,121 | **205 B** | **+10.70%** | | |' })
      anchor='**level 1 is 5 bytes smaller, where W3110'
+     expect=205
+     measure={ (Size (& $F 'w3110.fa') (& $F 'ecoli.fa') 1) - (Size (& $F 'w3110.fa') (& $F 'ecoli.fa') 3) } }
+
+  @{ id='w5-w3110-penalty-bytes-doc'; tier='b5'; doc='docs/batch5.md'; unit='B'; tol=0
+     anchor='| **W3110** | 1,916 | 2,121 | **205 B** | **+10.70%** | | |'
      expect=205
      measure={ (Size (& $F 'w3110.fa') (& $F 'ecoli.fa') 1) - (Size (& $F 'w3110.fa') (& $F 'ecoli.fa') 3) } }
 
   # W5: the whole gap is the mixer's expert count. An experimental build, which
   # marks its own archives, so it can never be confused with the release.
   @{ id='w5-x4-w3110-bytes'; tier='b5'; doc='README.md'; unit='B'; tol=0
-     also=@(@{ doc='docs/batch5.md'; anchor='| **four mixer experts (`L1_NMIX=4`)** | **1,907** | **104%** |' })
-     anchor='W3110 2,121 → 1,907 B; a simulated E. coli individual 12,204 → 12,051 B,'
+     anchor='W3110 2,129 → 1,915 B; a simulated E. coli individual 12,212 → 12,059 B,'
+     expect=1915
+     measure={ Size (& $F 'w3110.fa') (& $F 'ecoli.fa') 1 $null (CueExe 'rel_x4') } }
+
+  @{ id='w5-x4-w3110-bytes-doc'; tier='b5'; doc='docs/batch5.md'; unit='B'; tol=0
+     anchor='| **four mixer experts (`L1_NMIX=4`)** | **1,907** | **104%** |'
      expect=1907
      measure={ Size (& $F 'w3110.fa') (& $F 'ecoli.fa') 1 $null (CueExe 'rel_x4') } }
 
   @{ id='w5-x4-ecoliind-bytes'; tier='b5'; doc='README.md'; unit='B'; tol=0
-     also=@(@{ doc='docs/batch5.md'; anchor='| `ecoli_ind` (simulated individual) | 12,204 | **12,051** | 12,051 |' })
-     anchor='W3110 2,121 → 1,907 B; a simulated E. coli individual 12,204 → 12,051 B,'
+     anchor='W3110 2,129 → 1,915 B; a simulated E. coli individual 12,212 → 12,059 B,'
+     expect=12059
+     measure={ Size (& $F 'ecoli_ind.fa') (& $F 'ecoli.fa') 1 $null (CueExe 'rel_x4') } }
+
+  @{ id='w5-x4-ecoliind-bytes-doc'; tier='b5'; doc='docs/batch5.md'; unit='B'; tol=0
+     anchor='| `ecoli_ind` (simulated individual) | 12,204 | **12,051** | 12,051 |'
      expect=12051
      measure={ Size (& $F 'ecoli_ind.fa') (& $F 'ecoli.fa') 1 $null (CueExe 'rel_x4') } }
 
@@ -2847,8 +2953,12 @@ function Run-Claim($c) {
     # Measure first even when the anchor is missing: when a claim goes red you
     # want the number to write into the doc, not just the news that it is wrong.
     $sw = [Diagnostics.Stopwatch]::StartNew()
+    # README describes the current release; every other doc is a dated record
+    # (see Size: such rows measure streams without the checksum trailer)
+    $script:Pre12 = ($c.doc -ne 'README.md')
     try   { $m = & $c.measure }
-    catch { return [pscustomobject]@{ id=$c.id; tier=$c.tier; status='ERROR'; expected=$c.expect; measured=''; note=$_.Exception.Message } }
+    catch { $script:Pre12 = $false; return [pscustomobject]@{ id=$c.id; tier=$c.tier; status='ERROR'; expected=$c.expect; measured=''; note=$_.Exception.Message } }
+    $script:Pre12 = $false
     $a = Check-Anchor $c
     if (-not $a.ok) { return [pscustomobject]@{ id=$c.id; tier=$c.tier; status='ANCHOR'; expected=$c.expect; measured=$m; note=$a.why } }
     $d = [math]::Abs([double]$m - [double]$c.expect)

@@ -2888,6 +2888,16 @@ $claims = @(
         $r = Size (& $S 'ecoli.seq') $null 1
         [math]::Round(100.0 * ($r / $b - 1.0), 3) } }
 
+  # The row above runs level 1 as released, so since v0.11.0 the tracker is on
+  # in both builds. This twin is the pre-tracker condition; it rounds the same.
+  @{ id='ecoli-cue-l1-nocodon-pct'; tier='fast'; doc='README.md'; unit='%'; tol=0.0005
+     anchor='**0.010% with `-nocodon`**'
+     expect=0.010
+     measure={
+        $b = Size (& $S 'ecoli.seq') $null 1 $null $v08 '-nocodon'
+        $r = Size (& $S 'ecoli.seq') $null 1 $null $null '-nocodon'
+        [math]::Round(100.0 * ($r / $b - 1.0), 3) } }
+
   @{ id='ecoli-cue-j8-pct'; tier='fast'; doc='README.md'; unit='%'; tol=0.0005
      anchor='**+0.013% at `-j 8`**'
      expect=0.013

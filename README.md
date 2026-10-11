@@ -164,7 +164,9 @@ repeats, which are rarer and come later
 headline is not where this mechanism lives.
 
 It is not free everywhere, and the places it costs are small and worth naming:
-**+0.010% on E. coli at level 1** without a reference, **+0.013% at `-j 8`**
+**+0.010% on E. coli at level 1** without a reference (measured with the codon
+tracker on, as level 1 runs a bacterium by default; it is **0.010% with `-nocodon`**
+too), **+0.013% at `-j 8`**
 (a block is short, so there is less established match to lose), and **3 bytes on
 1,060** on the plain-ACGT W3110 pair at level 3 — the one reference-mode case
 where it is a loss at all.

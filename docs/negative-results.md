@@ -81,6 +81,11 @@ reverted because it did not pay:
 | Multiple match candidates per anchor bucket | +0.004 % for 2× the memory |
 | A tandem/HOR periodicity model | redundant with the match model |
 | An order-1 model stacked on top of MTF (byte sibling) | markedly worse — MTF *is* an order-1 decorrelator; stacking double-counts |
+| Heavy-ball momentum on the mixer weights (2026-09-29, `docs/mix-momentum.md`) | ±0.002 % on every file, held-out mean +0.0004 % against a −0.30 % bar |
+| The 16-mer match model replaced by an "agreement ≥ 16" context bit (2026-10-11, `docs/match-wire.md`) | chr21 +0.129 %, the bit recovers 15 % of the removal's cost; −10 % RAM is 7.5× worse per MB than HASHBITS 26→25 |
+| Reference mode without the 16-mer model (2026-10-11, `docs/ref-nomatch16.md`) | gained −0.98 % on development pairs that were simulated (substitutions only); held-out mean **+0.49 %**, real pairs +0.5..+1.5 % (CHM13 chr21 +1.46 %) |
+| A stricter codon gate (G ≥ 3.0) or a 256 Kbase trial gate (2026-10-11, `docs/codon-gate2.md`) | mean regret on 9 unseen genomes 0.61 / 0.31 pp against the release gate's 0.36; the trial misjudges gene-dense yeasts. The release gate itself misses H. pylori (G 1.74, tracker −2.77 %) |
+| Lowercase `n` in the case list (2026-10-11, `docs/lowercase-n.md`) | chr21 −6,688 B (0.085 %), but chr22 only −2,620 B (0.035 %) against a 0.05 % bar on both; a format change for ~0.03–0.09 % |
 
 ---
 

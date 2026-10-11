@@ -16,7 +16,7 @@ README measured.
 
 | genome (bases) | tool | bytes | bits/base | compress | vs best GeCo3 |
 |---|---|---:|---:|---:|---:|
-| E. coli (4,641,652) | **dnac `-l 1`** (default, tracker) | 1,068,546 | **1.8417** | **6.65 s** | **-2.57%** |
+| E. coli (4,641,652) | **dnac `-l 1`** (tracker on by default at this level) | 1,068,546 | **1.8417** | **6.65 s** | **-2.57%** |
 | | dnac `-l 3 -codon` | 1,064,985 | 1.8355 | 11.17 s | -2.90% |
 | | dnac `-l 3` | 1,092,643 | 1.8832 | 11.12 s | -0.38% |
 | | dnac `-l 1 -nocodon` | 1,093,862 | 1.8853 | 5.28 s | -0.26% |
@@ -45,8 +45,12 @@ README measured.
 | | GeCo3 `-l 9` | 647,678 | 1.8365 | 8.63 s | +0.03% |
 | | GeCo3 `-l 14` | 648,305 | 1.8383 | 19.57 s | +0.13% |
 
-**On all four bacteria the dnac default (`-l 1`, tracker on) is 2.0-3.8% smaller than
-GeCo3's best level and faster than GeCo3's fastest.** Without the tracker the margin is
+**On all four bacteria dnac `-l 1` (where the tracker is on by default) is 2.0-3.8% smaller
+than GeCo3's best level and faster than GeCo3's fastest.** The CLI's default level for `c`
+is 3, which does NOT use the tracker unless asked (`-codon`): at that default the lead is
+0.18-0.39%. A correction made while writing the README rows: an earlier draft of this
+section and of the commit message called `-l 1` "the default"; it is the default only of
+`cr`/`prime`, and the level at which the tracker is on by default. Without the tracker the margin is
 0.2-0.4%, and on P. aeruginosa level 1 `-nocodon` is 0.08% BEHIND GeCo3 `-l 16`: the old
 margin was thin, the tracker is what makes it a lead.
 
@@ -61,9 +65,9 @@ margin was thin, the tracker is what makes it a lead.
 
 ## What goes to the README (separate change, through a PR)
 
-Proposed: a bacteria block in the head-to-head table with the default (`-l 1`), `-l 3
+Proposed: a bacteria block in the head-to-head table with `-l 1` (tracker on), `-l 3
 -codon`, and GeCo3's best and fastest level per genome, each with a verify-claims row in
 tier `extern`; and the E. coli rows updated so the table no longer shows only the pre-tracker
 level 3. The sentence "on all three datasets dnac has a setting that is at once faster and
-smaller than every GeCo3 setting tested" extends to seven datasets, with the default as
-that setting on all four bacteria.
+smaller than every GeCo3 setting tested" extends to seven datasets, with `-l 1` as that setting on all four
+bacteria -- named as such, not as "the default".

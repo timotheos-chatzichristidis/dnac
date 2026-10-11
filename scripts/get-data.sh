@@ -199,6 +199,11 @@ if [ "${1:-}" = "--codon" ]; then
     '04b865e316d64ee393dcffcf1cc31c7eaa14a38f4a74c04e385d2acb8e819731 *saur.fa' > codon.sha256
   sha256sum -c codon.sha256 || { echo "  CODON GENOMES DIFFER from what the figures were measured on" >&2; exit 1; }
   rm -f codon.sha256
+  # their plain-ACGT twins, for the README's GeCo3 table (docs/geco3-bacteria.md)
+  mkdir -p ../bench-external/seq
+  for g in bsub paer saur; do
+    [ -s "../bench-external/seq/$g.seq" ] || sh ../scripts/mkseq.sh "$g.fa" "../bench-external/seq/$g.seq"
+  done
 fi
 
 if [ "${1:-}" = "--sim" ]; then

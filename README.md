@@ -215,6 +215,37 @@ this 16 GB machine for the full chromosome — it spent 7 minutes at 19% CPU
 swapping before being stopped. The 10 MB chr21 slice exists in the table so that
 `-l 16` gets measured on human sequence at a size where it does fit.
 
+**Bacteria, with the codon tracker (since v0.11.0).** The E. coli rows above are
+level 3, which does not use the tracker unless asked. At level 1 the tracker is on by
+default for a bacterium, and that is the setting this table compares — four genomes,
+one later session (2026-10-11, v0.12.0), so its times are comparable with each other,
+not with the table above ([docs/geco3-bacteria.md](docs/geco3-bacteria.md)):
+
+| genome (bases) | tool | bits/base | compress |
+|---|---|:---:|---:|
+| E. coli (4,641,652) | **dnac `-l 1`** | **1.8417** | **6.65 s** |
+| | dnac `-l 3 -codon` | 1.8355 | 11.17 s |
+| | GeCo3 `-l 9` (its best here) | 1.8903 | 10.81 s |
+| | GeCo3 `-l 16` | 1.8913 | 97.35 s |
+| B. subtilis 168 (4,215,606) | **dnac `-l 1`** | **1.8698** | **6.61 s** |
+| | dnac `-l 3 -codon` | 1.8665 | 10.72 s |
+| | GeCo3 `-l 9` (its best here) | 1.9084 | 10.10 s |
+| | GeCo3 `-l 16` | 1.9102 | 108.74 s |
+| P. aeruginosa PAO1 (6,264,404) | **dnac `-l 1`** | **1.6999** | **9.64 s** |
+| | dnac `-l 3 -codon` | 1.6944 | 14.88 s |
+| | GeCo3 `-l 9` | 1.7728 | 13.44 s |
+| | GeCo3 `-l 16` (its best here) | 1.7671 | 101.14 s |
+| S. aureus NCTC 8325 (2,821,360) | **dnac `-l 1`** | **1.7872** | **3.68 s** |
+| | dnac `-l 3 -codon` | 1.7837 | 7.39 s |
+| | GeCo3 `-l 9` | 1.8365 | 8.63 s |
+| | GeCo3 `-l 16` (its best here) | 1.8359 | 50.56 s |
+
+**On all four, dnac `-l 1` is 2.0–3.8% smaller than GeCo3's best level and faster than
+its fastest.** The tracker is what makes it a lead: without it (`-l 1 -nocodon`) the
+lead nearly vanishes, and on P. aeruginosa it turns into a deficit of 0.08% against
+GeCo3 `-l 16`. `-l 3 -codon` is smaller still, at more time. GeCo3's sizes are its `.co`
+files, unverified (its decoder is not run here, see below); every dnac size round-tripped.
+
 **Reference-based**, with the GeCo3 authors' own reference templates from their
 `benchmark/run_ref.sh` (`-rm 20:500:1:35:0.95/3:100:0.95 -rm 13:200:... -lr 0.03
 -hs 64`, and the hybrid variant that adds target models):

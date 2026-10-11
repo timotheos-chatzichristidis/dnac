@@ -1,0 +1,100 @@
+diff --git a/dnac.c b/dnac.c
+index 3de3bbb..1d6694a 100644
+--- a/dnac.c
++++ b/dnac.c
+@@ -410,6 +410,20 @@ static TLS int g_nmix  = NMIX;     /* experts actually used this run (<= NMIX) *
+ #endif
+ static TLS double    g_w[NMIX][NNODES][MIXCTX][MAXIN]; /* expert weights per node/ctx/input */
+ static TLS double    g_v[NNODES][MIXCTX][NMIX + 1];    /* second layer (+bias), per regime  */
++/* Residual momentum (heavy-ball) on the mixer weights, EXPERIMENTAL. MIX_MOM is beta
++   in per-mille; 0 compiles to the plain update. The step is scaled by (1-beta), so a
++   steady gradient moves a weight exactly as far as today: only the inertia is new.
++   MIX_MOM2=1 gives the second layer the same momentum. docs/mix-momentum-prediction.md */
++#ifndef MIX_MOM
++#define MIX_MOM  0
++#endif
++#ifndef MIX_MOM2
++#define MIX_MOM2 0
++#endif
++#if MIX_MOM
++static TLS double    g_wm[NMIX][NNODES][MIXCTX][MAXIN]; /* velocity of g_w                 */
++static TLS double    g_vm[NNODES][MIXCTX][NMIX + 1];    /* velocity of g_v (MIX_MOM2)       */
++#endif
+ typedef struct { double x[NMIX], p[NMIX]; } MixState;
+ static uint32_t pq_of_(double p);
+ static TLS double    g_apm1[APM_MAXCTX][APM_BINS]; /* SSE stage 1 (match-state context) */
+@@ -1096,7 +1110,7 @@ static void geometry_for(size_t sizing_n, int *hb, int *mhb) {
+    them (scripts/cue/), never by a decoder. */
+ #define DNAC_EXPERIMENTAL (CUE_L != 3 || CUE_D != 12 || CUE_SWITCH != 12 || CUE_MINLEN != 4 \
+                            || CUE_ROOM != 1 || CUE_MIXFREE != 0                             \
+-                           || L1_NMIX != 2 || L1_IR || L1_STCM || L1_ORDERS)
++                           || L1_NMIX != 2 || L1_IR || L1_STCM || L1_ORDERS                                          || MIX_MOM != 0)
+ 
+ /* The fourth byte of a stream's magic says which family wrote it. The header
+    after it is the same in every family, so no size moves with the letter.
+@@ -1240,6 +1254,10 @@ static int mix_setup(int maxorder, size_t sizing_n, size_t seq_alloc, int hb, in
+             for (int k = 0; k < NMIX; k++) g_v[n][c][k] = (k < g_nmix) ? 1.0 / g_nmix : 0.0;
+             g_v[n][c][NMIX] = 0.0;
+         }
++#if MIX_MOM
++    memset(g_wm, 0, sizeof g_wm);
++    memset(g_vm, 0, sizeof g_vm);
++#endif
+ 
+     /* SSE/APM: initialise every context's curve in both stages to the identity map */
+     for (int c = 0; c < APM_MAXCTX; c++)
+@@ -1460,10 +1478,32 @@ static void mix_update(int node, const int *mc, const double *st, uint16_t *cons
+             g_w[k][node][0][ci] += MIX_LR * errk * st[ci];
+         } else
+ #endif
++#if MIX_MOM
++        {
++            const double b = MIX_MOM / 1000.0, g = (1.0 - b) * MIX_LR * errk;
++            double *m = g_wm[k][node][mc[k]];
++            for (int i = 0; i < g_nin; i++) { m[i] = b * m[i] + g * st[i]; w[i] += m[i]; }
++        }
++#else
+         for (int i = 0; i < g_nin; i++) w[i] += MIX_LR * errk * st[i];
++#endif
++#if MIX_MOM && MIX_MOM2
++        {
++            double *vm = &g_vm[node][mc[0]][k];
++            *vm = (MIX_MOM / 1000.0) * *vm + (1.0 - MIX_MOM / 1000.0) * MIX_LR2 * errf * ms->x[k];
++            g_v[node][mc[0]][k] += *vm;
++        }
++    }
++    {
++        double *vm = &g_vm[node][mc[0]][NMIX];
++        *vm = (MIX_MOM / 1000.0) * *vm + (1.0 - MIX_MOM / 1000.0) * MIX_LR2 * errf;
++        g_v[node][mc[0]][NMIX] += *vm;
++    }
++#else
+         g_v[node][mc[0]][k] += MIX_LR2 * errf * ms->x[k];
+     }
+     g_v[node][mc[0]][NMIX] += MIX_LR2 * errf;
++#endif
+     for (int i = 0; i < g_nin; i++) ctr_upd(slot[i], bit);
+ }
+ 
+@@ -1793,6 +1833,10 @@ static int state_save(const char *path, int k, uint64_t refn, uint64_t reffp) {
+     }
+     ok &= wr(g_w, sizeof(double), (size_t)NMIX * NNODES * MIXCTX * MAXIN, f);
+     ok &= wr(g_v, sizeof(double), (size_t)NNODES * MIXCTX * (NMIX + 1), f);
++#if MIX_MOM
++    ok &= wr(g_wm, sizeof g_wm, 1, f);
++    ok &= wr(g_vm, sizeof g_vm, 1, f);
++#endif
+     ok &= wr(g_apm1, sizeof(double), (size_t)APM_MAXCTX * APM_BINS, f);
+     ok &= wr(g_apm2, sizeof(double), (size_t)APM_MAXCTX * APM_BINS, f);
+     put64(f, g_thist); put64(f, (uint64_t)g_tfail); put64(f, (uint64_t)g_tpred);
+@@ -1880,6 +1924,10 @@ static int state_load(const char *path, size_t extra, int *k_out,
+     }
+     ok &= rd(g_w, sizeof(double), (size_t)NMIX * NNODES * MIXCTX * MAXIN, f);
+     ok &= rd(g_v, sizeof(double), (size_t)NNODES * MIXCTX * (NMIX + 1), f);
++#if MIX_MOM
++    ok &= rd(g_wm, sizeof g_wm, 1, f);
++    ok &= rd(g_vm, sizeof g_vm, 1, f);
++#endif
+     ok &= rd(g_apm1, sizeof(double), (size_t)APM_MAXCTX * APM_BINS, f);
+     ok &= rd(g_apm2, sizeof(double), (size_t)APM_MAXCTX * APM_BINS, f);
+     g_thist = get64(f); g_tfail = (int)get64(f); g_tpred = (int)get64(f);

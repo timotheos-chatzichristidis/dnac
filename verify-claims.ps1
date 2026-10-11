@@ -768,6 +768,23 @@ function CodonSize($n, $level, $flag) {
     $script:CodonMemo[$key]
 }
 
+# --- GeCo3 on the bacteria, with the tracker (docs/geco3-bacteria.md) -----------
+# The plain-ACGT .seq of the four bacteria; the three beyond E. coli are made by
+# `sh scripts/get-data.sh --codon`. GeCo3 -l 16 costs ~100 s and 8.4 GB a run, and
+# several rows share one, so its sizes are memoised per process.
+function BactSeq($n) {
+    $p = & $S "$n.seq"
+    if (-not (Test-Path $p)) { throw "missing $n.seq - run: sh scripts/get-data.sh --codon" }
+    $p
+}
+$script:GecoMemo = @{}
+function GecoM($n, $argline) {
+    $key = "$n|$argline"
+    if (-not $script:GecoMemo.ContainsKey($key)) { $script:GecoMemo[$key] = Geco (BactSeq $n) $argline }
+    $script:GecoMemo[$key]
+}
+function BactBpb($n, $bytes) { Bpb $bytes (Bases (BactSeq $n)) }
+
 # --- v0.10.0: the case list ---------------------------------------------------
 # The soft-masked figures compare two releases on one file, so the other side is
 # the v0.9.0 TAG's source, not a flag on this one: v0.9.0 has no switch that
@@ -1182,12 +1199,98 @@ $claims = @(
   @{ id='geco-ecoli-l9-bpb'; tier='extern'; doc='README.md'; unit='bpb'; tol=0.0002
      anchor='| GeCo3 `-l 9` | 1.8903 |'
      expect=1.8903
+     also=@(@{ doc='README.md'; anchor='| | GeCo3 `-l 9` (its best here) | 1.8903 | 10.81 s |' })
      measure={ Bpb (Geco (& $S 'ecoli.seq') '-l 9') (Bases (& $S 'ecoli.seq')) } }
 
   @{ id='geco-ecoli-l16-bpb'; tier='extern'; doc='README.md'; unit='bpb'; tol=0.0002
      anchor='| GeCo3 `-l 16` | 1.8913 |'
      expect=1.8913
+     also=@(@{ doc='README.md'; anchor='| | GeCo3 `-l 16` | 1.8913 | 97.35 s |' })
      measure={ Bpb (Geco (& $S 'ecoli.seq') '-l 16') (Bases (& $S 'ecoli.seq')) } }
+
+  @{ id='gb-ecoli-l1-bpb'; tier='fast'; doc='README.md'; unit='bpb'; tol=0.0002
+     anchor='| E. coli (4,641,652) | **dnac `-l 1`** | **1.8417** | **6.65 s** |'
+     expect=1.8417
+     measure={ BactBpb 'ecoli' (Size (BactSeq 'ecoli') $null 1) } }
+
+  @{ id='gb-ecoli-l3codon-bpb'; tier='fast'; doc='README.md'; unit='bpb'; tol=0.0002
+     anchor='| | dnac `-l 3 -codon` | 1.8355 | 11.17 s |'
+     expect=1.8355
+     measure={ BactBpb 'ecoli' (Size (BactSeq 'ecoli') $null 3 $null $null '-codon') } }
+
+  @{ id='gb-bsub-l1-bpb'; tier='slow'; doc='README.md'; unit='bpb'; tol=0.0002
+     anchor='| B. subtilis 168 (4,215,606) | **dnac `-l 1`** | **1.8698** | **6.61 s** |'
+     expect=1.8698
+     measure={ BactBpb 'bsub' (Size (BactSeq 'bsub') $null 1) } }
+
+  @{ id='gb-bsub-l3codon-bpb'; tier='slow'; doc='README.md'; unit='bpb'; tol=0.0002
+     anchor='| | dnac `-l 3 -codon` | 1.8665 | 10.72 s |'
+     expect=1.8665
+     measure={ BactBpb 'bsub' (Size (BactSeq 'bsub') $null 3 $null $null '-codon') } }
+
+  @{ id='gb-bsub-geco-l9-bpb'; tier='extern'; doc='README.md'; unit='bpb'; tol=0.0002
+     anchor='| | GeCo3 `-l 9` (its best here) | 1.9084 | 10.10 s |'
+     expect=1.9084
+     measure={ BactBpb 'bsub' (GecoM 'bsub' '-l 9') } }
+
+  @{ id='gb-bsub-geco-l16-bpb'; tier='extern'; doc='README.md'; unit='bpb'; tol=0.0002
+     anchor='| | GeCo3 `-l 16` | 1.9102 | 108.74 s |'
+     expect=1.9102
+     measure={ BactBpb 'bsub' (GecoM 'bsub' '-l 16') } }
+
+  @{ id='gb-paer-l1-bpb'; tier='slow'; doc='README.md'; unit='bpb'; tol=0.0002
+     anchor='| P. aeruginosa PAO1 (6,264,404) | **dnac `-l 1`** | **1.6999** | **9.64 s** |'
+     expect=1.6999
+     measure={ BactBpb 'paer' (Size (BactSeq 'paer') $null 1) } }
+
+  @{ id='gb-paer-l3codon-bpb'; tier='slow'; doc='README.md'; unit='bpb'; tol=0.0002
+     anchor='| | dnac `-l 3 -codon` | 1.6944 | 14.88 s |'
+     expect=1.6944
+     measure={ BactBpb 'paer' (Size (BactSeq 'paer') $null 3 $null $null '-codon') } }
+
+  @{ id='gb-paer-geco-l9-bpb'; tier='extern'; doc='README.md'; unit='bpb'; tol=0.0002
+     anchor='| | GeCo3 `-l 9` | 1.7728 | 13.44 s |'
+     expect=1.7728
+     measure={ BactBpb 'paer' (GecoM 'paer' '-l 9') } }
+
+  @{ id='gb-paer-geco-l16-bpb'; tier='extern'; doc='README.md'; unit='bpb'; tol=0.0002
+     anchor='| | GeCo3 `-l 16` (its best here) | 1.7671 | 101.14 s |'
+     expect=1.7671
+     measure={ BactBpb 'paer' (GecoM 'paer' '-l 16') } }
+
+  @{ id='gb-saur-l1-bpb'; tier='slow'; doc='README.md'; unit='bpb'; tol=0.0002
+     anchor='| S. aureus NCTC 8325 (2,821,360) | **dnac `-l 1`** | **1.7872** | **3.68 s** |'
+     expect=1.7872
+     measure={ BactBpb 'saur' (Size (BactSeq 'saur') $null 1) } }
+
+  @{ id='gb-saur-l3codon-bpb'; tier='slow'; doc='README.md'; unit='bpb'; tol=0.0002
+     anchor='| | dnac `-l 3 -codon` | 1.7837 | 7.39 s |'
+     expect=1.7837
+     measure={ BactBpb 'saur' (Size (BactSeq 'saur') $null 3 $null $null '-codon') } }
+
+  @{ id='gb-saur-geco-l9-bpb'; tier='extern'; doc='README.md'; unit='bpb'; tol=0.0002
+     anchor='| | GeCo3 `-l 9` | 1.8365 | 8.63 s |'
+     expect=1.8365
+     measure={ BactBpb 'saur' (GecoM 'saur' '-l 9') } }
+
+  @{ id='gb-saur-geco-l16-bpb'; tier='extern'; doc='README.md'; unit='bpb'; tol=0.0002
+     anchor='| | GeCo3 `-l 16` (its best here) | 1.8359 | 50.56 s |'
+     expect=1.8359
+     measure={ BactBpb 'saur' (GecoM 'saur' '-l 16') } }
+
+  # the two ends of "2.0-3.8% smaller than GeCo3's best level" (B. subtilis, P. aeruginosa)
+  @{ id='gb-lead-min-pct'; tier='extern'; doc='README.md'; unit='%'; tol=0.05
+     anchor='dnac `-l 1` is 2.0–3.8% smaller than GeCo3'
+     expect=2.0
+     measure={ -(CuePct (GecoM 'bsub' '-l 9') (Size (BactSeq 'bsub') $null 1)) } }
+  @{ id='gb-lead-max-pct'; tier='extern'; doc='README.md'; unit='%'; tol=0.05
+     anchor='dnac `-l 1` is 2.0–3.8% smaller than GeCo3'
+     expect=3.8
+     measure={ -(CuePct (GecoM 'paer' '-l 16') (Size (BactSeq 'paer') $null 1)) } }
+  @{ id='gb-paer-nocodon-deficit-pct'; tier='extern'; doc='README.md'; unit='%'; tol=0.005
+     anchor='it turns into a deficit of 0.08% against'
+     expect=0.08
+     measure={ CuePct (GecoM 'paer' '-l 16') (Size (BactSeq 'paer') $null 1 $null $null '-nocodon') } }
 
   @{ id='geco-w3110-ref-bytes'; tier='extern'; doc='README.md'; unit='B'; tol=0
      anchor='| W3110 vs MG1655 (near-identical strains) | 1,288 B | **1,071 B** | 1,404 B | 1,319 B |'
